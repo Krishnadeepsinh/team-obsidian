@@ -181,8 +181,16 @@ function IntegrationsContent() {
     try {
       setBusyId(integ.id)
       setError("")
+      setMessage("")
       const res = await api.verifyIntegration(integ.id)
-      setMessage(`Verified ${integ.name}: status=${res.auth_status}${res.connected_account ? ` (${res.connected_account})` : ""}`)
+      if (res?.status === "error") {
+        setError(res.message || `Verification failed for ${integ.name}.`)
+      } else {
+        const statusLabel = res?.auth_status || res?.status || "connected"
+        setMessage(
+          `Verified ${integ.name}: status=${statusLabel}${res?.connected_account ? ` (${res.connected_account})` : ""}`
+        )
+      }
       await loadAll(activeProject)
     } catch (err: any) {
       setError(err.message || "Verification failed — check token & scopes.")
@@ -196,7 +204,10 @@ function IntegrationsContent() {
       setBusyId(integ.id)
       setError("")
       const res = await api.triggerSync(integ.id)
-      setMessage(res.message || `Synced ${res.records_synced ?? 0} records from ${integ.name}.`)
+      const count =
+        res?.items_processed ??
+        (res?.records_added ?? 0) + (res?.records_updated ?? 0) + (res?.records_skipped ?? 0)
+      setMessage(res?.details?.message || res?.message || `Synced ${count} records from ${integ.name}.`)
       await loadAll(activeProject)
     } catch (err: any) {
       setError(err.message || "Synchronization failed.")
@@ -582,25 +593,50 @@ function IntegrationsContent() {
               ) : eventsList.length === 0 ? (
                 <div className="py-10 text-center text-xs text-slate-400">No source events imported yet. Click &ldquo;Sync Now&rdquo;.</div>
               ) : (
-                eventsList.map((ev) => (
-                  <div key={ev.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-slate-900 truncate">{ev.title}</span>
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-white border border-slate-200 uppercase font-semibold text-slate-600">
-                        {ev.event_type}
-                      </span>
+                eventsList.map((ev) => {
+                  const eventTitle =
+                    ev.details?.message || ev.title || String(ev.event_type || "sync_event").replace(/_/g, " ")
+                  const eventTime = ev.timestamp || ev.created_at
+                  const summaryText =
+                    ev.error_message ||
+                    ev.content ||
+                    `Processed records: +${ev.records_added ?? 0} added, ${ev.records_updated ?? 0} updated, ${ev.records_skipped ?? 0} deduplicated`
+                  return (
+                    <div key={ev.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-slate-900 truncate">{eventTitle}</span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded uppercase font-semibold border ${
+                              ev.status === "error"
+                                ? "bg-rose-50 text-rose-700 border-rose-200"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            }`}
+                          >
+                            {ev.status || "ok"}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-white border border-slate-200 uppercase font-semibold text-slate-600">
+                            {ev.event_type}
+                          </span>
+                        </div>
+                      </div>
+                      <p className={`text-[11px] line-clamp-2 ${ev.error_message ? "text-rose-600 font-medium" : "text-slate-600"}`}>
+                        {summaryText}
+                      </p>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+                        <span>
+                          {ev.details?.provider ? `${String(ev.details.provider).toUpperCase()} • ` : ""}
+                          {eventTime ? new Date(eventTime).toLocaleString() : ""}
+                        </span>
+                        {ev.url && (
+                          <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                            Open Source <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-slate-600 line-clamp-2">{ev.content}</p>
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
-                      <span>{ev.author || "Contributor"} • {ev.created_at ? new Date(ev.created_at).toLocaleString() : ""}</span>
-                      {ev.url && (
-                        <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
-                          Open Source <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
           </div>
