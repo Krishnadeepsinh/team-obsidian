@@ -139,6 +139,42 @@ class AIEngine:
             self._genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
         return self._genai_client
 
+    def _generate_content_with_fallback(self, client, preferred_model: str, contents: str, config: Any):
+        """Try preferred Gemini model, falling back on retired (404) or rate-limited (429) Flash tiers."""
+        candidates = []
+        for m in [
+            preferred_model,
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-2.5-flash",
+        ]:
+            if m and m not in candidates:
+                candidates.append(m)
+
+        last_exc: Optional[Exception] = None
+        for idx, model_name in enumerate(candidates):
+            try:
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+                return resp, model_name
+            except Exception as exc:
+                last_exc = exc
+                err_s = str(exc)
+                is_recoverable = any(
+                    marker in err_s
+                    for marker in ("404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED", "no longer available")
+                )
+                if is_recoverable and idx < len(candidates) - 1:
+                    logger.info("Gemini model %s unavailable (%s); trying fallback", model_name, err_s[:100])
+                    continue
+                raise
+        raise last_exc or RuntimeError("No Gemini model candidates succeeded")
+
     def generate_embedding(self, text: str) -> List[float]:
         """Generate a real 384-dimensional normalized semantic embedding using BAAI/bge-small-en-v1.5."""
         cleaned = (text or "").strip()
@@ -324,10 +360,11 @@ CONTEXT EVIDENCE:
 QUESTION:
 {question}
 """
-                resp = client.models.generate_content(
-                    model=self.primary_model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
+                resp, used_model = self._generate_content_with_fallback(
+                    client,
+                    self.primary_model_name,
+                    prompt,
+                    types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=AssistantSynthesisOutput,
                         temperature=0.1,
@@ -341,7 +378,7 @@ QUESTION:
                         "confidence": 0.0,
                         "confidence_breakdown": self.compute_explainable_confidence([])[1],
                         "is_grounded": False,
-                        "model_used": f"{self.primary_model_name} (Live)",
+                        "model_used": f"{used_model} (Live)",
                         "suggested_followups": parsed.suggested_followups[:3] or [
                             "Which knowledge gaps currently exist?",
                             "What documents and sources are connected?",
@@ -359,7 +396,7 @@ QUESTION:
                     "confidence": conf,
                     "confidence_breakdown": breakdown,
                     "is_grounded": True,
-                    "model_used": f"{self.primary_model_name} (Live)",
+                    "model_used": f"{used_model} (Live)",
                     "suggested_followups": parsed.suggested_followups[:3] or [
                         f"What risks affect this area?",
                         f"What tasks or decisions relate to this?",
@@ -429,10 +466,11 @@ Rules:
 RECORDS:
 {joined}
 """
-                resp = client.models.generate_content(
-                    model=self.secondary_model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
+                resp, _ = self._generate_content_with_fallback(
+                    client,
+                    self.secondary_model_name,
+                    prompt,
+                    types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=StructuredKnowledgeBundle,
                         temperature=0.1,

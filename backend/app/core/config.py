@@ -33,10 +33,10 @@ class Settings:
     # Database: PostgreSQL (Supabase Session Pooler) in live/staging, SQLite fallback for isolated local dev/tests
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./obsidian.db")
 
-    # AI Engine: Gemini 2.5 Flash / Flash-Lite + local BAAI/bge-small-en-v1.5 embeddings
+    # AI Engine: Gemini 3.5 Flash / Flash-Lite + local BAAI/bge-small-en-v1.5 embeddings
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    PRIMARY_LLM: str = os.getenv("PRIMARY_LLM", "gemini-2.5-flash")
-    SECONDARY_LLM: str = os.getenv("SECONDARY_LLM", "gemini-2.5-flash-lite")
+    PRIMARY_LLM: str = os.getenv("PRIMARY_LLM", "gemini-3.5-flash")
+    SECONDARY_LLM: str = os.getenv("SECONDARY_LLM", "gemini-3.5-flash-lite")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
     EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
 
