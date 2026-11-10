@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -141,6 +142,20 @@ class SlackConnector(BaseConnector):
         if not self.token:
             raise ConnectorError("Missing Slack Bot OAuth token.")
 
+        raw_channel = (channel_id or "").strip().lstrip("#")
+        if raw_channel and not re.match(r"^[CDG][A-Z0-9]{6,}$", raw_channel):
+            channels = self.list_channels()
+            match = next(
+                (c for c in channels if c.get("name") == raw_channel or c.get("id") == raw_channel),
+                None,
+            )
+            if not match or not match.get("id"):
+                raise ConnectorError(f"Slack channel '{channel_id}' not found or inaccessible to the bot.")
+            channel_id = match["id"]
+            channel_name = channel_name or match.get("name")
+        else:
+            channel_id = raw_channel
+
         records: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
         newest_ts: Optional[str] = oldest_ts
@@ -234,14 +249,21 @@ class SlackConnector(BaseConnector):
         cursor = dict(sync_cursor or {})
 
         target_channels: List[Dict[str, str]] = []
-        raw_target = (cfg.get("channel") or cfg.get("target") or "").strip().lstrip("#")
+        raw_target = str(cfg.get("channel_id") or cfg.get("channel") or cfg.get("target") or "").strip()
         channels_list = self.list_channels()
 
         if raw_target:
-            matched = [c for c in channels_list if c["id"] == raw_target or c["name"] == raw_target]
-            target_channels = matched or [{"id": raw_target, "name": raw_target}]
+            tokens = [t.strip().lstrip("#") for t in raw_target.split(",") if t.strip()]
+            for tok in tokens:
+                matched = [c for c in channels_list if c.get("id") == tok or c.get("name") == tok]
+                target_channels.extend(matched or [{"id": tok, "name": tok}])
         else:
-            target_channels = [c for c in channels_list if c.get("is_member")][:10] or channels_list[:5]
+            target_channels = [c for c in channels_list if c.get("is_member")][:10]
+            if not target_channels and channels_list:
+                raise ConnectorError(
+                    "Slack app is connected, but @Team Obsidian has not been invited to any channel yet. "
+                    "In Slack, run /invite @Team Obsidian in the channels you want to sync (or specify a Channel ID)."
+                )
 
         if not target_channels:
             raise ConnectorError("No accessible Slack channels found. Invite the bot to channels first.")

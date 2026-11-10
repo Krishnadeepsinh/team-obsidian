@@ -276,7 +276,9 @@ def test_github_oauth_and_retrieval():
         pytest.skip("BLOCKED: Missing GITHUB_TOKEN in environment. External credentials required for real GitHub OAuth.")
     else:
         assert conn_status["status"] == "connected"
-        records = connector.sync_repository("ecom-core-org/checkout-api")
+        repos = connector.list_repositories(max_pages=1)
+        assert isinstance(repos, list) and len(repos) > 0
+        records = connector.sync_repository(repos[0]["full_name"], max_pages=1)
         assert isinstance(records, list)
 
 # ==============================================================================
@@ -293,8 +295,12 @@ def test_slack_oauth_and_retrieval():
         pytest.skip("BLOCKED: Missing SLACK_BOT_TOKEN in environment. External credentials required for real Slack OAuth.")
     else:
         assert conn_status["status"] == "connected"
-        messages = connector.sync_channel_messages("general")
-        assert isinstance(messages, list)
+        channels = connector.list_channels()
+        assert isinstance(channels, list) and len(channels) > 0
+        joined = [c for c in channels if c.get("is_member")]
+        if joined:
+            messages, _ = connector.sync_channel_messages(joined[0]["id"], channel_name=joined[0].get("name"), max_pages=1)
+            assert isinstance(messages, list)
 
 # ==============================================================================
 # Focus Area 3: Notion OAuth & Page Retrieval

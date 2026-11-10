@@ -72,18 +72,9 @@ def _to_response(i: Integration) -> IntegrationResponse:
 
 
 def _extract_token(integ: Integration) -> Optional[str]:
+    """Extract only the credentials bound to this integration (never fall back to host env tokens)."""
     creds = decrypt_credentials(integ.credentials)
-    token = creds.get("access_token") or creds.get("token") or creds.get("api_key") or creds.get("bot_token")
-    if token:
-        return token
-    provider = (integ.provider or "").lower()
-    if "github" in provider:
-        return settings.GITHUB_TOKEN or os.getenv("GITHUB_TOKEN")
-    if "slack" in provider:
-        return settings.SLACK_BOT_TOKEN or os.getenv("SLACK_BOT_TOKEN")
-    if "notion" in provider:
-        return settings.NOTION_API_KEY or os.getenv("NOTION_API_KEY")
-    return None
+    return creds.get("access_token") or creds.get("token") or creds.get("api_key") or creds.get("bot_token")
 
 
 def _resolve_backend_base_url(request: Request) -> str:
