@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import {
   ArrowLeft,
   Layers,
@@ -76,10 +76,7 @@ export default function ProjectDetailPage() {
       setEditStatus(p.status || "active")
       setMembers(Array.isArray(m) ? m : [])
       setTimeline(Array.isArray(t) ? t : [])
-      if (typeof window !== "undefined") {
-        localStorage.setItem("obsidian_active_project", p.id)
-        window.dispatchEvent(new Event("obsidian_project_changed"))
-      }
+      setStoredProjectId(p.id)
     } catch (err: any) {
       setError(err.message || "Failed to load project details.")
     } finally {
@@ -158,9 +155,8 @@ export default function ProjectDetailPage() {
     if (!confirm(`Delete project "${project?.name}" permanently? All project records will be removed.`)) return
     try {
       await api.deleteProject(projectId)
-      if (typeof window !== "undefined" && localStorage.getItem("obsidian_active_project") === projectId) {
-        localStorage.removeItem("obsidian_active_project")
-        window.dispatchEvent(new Event("obsidian_project_changed"))
+      if (getStoredProjectId() === projectId) {
+        setStoredProjectId(undefined)
       }
       router.push("/projects")
     } catch (err: any) {

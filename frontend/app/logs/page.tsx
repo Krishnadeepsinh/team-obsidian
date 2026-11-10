@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId } from "@/lib/api"
 import { Terminal, Search, RefreshCw } from "lucide-react"
 
 export default function AuditLogsPage() {
@@ -12,8 +12,7 @@ export default function AuditLogsPage() {
   const loadLogs = async () => {
     try {
       setLoading(true)
-      const storedPid =
-        typeof window !== "undefined" ? localStorage.getItem("obsidian_active_project") || undefined : undefined
+      const storedPid = getStoredProjectId() || undefined
       const res = await api.getOrgActivity(storedPid).catch(() => [])
       setLogs(Array.isArray(res) ? res : [])
     } finally {

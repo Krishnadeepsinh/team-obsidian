@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -86,9 +86,23 @@ def _extract_token(integ: Integration) -> Optional[str]:
     return None
 
 
+def _resolve_backend_base_url(request: Request) -> str:
+    """Resolve external backend base URL cleanly in local dev and reverse-proxied cloud environments."""
+    configured = (settings.BACKEND_URL or "").strip().rstrip("/")
+    if configured and not configured.startswith("http://localhost") and not configured.startswith("http://127.0.0.1"):
+        return configured
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if forwarded_host:
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+        if not forwarded_host.startswith("localhost") and not forwarded_host.startswith("127.0.0.1"):
+            return f"{proto}://{forwarded_host}".rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
 @router.get("/oauth/{provider}/authorize")
 def start_oauth_flow(
     provider: str,
+    request: Request,
     project_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -99,7 +113,8 @@ def start_oauth_flow(
     if not connector_cls:
         raise HTTPException(status_code=400, detail=f"Unsupported OAuth provider '{provider}'.")
 
-    redirect_uri = f"{settings.BACKEND_URL}{settings.API_V1_STR}/integrations/oauth/{provider.lower()}/callback"
+    base_url = _resolve_backend_base_url(request)
+    redirect_uri = f"{base_url}{settings.API_V1_STR}/integrations/oauth/{provider.lower()}/callback"
     state = create_oauth_state_token({
         "sub": current_user.id,
         "project_id": project_id,
@@ -116,6 +131,7 @@ def start_oauth_flow(
 @router.get("/oauth/{provider}/callback")
 def oauth_callback(
     provider: str,
+    request: Request,
     code: Optional[str] = None,
     state: Optional[str] = None,
     error: Optional[str] = None,
@@ -142,7 +158,8 @@ def oauth_callback(
     if not connector_cls:
         raise HTTPException(status_code=400, detail=f"Unsupported OAuth provider '{provider}'.")
 
-    redirect_uri = f"{settings.BACKEND_URL}{settings.API_V1_STR}/integrations/oauth/{provider.lower()}/callback"
+    base_url = _resolve_backend_base_url(request)
+    redirect_uri = f"{base_url}{settings.API_V1_STR}/integrations/oauth/{provider.lower()}/callback"
     try:
         token_bundle = connector_cls.exchange_oauth_code(code=code, redirect_uri=redirect_uri)
         token = token_bundle.get("access_token") or token_bundle.get("token")

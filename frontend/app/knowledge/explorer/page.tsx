@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import { Compass, Search, User, ShieldCheck } from "lucide-react"
 
 const CATEGORIES = [
@@ -37,12 +37,7 @@ export default function KnowledgeExplorerPage() {
   const loadData = useCallback(async (pid?: string, cat?: string, q?: string, vstat?: string, emp?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, rows] = await Promise.all([
         api.getProjects().catch(() => []),
         api
@@ -86,11 +81,7 @@ export default function KnowledgeExplorerPage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            if (typeof window !== "undefined") {
-              if (pid) localStorage.setItem("obsidian_active_project", pid)
-              else localStorage.removeItem("obsidian_active_project")
-              window.dispatchEvent(new Event("obsidian_project_changed"))
-            }
+            setStoredProjectId(pid || undefined)
             applyFilters(pid, category, search, verificationStatus, employee)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"

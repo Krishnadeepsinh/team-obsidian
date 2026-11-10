@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId } from "@/lib/api"
 import { HelpCircle, Plus, CheckCircle2, AlertTriangle, RotateCcw } from "lucide-react"
 
 export default function GapsPage() {
@@ -22,12 +22,7 @@ export default function GapsPage() {
   const loadAll = async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, list] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getGaps(storedPid || undefined).catch(() => []),
@@ -47,9 +42,14 @@ export default function GapsPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
+    const targetPid = activeProject || projects[0]?.id || ""
+    if (!targetPid) {
+      alert("Create a project first before logging a knowledge gap.")
+      return
+    }
     try {
       await api.createGap({
-        project_id: activeProject || projects[0]?.id || "default",
+        project_id: targetPid,
         title,
         description,
         gap_type: gapType,

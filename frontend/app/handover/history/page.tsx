@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId } from "@/lib/api"
 import { History, ArrowLeft, GitCommit, User } from "lucide-react"
 
 export default function HandoverHistoryPage() {
@@ -14,8 +14,7 @@ export default function HandoverHistoryPage() {
   const loadData = useCallback(async (hid?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        typeof window !== "undefined" ? localStorage.getItem("obsidian_active_project") || undefined : undefined
+      const storedPid = getStoredProjectId() || undefined
       const hs = await api.getHandovers(storedPid).catch(() => [])
       const list = Array.isArray(hs) ? hs : []
       setHandovers(list)

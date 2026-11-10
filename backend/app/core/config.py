@@ -61,7 +61,11 @@ class Settings:
 
     # Deployment URLs & Restricted CORS (supports localhost + configured production Vercel/custom domains)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
-    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+    BACKEND_URL: str = (
+        os.getenv("BACKEND_URL", "").strip()
+        or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+        or "http://localhost:8000"
+    ).rstrip("/")
     CORS_ORIGINS: List[str] = _parse_cors_origins(
         os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         extra_origin=FRONTEND_URL,

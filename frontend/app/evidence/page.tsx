@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import { ShieldCheck, Search, ExternalLink, Clock, User } from "lucide-react"
 
 const STATUS_FILTERS = [
@@ -46,12 +46,7 @@ export default function EvidencePage() {
   const loadData = useCallback(async (pid?: string, status?: string, query?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, res] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getEvidence(storedPid || undefined, status === "All" ? undefined : status, query || undefined).catch(() => []),
@@ -109,11 +104,7 @@ export default function EvidencePage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            if (typeof window !== "undefined") {
-              if (pid) localStorage.setItem("obsidian_active_project", pid)
-              else localStorage.removeItem("obsidian_active_project")
-              window.dispatchEvent(new Event("obsidian_project_changed"))
-            }
+            setStoredProjectId(pid || undefined)
             loadData(pid, statusFilter, search)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"

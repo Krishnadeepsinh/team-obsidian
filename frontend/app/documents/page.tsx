@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import {
   FileUp,
   FileText,
@@ -34,8 +34,7 @@ export default function DocumentsPage() {
   const loadData = async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid || (typeof window !== "undefined" ? localStorage.getItem("obsidian_active_project") || "" : "")
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, res] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getDocuments(storedPid || undefined).catch(() => []),
@@ -56,7 +55,11 @@ export default function DocumentsPage() {
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!file || !title.trim()) return
-    const targetPid = activeProject || projects[0]?.id || "default"
+    const targetPid = activeProject || projects[0]?.id || ""
+    if (!targetPid) {
+      setError("Create a project in Projects before uploading documents.")
+      return
+    }
 
     const formData = new FormData()
     formData.append("project_id", targetPid)
@@ -136,11 +139,8 @@ export default function DocumentsPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
-              if (typeof window !== "undefined" && pid) {
-                localStorage.setItem("obsidian_active_project", pid)
-                window.dispatchEvent(new Event("obsidian_project_changed"))
-              }
-              loadData(pid || undefined)
+              setStoredProjectId(pid || undefined)
+              loadData(pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
           >

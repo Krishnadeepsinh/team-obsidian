@@ -2,7 +2,7 @@ import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -256,9 +256,32 @@ def download_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     verify_project_access(doc.project_id, current_user, db)
-    if not doc.storage_path or not os.path.exists(doc.storage_path):
-        raise HTTPException(status_code=404, detail="Stored file not found on disk.")
-    return FileResponse(doc.storage_path, filename=doc.filename)
+    if doc.storage_path and os.path.exists(doc.storage_path):
+        return FileResponse(doc.storage_path, filename=doc.filename)
+
+    # Cloud/ephemeral container fallback: reconstruct text from persisted PostgreSQL chunks
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document_id)
+        .order_by(DocumentChunk.chunk_index.asc())
+        .all()
+    )
+    if not chunks:
+        raise HTTPException(status_code=404, detail="Stored file not found on disk and no indexed chunks exist.")
+
+    reconstructed = "\n\n".join(
+        [f"# {doc.title} ({doc.filename})\n# SHA-256: {doc.sha256_hash}\n"]
+        + [f"## Chunk {c.chunk_index + 1}\n{c.content}" for c in chunks]
+    )
+    safe_base = os.path.splitext(doc.filename or doc.title or "document")[0]
+    return Response(
+        content=reconstructed.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_base}_chunks.txt"',
+            "X-Obsidian-Source": "database-chunks",
+        },
+    )
 
 
 @router.delete("/{document_id}")

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId } from "@/lib/api"
 import { Users, Mail, Search, ShieldCheck } from "lucide-react"
 
 export default function TeamPage() {
@@ -14,8 +14,7 @@ export default function TeamPage() {
     const loadMembers = async () => {
       try {
         setLoading(true)
-        const storedPid =
-          typeof window !== "undefined" ? localStorage.getItem("obsidian_active_project") || undefined : undefined
+        const storedPid = getStoredProjectId() || undefined
         const list = await api.getTeamMembers(storedPid).catch(() => [])
         setMembers(Array.isArray(list) ? list : [])
       } finally {

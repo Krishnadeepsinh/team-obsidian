@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, Suspense } from "react"
+import { useEffect, useState, Suspense } from "react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { api } from "@/lib/api"
-import { KeyRound, ArrowLeft, CheckCircle2, Mail, Lock } from "lucide-react"
+import { KeyRound, ArrowLeft, CheckCircle2, Mail, Lock, AlertTriangle } from "lucide-react"
 
 function ForgotPasswordForm() {
   const searchParams = useSearchParams()
@@ -19,6 +19,20 @@ function ForgotPasswordForm() {
   const [submittedMsg, setSubmittedMsg] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  const [emailDeliveryConfigured, setEmailDeliveryConfigured] = useState<boolean | null>(null)
+  const [appEnv, setAppEnv] = useState<string>("")
+
+  useEffect(() => {
+    api
+      .getAuthCapabilities()
+      .then((caps) => {
+        if (caps) {
+          setEmailDeliveryConfigured(Boolean(caps.email_delivery_configured))
+          setAppEnv(caps.app_env || "")
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const handleRequestReset = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -93,6 +107,34 @@ function ForgotPasswordForm() {
           )}
 
           {mode === "request" ? (
+            emailDeliveryConfigured === false && appEnv === "production" ? (
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-semibold">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <span>Password Recovery Emails Not Enabled Yet</span>
+                  </div>
+                  <p className="leading-relaxed">
+                    This deployment does not have an outbound email provider configured (`RESEND_API_KEY` or `SMTP_*`), so reset links cannot be emailed yet.
+                  </p>
+                  <p className="text-[11px] text-amber-800">
+                    If you are already signed in, update your password under <Link href="/profile" className="underline font-semibold">Profile &amp; Security</Link>.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubmittedMsg("")
+                    setError("")
+                    setMode("reset")
+                  }}
+                  className="w-full py-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all"
+                >
+                  Already have a recovery token? Enter it here
+                </button>
+              </div>
+            ) : (
             <form onSubmit={handleRequestReset} className="space-y-4">
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-700">Work Email</label>
@@ -129,6 +171,7 @@ function ForgotPasswordForm() {
                 Already have a recovery token? Enter it here
               </button>
             </form>
+            )
           ) : (
             <form onSubmit={handleConfirmReset} className="space-y-3.5">
               <div className="space-y-1">

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import {
   FileText,
   Sparkles,
@@ -76,14 +76,7 @@ export default function HandoverPage() {
   const loadHandoverList = useCallback(async (pid?: string, selectId?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project_id") ||
-            localStorage.getItem("obsidian_active_project") ||
-            ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, list, ctx] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getHandovers(storedPid || undefined).catch(() => []),
@@ -273,11 +266,7 @@ export default function HandoverPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
-              if (typeof window !== "undefined") {
-                if (pid) localStorage.setItem("obsidian_active_project", pid)
-                else localStorage.removeItem("obsidian_active_project")
-                window.dispatchEvent(new Event("obsidian_project_changed"))
-              }
+              setStoredProjectId(pid || undefined)
               loadHandoverList(pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"

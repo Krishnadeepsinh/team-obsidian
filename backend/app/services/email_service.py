@@ -16,6 +16,12 @@ class EmailService:
     def __init__(self):
         self._outbox_path = Path(__file__).resolve().parent.parent.parent / ".dev_mail_outbox.log"
 
+    def is_configured(self) -> bool:
+        return bool(
+            settings.RESEND_API_KEY
+            or (settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
+        )
+
     def send_email(self, to_email: str, subject: str, html_body: str, text_body: str) -> dict:
         if settings.RESEND_API_KEY:
             try:

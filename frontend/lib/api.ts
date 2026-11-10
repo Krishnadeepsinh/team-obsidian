@@ -92,19 +92,42 @@ async function downloadAuthFile(endpoint: string, fallbackFilename: string): Pro
   window.URL.revokeObjectURL(url)
 }
 
+export function getStoredProjectId(): string {
+  if (typeof window === "undefined") return ""
+  return (
+    localStorage.getItem("obsidian_active_project_id") ||
+    localStorage.getItem("obsidian_active_project") ||
+    ""
+  )
+}
+
+export function setStoredProjectId(pid?: string, dispatch = true): void {
+  if (typeof window === "undefined") return
+  if (pid) {
+    localStorage.setItem("obsidian_active_project_id", pid)
+    localStorage.setItem("obsidian_active_project", pid)
+  } else {
+    localStorage.removeItem("obsidian_active_project_id")
+    localStorage.removeItem("obsidian_active_project")
+  }
+  if (dispatch) {
+    window.dispatchEvent(new Event("obsidian_project_changed"))
+  }
+}
+
 function persistAuthSession(res: any): void {
   if (typeof window !== "undefined" && res?.access_token) {
     localStorage.setItem("obsidian_token", res.access_token)
     if (res.user) localStorage.setItem("obsidian_user", JSON.stringify(res.user))
     if (res.active_project_id) {
-      localStorage.setItem("obsidian_active_project_id", res.active_project_id)
-      localStorage.setItem("obsidian_active_project", res.active_project_id)
+      setStoredProjectId(res.active_project_id, false)
     }
   }
 }
 
 export const api = {
   // Auth & Multi-Tenant Context
+  getAuthCapabilities: async () => fetchJson<any>("/auth/capabilities"),
   login: async (credentials: { email: string; password: string }) => {
     const res = await fetchJson<any>("/auth/login", {
       method: "POST",

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId } from "@/lib/api"
 import { Stamp, XCircle, AlertTriangle, ArrowLeft, Archive, Send } from "lucide-react"
 
 export default function ApprovalsPage() {
@@ -17,8 +17,7 @@ export default function ApprovalsPage() {
   const loadData = useCallback(async (targetHid?: string) => {
     try {
       setError("")
-      const storedPid =
-        typeof window !== "undefined" ? localStorage.getItem("obsidian_active_project") || undefined : undefined
+      const storedPid = getStoredProjectId() || undefined
       const hs = await api.getHandovers(storedPid).catch(() => [])
       const list = Array.isArray(hs) ? hs : []
       setHandovers(list)

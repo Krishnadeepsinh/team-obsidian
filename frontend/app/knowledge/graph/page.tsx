@@ -10,7 +10,7 @@ import {
   useEdgesState,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Network,
   Sparkles,
@@ -54,12 +54,7 @@ export default function KnowledgeGraphPage() {
   const loadGraph = useCallback(async (pid?: string, etype?: string, q?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, graphRes] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getGraphReactFlow(storedPid || undefined, etype, q || undefined).catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} })),
@@ -136,11 +131,7 @@ export default function KnowledgeGraphPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
-              if (typeof window !== "undefined") {
-                if (pid) localStorage.setItem("obsidian_active_project", pid)
-                else localStorage.removeItem("obsidian_active_project")
-                window.dispatchEvent(new Event("obsidian_project_changed"))
-              }
+              setStoredProjectId(pid || undefined)
               handleFilterChange(entityType, search, pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"

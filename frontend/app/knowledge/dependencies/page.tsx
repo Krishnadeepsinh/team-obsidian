@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import { GitMerge, Search, ShieldAlert } from "lucide-react"
 
 export default function DependenciesPage() {
@@ -15,12 +15,7 @@ export default function DependenciesPage() {
   const loadData = async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const [projs, rows] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getDependencies(storedPid || undefined).catch(() => []),
@@ -64,11 +59,7 @@ export default function DependenciesPage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            if (typeof window !== "undefined") {
-              if (pid) localStorage.setItem("obsidian_active_project", pid)
-              else localStorage.removeItem("obsidian_active_project")
-              window.dispatchEvent(new Event("obsidian_project_changed"))
-            }
+            setStoredProjectId(pid || undefined)
             loadData(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"

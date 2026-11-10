@@ -1,8 +1,8 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Github,
   MessageSquare,
@@ -56,11 +56,16 @@ function IntegrationsContent() {
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState<string>("")
   const [loading, setLoading] = useState(true)
-  const [message, setMessage] = useState(() =>
-    searchParams.get("oauth") === "connected"
+  const [message, setMessage] = useState(() => {
+    const connected = searchParams.get("connected")
+    if (connected) {
+      return `${connected.toUpperCase()} connected via OAuth and verified successfully!`
+    }
+    return searchParams.get("oauth") === "connected"
       ? "OAuth source connected and verified successfully!"
       : ""
-  )
+  })
+  const [oauthProviders, setOauthProviders] = useState<Record<string, boolean>>({})
   const [error, setError] = useState(() => {
     const err = searchParams.get("oauth_error")
     return err ? `OAuth authorization error: ${err}` : ""
@@ -86,19 +91,16 @@ function IntegrationsContent() {
   // Action busy tracker
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  const loadAll = async (pid?: string) => {
+  const loadAll = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
-      const [projs, integs] = await Promise.all([
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
+      const [projs, integs, caps] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getIntegrations(storedPid || undefined).catch(() => []),
+        api.getAuthCapabilities().catch(() => null),
       ])
+      if (caps?.oauth_providers) setOauthProviders(caps.oauth_providers)
       setProjects(Array.isArray(projs) ? projs : [])
       const resolvedPid = storedPid || (Array.isArray(projs) && projs[0]?.id) || ""
       setActiveProject(resolvedPid)
@@ -106,15 +108,19 @@ function IntegrationsContent() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadAll()
-  }, [])
+  }, [loadAll])
 
-  const targetProjectId = activeProject || projects[0]?.id || "default"
+  const targetProjectId = activeProject || projects[0]?.id || ""
 
   const handleOAuthConnect = async (provider: string) => {
+    if (!targetProjectId) {
+      setError("Create a project in Projects first before connecting a source.")
+      return
+    }
     try {
       setError("")
       setMessage("")
@@ -130,6 +136,10 @@ function IntegrationsContent() {
   }
 
   const openTokenConnect = (provider: string) => {
+    if (!targetProjectId) {
+      setError("Create a project in Projects first before connecting a source.")
+      return
+    }
     const meta = PROVIDER_CARDS.find((p) => p.key === provider)
     setConnectProvider(provider)
     setConnectName(meta?.title || `${provider.toUpperCase()} Connector`)
@@ -272,11 +282,7 @@ function IntegrationsContent() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            if (typeof window !== "undefined") {
-              if (pid) localStorage.setItem("obsidian_active_project", pid)
-              else localStorage.removeItem("obsidian_active_project")
-              window.dispatchEvent(new Event("obsidian_project_changed"))
-            }
+            setStoredProjectId(pid || undefined)
             loadAll(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
@@ -315,7 +321,7 @@ function IntegrationsContent() {
                   onClick={() => handleOAuthConnect(card.key)}
                   className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
                 >
-                  OAuth Connect
+                  {oauthProviders[card.key] === false ? "OAuth Setup Required" : "OAuth Connect"}
                 </button>
                 <button
                   onClick={() => openTokenConnect(card.key)}

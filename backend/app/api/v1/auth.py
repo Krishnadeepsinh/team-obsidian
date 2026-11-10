@@ -254,9 +254,31 @@ def get_user_context(
     }
 
 
+@router.get("/capabilities")
+def get_auth_capabilities() -> Dict[str, Any]:
+    """Report non-sensitive runtime capabilities for password recovery email and OAuth providers."""
+    return {
+        "app_env": settings.APP_ENV,
+        "email_delivery_configured": email_service.is_configured(),
+        "oauth_providers": {
+            "github": bool(settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET),
+            "slack": bool(settings.SLACK_CLIENT_ID and settings.SLACK_CLIENT_SECRET),
+            "notion": bool(settings.NOTION_CLIENT_ID and settings.NOTION_CLIENT_SECRET),
+        },
+    }
+
+
 @router.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """Create a single-use hashed password reset token and deliver via email. Never returns token in HTTP response."""
+    if settings.APP_ENV == "production" and not email_service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Password recovery email delivery is not configured on this deployment "
+                "(RESEND_API_KEY or SMTP credentials required). Signed-in users can update their password under Profile."
+            ),
+        )
     normalized_email = req.email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
     if user and user.is_active:

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 import { Clock, Scale, CheckSquare, GitCommit, ExternalLink } from "lucide-react"
 
 export default function TimelinePage() {
@@ -13,12 +13,7 @@ export default function TimelinePage() {
   const loadTimeline = async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid =
-        pid !== undefined
-          ? pid
-          : typeof window !== "undefined"
-          ? localStorage.getItem("obsidian_active_project") || ""
-          : ""
+      const storedPid = pid !== undefined ? pid : getStoredProjectId()
       const projs = await api.getProjects().catch(() => [])
       const list = Array.isArray(projs) ? projs : []
       setProjects(list)
@@ -56,10 +51,7 @@ export default function TimelinePage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            if (typeof window !== "undefined" && pid) {
-              localStorage.setItem("obsidian_active_project", pid)
-              window.dispatchEvent(new Event("obsidian_project_changed"))
-            }
+            setStoredProjectId(pid || undefined)
             loadTimeline(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
