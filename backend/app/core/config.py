@@ -1,7 +1,7 @@
 import os
 import secrets
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
 # Load from backend/.env or current directory
@@ -11,8 +11,12 @@ load_dotenv(Path.cwd() / ".env")
 load_dotenv(Path.cwd() / "backend" / ".env")
 
 
-def _parse_cors_origins(raw: str) -> List[str]:
-    origins = [o.strip() for o in (raw or "").split(",") if o.strip()]
+def _parse_cors_origins(raw: str, extra_origin: str = "") -> List[str]:
+    origins = [o.strip().rstrip("/") for o in (raw or "").split(",") if o.strip()]
+    if extra_origin:
+        clean_extra = extra_origin.strip().rstrip("/")
+        if clean_extra and clean_extra not in origins:
+            origins.append(clean_extra)
     # Never allow wildcard '*' when allow_credentials=True
     filtered = [o for o in origins if o != "*"]
     return filtered or ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -59,7 +63,12 @@ class Settings:
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
     CORS_ORIGINS: List[str] = _parse_cors_origins(
-        os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+        os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
+        extra_origin=FRONTEND_URL,
+    )
+    CORS_ORIGIN_REGEX: Optional[str] = (
+        os.getenv("CORS_ORIGIN_REGEX", "").strip()
+        or (r"^https://team-obsidian(-[a-z0-9-]+)?\.vercel\.app$" if APP_ENV == "production" else None)
     )
 
     # OAuth Apps & Tokens (GitHub, Slack, Notion)

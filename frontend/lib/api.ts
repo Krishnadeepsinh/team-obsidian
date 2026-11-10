@@ -11,6 +11,35 @@ function getAuthHeaders(extra: Record<string, string> = {}): Record<string, stri
   return headers
 }
 
+async function performFetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+  const retryableStatuses = new Set([502, 503, 504])
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, options)
+      if (attempt === 0 && retryableStatuses.has(res.status)) {
+        await new Promise((r) => setTimeout(r, 1500))
+        continue
+      }
+      return res
+    } catch (err: any) {
+      const isNetworkError =
+        err instanceof TypeError ||
+        (typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch"))
+      if (attempt === 0 && isNetworkError) {
+        await new Promise((r) => setTimeout(r, 1500))
+        continue
+      }
+      if (isNetworkError) {
+        throw new Error(
+          `Cannot reach TEAM OBSIDIAN API (${API_BASE}). If the backend just woke from cold start, please retry in a few seconds.`
+        )
+      }
+      throw err
+    }
+  }
+  throw new Error(`Cannot reach TEAM OBSIDIAN API (${API_BASE}).`)
+}
+
 async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${endpoint}`
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData
@@ -20,7 +49,7 @@ async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promis
     ...((options.headers as Record<string, string>) || {}),
   })
 
-  const res = await fetch(url, {
+  const res = await performFetchWithRetry(url, {
     ...options,
     headers,
     cache: "no-store",
@@ -41,7 +70,7 @@ async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promis
 }
 
 async function downloadAuthFile(endpoint: string, fallbackFilename: string): Promise<void> {
-  const res = await fetch(`${API_BASE}${endpoint}`, {
+  const res = await performFetchWithRetry(`${API_BASE}${endpoint}`, {
     headers: getAuthHeaders(),
     cache: "no-store",
   })
@@ -63,6 +92,17 @@ async function downloadAuthFile(endpoint: string, fallbackFilename: string): Pro
   window.URL.revokeObjectURL(url)
 }
 
+function persistAuthSession(res: any): void {
+  if (typeof window !== "undefined" && res?.access_token) {
+    localStorage.setItem("obsidian_token", res.access_token)
+    if (res.user) localStorage.setItem("obsidian_user", JSON.stringify(res.user))
+    if (res.active_project_id) {
+      localStorage.setItem("obsidian_active_project_id", res.active_project_id)
+      localStorage.setItem("obsidian_active_project", res.active_project_id)
+    }
+  }
+}
+
 export const api = {
   // Auth & Multi-Tenant Context
   login: async (credentials: { email: string; password: string }) => {
@@ -70,10 +110,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(credentials),
     })
-    if (typeof window !== "undefined" && res?.access_token) {
-      localStorage.setItem("obsidian_token", res.access_token)
-      if (res.user) localStorage.setItem("obsidian_user", JSON.stringify(res.user))
-    }
+    persistAuthSession(res)
     return res
   },
   register: async (userData: any) => {
@@ -81,10 +118,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(userData),
     })
-    if (typeof window !== "undefined" && res?.access_token) {
-      localStorage.setItem("obsidian_token", res.access_token)
-      if (res.user) localStorage.setItem("obsidian_user", JSON.stringify(res.user))
-    }
+    persistAuthSession(res)
     return res
   },
   logout: async () => {
