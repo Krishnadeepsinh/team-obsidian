@@ -38,7 +38,7 @@ DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supaba
 SECRET_KEY=<generate-strong-secret>
 CREDENTIALS_ENCRYPTION_KEY=<generate-fernet-key>
 GEMINI_API_KEY=<your-gemini-api-key>
-CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 # Optional Connector OAuth Credentials (for live GitHub/Slack/Notion OAuth flows)
 GITHUB_CLIENT_ID=
@@ -120,13 +120,14 @@ Verifies auth flows, zero synthetic demo leakage, project creation & RBAC member
 
 1. **PostgreSQL + pgvector (Supabase Cloud)**:
    - Provision a Supabase PostgreSQL project with the `vector` and `pg_trgm` extensions enabled.
-   - Set `DATABASE_URL` to the IPv4 Session Pooler URI (`postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres`).
+   - Set `DATABASE_URL` to the IPv4 Session Pooler URI (`postgresql+psycopg://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require`).
    - Run `python -m alembic upgrade head` inside `code/backend/` and apply `code/backend/supabase_schema.sql` via `supabase db query`.
-2. **Backend (FastAPI)**:
-   - Set `APP_ENV=production`, a strong random 64+ hex `SECRET_KEY`, a valid Fernet `CREDENTIALS_ENCRYPTION_KEY`, `GEMINI_API_KEY`, `FRONTEND_URL`, `BACKEND_URL`, `CORS_ORIGINS`, and OAuth App credentials (`GITHUB_CLIENT_ID`/`SECRET`, `SLACK_CLIENT_ID`/`SECRET`, `NOTION_CLIENT_ID`/`SECRET`).
+2. **Backend (FastAPI — Render / Railway / Docker)**:
+   - Deploy using the included Render Blueprint (`render.yaml`), Railway config (`backend/railway.json` + `backend/Dockerfile`), or `backend/Procfile`.
+   - Set `APP_ENV=production`, a strong random 32+ char `SECRET_KEY`, a valid Fernet `CREDENTIALS_ENCRYPTION_KEY`, `GEMINI_API_KEY`, `FRONTEND_URL`, `BACKEND_URL`, comma-separated `CORS_ORIGINS` (e.g. `https://your-app.vercel.app`), and OAuth App credentials (`GITHUB_CLIENT_ID`/`SECRET`, `SLACK_CLIENT_ID`/`SECRET`, `NOTION_CLIENT_ID`/`SECRET`).
    - Configure provider OAuth callback URLs as `<BACKEND_URL>/api/v1/integrations/oauth/<provider>/callback`.
-   - Start with `uvicorn app.main:app --host 0.0.0.0 --port 8000` (or via Docker Compose in `code/docker-compose.yml`).
-3. **Frontend (Next.js)**:
-   - Set `NEXT_PUBLIC_API_URL=<BACKEND_URL>/api/v1`.
-   - Build and serve with `npm run build && npm run start` (or deploy `code/frontend/` on Vercel).
+   - Production startup command: `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}` (or via `docker-compose.yml`).
+3. **Frontend (Next.js — Vercel)**:
+   - Deploy `frontend/` to Vercel (preconfigured with `frontend/vercel.json`) and set `NEXT_PUBLIC_API_URL=<BACKEND_URL>/api/v1` before building.
+   - Build and serve with `npm run build && npm run start` (or via Vercel CLI `vercel --prod`).
 

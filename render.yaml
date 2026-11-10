@@ -1,0 +1,85 @@
+# Render Blueprint for TEAM OBSIDIAN Backend API
+# Docs: https://render.com/docs/blueprint-spec
+# Upgrade `plan` to `starter` (1GB+ RAM) if BAAI/bge-small-en-v1.5 embeddings + PDF generation exceed 512MB RAM.
+
+services:
+  - type: web
+    name: team-obsidian-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_PROJECT_REF
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PRIMARY_LLM
+        value: gemini-2.5-flash
+      - key: SECONDARY_LLM
+        value: gemini-2.5-flash-lite
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      - key: EMBEDDING_DIMENSIONS
+        value: "384"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CREDENTIALS_ENCRYPTION_KEY
+        sync: false
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+      # Fill these URLs once Render (backend) and Vercel (frontend) live URLs are assigned
+      - key: BACKEND_URL
+        value: ""
+      - key: FRONTEND_URL
+        value: ""
+      - key: CORS_ORIGINS
+        value: ""
+      # Optional live OAuth / API connector credentials
+      - key: GITHUB_CLIENT_ID
+        value: ""
+      - key: GITHUB_CLIENT_SECRET
+        value: ""
+      - key: GITHUB_TOKEN
+        value: ""
+      - key: SLACK_CLIENT_ID
+        value: ""
+      - key: SLACK_CLIENT_SECRET
+        value: ""
+      - key: SLACK_BOT_TOKEN
+        value: ""
+      - key: NOTION_CLIENT_ID
+        value: ""
+      - key: NOTION_CLIENT_SECRET
+        value: ""
+      - key: NOTION_API_KEY
+        value: ""
+      # Optional email delivery for password resets & invitations
+      - key: RESEND_API_KEY
+        value: ""
+      - key: SMTP_HOST
+        value: ""
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: ""
+      - key: SMTP_PASSWORD
+        value: ""
+      - key: SMTP_FROM_EMAIL
+        value: noreply@teamobsidian.local
