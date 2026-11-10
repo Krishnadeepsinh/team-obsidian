@@ -1,0 +1,70 @@
+from app.core.database import Base
+from app.models.workspace import (
+    Organization,
+    Workspace,
+    User,
+    PasswordResetToken,
+    Project,
+    ProjectMember,
+    ActivityLog,
+    Notification,
+)
+from app.models.integration import (
+    Integration,
+    SourceRecord,
+    SourceEvent,
+    Document,
+    DocumentChunk,
+)
+from app.models.evidence import Evidence, EvidenceReview
+from app.models.knowledge import (
+    KnowledgeEntity,
+    KnowledgeRelationship,
+    Decision,
+    TaskItem,
+    Dependency,
+    Responsibility,
+    RiskItem,
+    KnowledgeGap,
+    EmbeddingRecord,
+)
+from app.models.handover import (
+    Handover,
+    HandoverSection,
+    HandoverClaim,
+    HandoverApproval,
+    HandoverVersion,
+)
+
+__all__ = [
+    "Base",
+    "Organization",
+    "Workspace",
+    "User",
+    "PasswordResetToken",
+    "Project",
+    "ProjectMember",
+    "ActivityLog",
+    "Notification",
+    "Integration",
+    "SourceRecord",
+    "SourceEvent",
+    "Document",
+    "DocumentChunk",
+    "Evidence",
+    "EvidenceReview",
+    "KnowledgeEntity",
+    "KnowledgeRelationship",
+    "Decision",
+    "TaskItem",
+    "Dependency",
+    "Responsibility",
+    "RiskItem",
+    "KnowledgeGap",
+    "EmbeddingRecord",
+    "Handover",
+    "HandoverSection",
+    "HandoverClaim",
+    "HandoverApproval",
+    "HandoverVersion",
+]

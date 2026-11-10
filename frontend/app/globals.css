@@ -1,0 +1,125 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Add scrollbar-hide utility */
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Apple-style thin smooth scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #CBD5E1 transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+:root {
+  /* Apple Light Theme - Default */
+  --background: #F8F9FD;
+  --foreground: #0F172A;
+  --card: #FFFFFF;
+  --card-foreground: #0F172A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
+  --primary: #7C3AED;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #1E293B;
+  --muted: #F8FAFC;
+  --muted-foreground: #64748B;
+  --accent: #8B5CF6;
+  --accent-foreground: #FFFFFF;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --border: #E2E8F0;
+  --input: #E2E8F0;
+  --ring: #7C3AED;
+  --radius: 1rem;
+
+  /* Obsidian Apple Palette */
+  --apple-bg: #F8F9FD;
+  --apple-card: #FFFFFF;
+  --apple-card-border: #E8EAF2;
+  --apple-card-hover: #FDFDFF;
+  --apple-purple: #7C3AED;
+  --apple-purple-light: #EDE9FE;
+  --apple-purple-glow: rgba(124, 58, 237, 0.15);
+  --apple-text-main: #0F172A;
+  --apple-text-muted: #64748B;
+  --apple-text-sub: #94A3B8;
+}
+
+.dark {
+  --background: #080B14;
+  --foreground: #F8FAFC;
+  --card: #141B2E;
+  --card-foreground: #F8FAFC;
+  --popover: #101526;
+  --popover-foreground: #F8FAFC;
+  --primary: #8B5CF6;
+  --primary-foreground: #FFFFFF;
+  --secondary: #101526;
+  --secondary-foreground: #F8FAFC;
+  --muted: #1e293b;
+  --muted-foreground: #94A3B8;
+  --accent: #38BDF8;
+  --accent-foreground: #080B14;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #8B5CF6;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* Apple Card utility classes */
+.apple-card {
+  background-color: #FFFFFF;
+  border: 1px solid #E8EBF2;
+  border-radius: 1.25rem;
+  box-shadow: 0 2px 14px -2px rgba(15, 23, 42, 0.04), 0 0 1px 1px rgba(15, 23, 42, 0.02);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.apple-card:hover {
+  border-color: #D8DEE9;
+  box-shadow: 0 8px 24px -4px rgba(15, 23, 42, 0.07), 0 0 1px 1px rgba(15, 23, 42, 0.03);
+}
+
+.apple-glass {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(232, 235, 242, 0.8);
+}

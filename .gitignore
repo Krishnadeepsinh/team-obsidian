@@ -1,0 +1,40 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local Databases & Generated Runtime Artifacts
+*.db
+*.sqlite
+*.sqlite3
+*.pdf
+backend/uploads/
+uploads/
+backend/generated_reports/
+generated_reports/
+backend/.dev_mail_outbox.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/tsconfig.tsbuildinfo
+frontend/next-env.d.ts
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+
+# Supabase local temp
+supabase/.temp/
+
