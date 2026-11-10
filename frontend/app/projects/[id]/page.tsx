@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import { api } from "@/lib/api"
@@ -59,7 +59,7 @@ export default function ProjectDetailPage() {
   const [editPriority, setEditPriority] = useState("medium")
   const [editStatus, setEditStatus] = useState("active")
 
-  const loadAll = async () => {
+  const loadAll = useCallback(async () => {
     if (!projectId) return
     try {
       setLoading(true)
@@ -85,11 +85,11 @@ export default function ProjectDetailPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId])
 
   useEffect(() => {
     loadAll()
-  }, [projectId])
+  }, [loadAll])
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault()

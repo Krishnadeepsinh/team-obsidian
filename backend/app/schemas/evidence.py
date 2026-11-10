@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -21,8 +21,7 @@ class EvidenceResponse(BaseModel):
     review_notes: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class EvidenceAuditRequest(BaseModel):
     new_status: str # Verified, Rejected, Uncertain, Conflicting
@@ -39,6 +38,5 @@ class EvidenceReviewResponse(BaseModel):
     notes: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 

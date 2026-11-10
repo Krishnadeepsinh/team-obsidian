@@ -38,3 +38,9 @@ tsconfig.tsbuildinfo
 # Supabase local temp
 supabase/.temp/
 
+# Vercel local CLI state
+.vercel/
+
+
+.vercel
+.env*

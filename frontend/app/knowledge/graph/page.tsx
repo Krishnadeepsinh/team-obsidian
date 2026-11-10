@@ -51,7 +51,7 @@ export default function KnowledgeGraphPage() {
   const [blastRadius, setBlastRadius] = useState<any>(null)
   const [loadingBlast, setLoadingBlast] = useState(false)
 
-  const loadGraph = async (pid?: string, etype?: string, q?: string) => {
+  const loadGraph = useCallback(async (pid?: string, etype?: string, q?: string) => {
     try {
       setLoading(true)
       const storedPid =
@@ -74,11 +74,11 @@ export default function KnowledgeGraphPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [setEdges, setNodes])
 
   useEffect(() => {
-    loadGraph(undefined, entityType, search)
-  }, [])
+    loadGraph(undefined, "All", "")
+  }, [loadGraph])
 
   const handleFilterChange = (nextType: string, nextSearch: string, nextPid: string) => {
     setEntityType(nextType)

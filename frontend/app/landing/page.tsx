@@ -8,15 +8,7 @@ import {
   ShieldCheck,
   Zap,
   ArrowRight,
-  GitPullRequest,
-  CheckCircle2,
-  FileSignature,
-  Unplug,
-  Compass,
-  Cpu,
-  Lock,
-  ChevronRight,
-  Bot
+  Lock
 } from "lucide-react"
 
 export default function LandingPage() {

@@ -2,10 +2,12 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { api } from "@/lib/api"
 import { Layers, ArrowRight, User, Mail, Lock } from "lucide-react"
 
 export default function RegisterPage() {
+  const router = useRouter()
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -23,7 +25,7 @@ export default function RegisterPage() {
         password,
       })
       if (res.access_token) {
-        window.location.href = "/"
+        router.push("/")
       }
     } catch (err: any) {
       setError(err.message || "Could not create account. Please verify your inputs.")

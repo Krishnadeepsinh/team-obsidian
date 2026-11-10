@@ -1,7 +1,7 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
-import { AlertTriangle, Plus, Search, ShieldAlert, CheckCircle2, ShieldCheck, Tag, ArrowUpRight } from "lucide-react"
+import React, { useCallback, useEffect, useState } from "react"
+import { AlertTriangle, Plus, Search, CheckCircle2 } from "lucide-react"
 import { api } from "@/lib/api"
 
 export default function RisksPage() {
@@ -25,7 +25,7 @@ export default function RisksPage() {
         undefined
       : undefined
 
-  const loadRisks = async () => {
+  const loadRisks = useCallback(async () => {
     try {
       setLoading(true)
       const data = await api.getRisks(getStoredProjectId())
@@ -35,14 +35,14 @@ export default function RisksPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadRisks()
     const onProjChange = () => loadRisks()
     window.addEventListener("obsidian_project_changed", onProjChange)
     return () => window.removeEventListener("obsidian_project_changed", onProjChange)
-  }, [])
+  }, [loadRisks])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()

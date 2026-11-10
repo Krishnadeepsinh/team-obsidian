@@ -2,21 +2,15 @@
 
 import React, { useState, useEffect } from "react"
 import {
-  Settings,
   Save,
   ShieldCheck,
   Cpu,
   Database,
-  Bell,
   CheckCircle2,
   Check,
   Users,
   Building2,
-  UserPlus,
-  Mail,
-  FolderGit2,
-  Lock,
-  Sparkles
+  UserPlus
 } from "lucide-react"
 import { api } from "@/lib/api"
 
@@ -95,7 +89,7 @@ export default function SettingsPage() {
     if (!inviteEmail.trim() || !selectedOrgId) return
     try {
       setInviting(true)
-      const res = await api.inviteOrgMember(selectedOrgId, inviteEmail, inviteRole)
+      await api.inviteOrgMember(selectedOrgId, inviteEmail, inviteRole)
       setInviteMessage(`Invited ${inviteEmail} as ${inviteRole}!`)
       setInviteEmail("")
       setTimeout(() => setInviteMessage(""), 4000)

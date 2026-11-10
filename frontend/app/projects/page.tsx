@@ -3,21 +3,8 @@
 import React, { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
-  FolderGit2,
   Plus,
   Search,
-  Filter,
-  Users,
-  Scale,
-  CheckSquare,
-  AlertTriangle,
-  ShieldCheck,
-  ChevronRight,
-  MoreVertical,
-  Calendar,
-  Tag,
-  CheckCircle2,
-  Clock,
   Layers,
   ArrowUpRight
 } from "lucide-react"

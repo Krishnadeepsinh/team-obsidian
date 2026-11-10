@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { api } from "@/lib/api"
-import { Stamp, CheckCircle2, XCircle, AlertTriangle, ArrowLeft, Archive, Send } from "lucide-react"
+import { Stamp, XCircle, AlertTriangle, ArrowLeft, Archive, Send } from "lucide-react"
 
 export default function ApprovalsPage() {
   const [handovers, setHandovers] = useState<any[]>([])
@@ -14,7 +14,7 @@ export default function ApprovalsPage() {
   const [error, setError] = useState("")
   const [msg, setMsg] = useState("")
 
-  const loadData = async (targetHid?: string) => {
+  const loadData = useCallback(async (targetHid?: string) => {
     try {
       setError("")
       const storedPid =
@@ -22,7 +22,7 @@ export default function ApprovalsPage() {
       const hs = await api.getHandovers(storedPid).catch(() => [])
       const list = Array.isArray(hs) ? hs : []
       setHandovers(list)
-      const hid = targetHid || selectedId || list[0]?.id
+      const hid = targetHid || list[0]?.id
       if (hid) {
         setSelectedId(hid)
         const full = await api.getHandover(hid).catch(() => null)
@@ -33,11 +33,11 @@ export default function ApprovalsPage() {
     } catch (err: any) {
       setError(err.message || "Failed to load handover approvals.")
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
 
   const handleDecision = async (role: string, approverName: string, decisionStatus: string) => {
     if (!handover) return

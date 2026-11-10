@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -71,8 +71,7 @@ class HandoverClaimResponse(BaseModel):
     review_notes: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class HandoverSectionResponse(BaseModel):
@@ -89,8 +88,7 @@ class HandoverSectionResponse(BaseModel):
     claims: Optional[List[HandoverClaimResponse]] = []
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class HandoverApprovalResponse(BaseModel):
@@ -105,8 +103,7 @@ class HandoverApprovalResponse(BaseModel):
     signed_at: Optional[datetime] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class HandoverVersionResponse(BaseModel):
@@ -122,8 +119,7 @@ class HandoverVersionResponse(BaseModel):
     created_by: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class HandoverResponse(BaseModel):
@@ -148,5 +144,4 @@ class HandoverResponse(BaseModel):
     approvals: Optional[List[HandoverApprovalResponse]] = []
     versions: Optional[List[HandoverVersionResponse]] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

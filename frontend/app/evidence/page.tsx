@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { api } from "@/lib/api"
 import { ShieldCheck, Search, ExternalLink, Clock, User } from "lucide-react"
@@ -43,7 +43,7 @@ export default function EvidencePage() {
   const [auditNotes, setAuditNotes] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
-  const loadData = async (pid?: string, status?: string, query?: string) => {
+  const loadData = useCallback(async (pid?: string, status?: string, query?: string) => {
     try {
       setLoading(true)
       const storedPid =
@@ -62,11 +62,11 @@ export default function EvidencePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    loadData(undefined, statusFilter, search)
-  }, [])
+    loadData(undefined, "All", "")
+  }, [loadData])
 
   const handleAuditAction = async (newStatus: string) => {
     if (!selectedAudit) return

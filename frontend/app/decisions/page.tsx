@@ -1,12 +1,11 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
-import { Scale, Plus, Search, Filter, ShieldCheck, ExternalLink, ChevronRight, Calendar, User, Tag, ArrowUpRight } from "lucide-react"
+import React, { useCallback, useEffect, useState } from "react"
+import { Scale, Plus, Search, ShieldCheck } from "lucide-react"
 import { api } from "@/lib/api"
 
 export default function DecisionsPage() {
   const [decisions, setDecisions] = useState<any[]>([])
-  const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
@@ -26,7 +25,7 @@ export default function DecisionsPage() {
         undefined
       : undefined
 
-  const loadDecisions = async () => {
+  const loadDecisions = useCallback(async () => {
     try {
       setLoading(true)
       const activePid = getStoredProjectId()
@@ -35,25 +34,24 @@ export default function DecisionsPage() {
         api.getProjects().catch(() => [])
       ])
       setDecisions(data)
-      setProjects(projs)
       if (activePid) {
         setSelectedProjectId(activePid)
-      } else if (projs.length > 0 && !selectedProjectId) {
-        setSelectedProjectId(projs[0].id)
+      } else if (projs.length > 0) {
+        setSelectedProjectId((prev) => prev || projs[0].id)
       }
     } catch (err) {
       console.error("Decisions load error:", err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadDecisions()
     const onProjChange = () => loadDecisions()
     window.addEventListener("obsidian_project_changed", onProjChange)
     return () => window.removeEventListener("obsidian_project_changed", onProjChange)
-  }, [])
+  }, [loadDecisions])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()

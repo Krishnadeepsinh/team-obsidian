@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { api } from "@/lib/api"
 import {
@@ -73,7 +73,7 @@ export default function HandoverPage() {
   const [newAppName, setNewAppName] = useState("")
   const [reconstructing, setReconstructing] = useState(false)
 
-  const loadHandoverList = async (pid?: string, selectId?: string) => {
+  const loadHandoverList = useCallback(async (pid?: string, selectId?: string) => {
     try {
       setLoading(true)
       const storedPid =
@@ -109,10 +109,10 @@ export default function HandoverPage() {
           }
           setEvidenceMap(map)
         }
-        if (full?.sections?.length && !selectedSectionId) {
-          setSelectedSectionId(full.sections[0].id)
-        } else if (full?.sections?.length && !full.sections.some((s: any) => s.id === selectedSectionId)) {
-          setSelectedSectionId(full.sections[0].id)
+        if (full?.sections?.length) {
+          setSelectedSectionId((prev) =>
+            prev && full.sections.some((s: any) => s.id === prev) ? prev : full.sections[0].id
+          )
         }
       } else {
         setCurrentHandover(null)
@@ -121,11 +121,11 @@ export default function HandoverPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadHandoverList()
-  }, [])
+  }, [loadHandoverList])
 
   useEffect(() => {
     if (showWizard && wizardProjectId) {

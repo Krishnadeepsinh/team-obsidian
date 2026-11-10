@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import {
@@ -11,20 +11,12 @@ import {
   CheckSquare,
   AlertTriangle,
   ArrowUpRight,
-  TrendingUp,
   Calendar,
   Check,
   ChevronRight,
   Clock,
-  ExternalLink,
-  Github,
-  MessageSquare,
   FileText,
-  FileSignature,
   Sparkles,
-  RefreshCw,
-  Activity,
-  Plus,
   Send,
   ShieldCheck,
   Database
@@ -47,7 +39,6 @@ export default function OverviewPage() {
   const [data, setData] = useState<any>(null)
   const [activities, setActivities] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [checkedActions, setCheckedActions] = useState<Record<string, boolean>>({})
   const [quickQuery, setQuickQuery] = useState("")
   const [quickAnswer, setQuickAnswer] = useState<any>(null)
@@ -61,9 +52,8 @@ export default function OverviewPage() {
         undefined
       : undefined
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
-      setRefreshing(true)
       const activeProjId = getActiveProjectId()
       const [res, acts] = await Promise.all([
         api.getStats(activeProjId).catch(() => null),
@@ -75,9 +65,8 @@ export default function OverviewPage() {
       console.error("Dashboard stats error:", err)
     } finally {
       setLoading(false)
-      setRefreshing(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
@@ -88,7 +77,7 @@ export default function OverviewPage() {
     return () => {
       window.removeEventListener("obsidian_project_changed", handleProjectChange)
     }
-  }, [])
+  }, [loadData])
 
   // Live metrics strictly based on real database records
   const metrics = data?.metrics || {

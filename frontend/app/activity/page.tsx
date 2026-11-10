@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useState } from "react"
-import { Activity, Clock, ShieldCheck, User, GitCommit, MessageSquare, FileText, CheckCircle2, ArrowUpRight } from "lucide-react"
+import { Activity, Clock } from "lucide-react"
 import { api } from "@/lib/api"
 
 export default function ActivityPage() {

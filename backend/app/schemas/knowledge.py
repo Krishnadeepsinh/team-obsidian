@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -39,8 +39,7 @@ class DecisionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TaskCreate(BaseModel):
     project_id: Optional[str] = None
@@ -72,8 +71,7 @@ class TaskResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class RiskCreate(BaseModel):
     project_id: Optional[str] = None
@@ -100,8 +98,7 @@ class RiskResponse(BaseModel):
     evidence_ids: List[str]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class GapCreate(BaseModel):
     project_id: str
@@ -124,8 +121,7 @@ class GapResponse(BaseModel):
     status: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DependencyResponse(BaseModel):
     id: str
@@ -139,8 +135,7 @@ class DependencyResponse(BaseModel):
     evidence_ids: List[str]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AssistantQueryRequest(BaseModel):
     project_id: str

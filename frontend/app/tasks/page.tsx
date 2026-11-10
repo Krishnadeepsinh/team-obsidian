@@ -1,7 +1,7 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
-import { CheckSquare, Plus, Search, Filter, UserCheck, AlertCircle, Clock, ShieldCheck, ArrowRight, User, Check } from "lucide-react"
+import React, { useCallback, useEffect, useState } from "react"
+import { CheckSquare, Plus, Search, UserCheck, AlertCircle, Check } from "lucide-react"
 import { api } from "@/lib/api"
 
 export default function TasksPage() {
@@ -27,7 +27,7 @@ export default function TasksPage() {
         undefined
       : undefined
 
-  const loadTasks = async () => {
+  const loadTasks = useCallback(async () => {
     try {
       setLoading(true)
       const data = await api.getTasks(getStoredProjectId())
@@ -37,14 +37,14 @@ export default function TasksPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadTasks()
     const onProjChange = () => loadTasks()
     window.addEventListener("obsidian_project_changed", onProjChange)
     return () => window.removeEventListener("obsidian_project_changed", onProjChange)
-  }, [])
+  }, [loadTasks])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { api } from "@/lib/api"
 import { Compass, Search, User, ShieldCheck } from "lucide-react"
 
@@ -34,7 +34,7 @@ export default function KnowledgeExplorerPage() {
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
 
-  const loadData = async (pid?: string, cat?: string, q?: string, vstat?: string, emp?: string) => {
+  const loadData = useCallback(async (pid?: string, cat?: string, q?: string, vstat?: string, emp?: string) => {
     try {
       setLoading(true)
       const storedPid =
@@ -61,11 +61,11 @@ export default function KnowledgeExplorerPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    loadData(undefined, category, search, verificationStatus, employee)
-  }, [])
+    loadData(undefined, "All", "", "All", "")
+  }, [loadData])
 
   const applyFilters = (nextPid = activeProject, nextCat = category, nextQ = search, nextVs = verificationStatus, nextEmp = employee) => {
     loadData(nextPid, nextCat, nextQ, nextVs, nextEmp)

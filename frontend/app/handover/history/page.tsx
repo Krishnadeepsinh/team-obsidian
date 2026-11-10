@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { api } from "@/lib/api"
 import { History, ArrowLeft, GitCommit, User } from "lucide-react"
@@ -11,7 +11,7 @@ export default function HandoverHistoryPage() {
   const [handover, setHandover] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
-  const loadData = async (hid?: string) => {
+  const loadData = useCallback(async (hid?: string) => {
     try {
       setLoading(true)
       const storedPid =
@@ -19,7 +19,7 @@ export default function HandoverHistoryPage() {
       const hs = await api.getHandovers(storedPid).catch(() => [])
       const list = Array.isArray(hs) ? hs : []
       setHandovers(list)
-      const targetId = hid || selectedId || list[0]?.id
+      const targetId = hid || list[0]?.id
       if (targetId) {
         setSelectedId(targetId)
         const full = await api.getHandover(targetId).catch(() => null)
@@ -30,11 +30,11 @@ export default function HandoverHistoryPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
 
   const versions = handover?.versions || []
 

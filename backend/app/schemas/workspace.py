@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -13,8 +13,7 @@ class WorkspaceResponse(BaseModel):
     description: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ProjectCreate(BaseModel):
     workspace_id: Optional[str] = None
@@ -63,6 +62,5 @@ class ProjectResponse(BaseModel):
     risk_count: Optional[int] = 0
     evidence_count: Optional[int] = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
