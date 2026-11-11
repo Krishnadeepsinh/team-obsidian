@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
@@ -36,6 +36,103 @@ const VERIF_BADGE = (status: string) => {
   return "bg-amber-50 text-amber-700 border-amber-200"
 }
 
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const tokenRegex = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|https?:\/\/[^\s)]+)/g
+  const nodes: ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  let keyIdx = 0
+
+  while ((match = tokenRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index))
+    }
+    const tok = match[0]
+    if (tok.startsWith("**") && tok.endsWith("**")) {
+      nodes.push(
+        <strong key={`b-${keyIdx++}`} className="font-semibold text-slate-900">
+          {tok.slice(2, -2)}
+        </strong>
+      )
+    } else if (tok.startsWith("`") && tok.endsWith("`")) {
+      nodes.push(
+        <code
+          key={`c-${keyIdx++}`}
+          className="px-1.5 py-0.5 rounded bg-slate-200/70 text-violet-900 font-mono text-[11px]"
+        >
+          {tok.slice(1, -1)}
+        </code>
+      )
+    } else if (tok.startsWith("*") && tok.endsWith("*")) {
+      nodes.push(
+        <em key={`i-${keyIdx++}`} className="italic text-slate-600">
+          {tok.slice(1, -1)}
+        </em>
+      )
+    } else if (tok.startsWith("http://") || tok.startsWith("https://")) {
+      nodes.push(
+        <a
+          key={`u-${keyIdx++}`}
+          href={tok}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-violet-700 underline break-all hover:text-violet-900"
+        >
+          {tok}
+        </a>
+      )
+    }
+    lastIndex = tokenRegex.lastIndex
+  }
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex))
+  }
+  return nodes
+}
+
+function FormattedMarkdown({ text }: { text: string }) {
+  const lines = (text || "").split(/\r?\n/)
+  return (
+    <div className="space-y-1.5 text-xs text-slate-700 leading-relaxed">
+      {lines.map((rawLine, idx) => {
+        const line = rawLine.trim()
+        if (!line) {
+          return <div key={`sp-${idx}`} className="h-1.5" />
+        }
+        if (line.startsWith("- [ ] ") || line.startsWith("- [x] ") || line.startsWith("- [X] ")) {
+          const checked = line[3].toLowerCase() === "x"
+          const body = line.slice(6)
+          return (
+            <div key={`chk-${idx}`} className="flex items-start gap-2 pl-1">
+              <span
+                className={`mt-0.5 inline-flex items-center justify-center w-3.5 h-3.5 rounded border text-[9px] font-bold flex-shrink-0 ${
+                  checked ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-300 text-transparent"
+                }`}
+              >
+                ✓
+              </span>
+              <span>{renderInlineMarkdown(body)}</span>
+            </div>
+          )
+        }
+        if (line.startsWith("- ")) {
+          return (
+            <div key={`li-${idx}`} className="flex items-start gap-2 pl-1">
+              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-violet-500 flex-shrink-0" />
+              <span className="min-w-0 break-words">{renderInlineMarkdown(line.slice(2))}</span>
+            </div>
+          )
+        }
+        return (
+          <p key={`p-${idx}`} className="break-words">
+            <Fragment>{renderInlineMarkdown(line)}</Fragment>
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function HandoverPage() {
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState("")
@@ -61,6 +158,8 @@ export default function HandoverPage() {
   const [showWizard, setShowWizard] = useState(false)
   const [wizardProjectId, setWizardProjectId] = useState("")
   const [wizardSources, setWizardSources] = useState<any[]>([])
+  const [wizardDocsCount, setWizardDocsCount] = useState(0)
+  const [includeDocuments, setIncludeDocuments] = useState(true)
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([])
   const [selectedCategories, setSelectedCategories] = useState<string[]>(SOURCE_CATEGORIES)
   const [departingName, setDepartingName] = useState("")
@@ -72,6 +171,7 @@ export default function HandoverPage() {
   const [newAppRole, setNewAppRole] = useState("tech_lead")
   const [newAppName, setNewAppName] = useState("")
   const [reconstructing, setReconstructing] = useState(false)
+  const [wizardError, setWizardError] = useState("")
 
   const loadHandoverList = useCallback(async (pid?: string, selectId?: string) => {
     try {
@@ -131,11 +231,17 @@ export default function HandoverPage() {
 
   useEffect(() => {
     if (showWizard && wizardProjectId) {
-      api.getIntegrations(wizardProjectId).then((res) => {
-        const list = Array.isArray(res) ? res : []
+      Promise.all([
+        api.getIntegrations(wizardProjectId).catch(() => []),
+        api.getDocuments(wizardProjectId).catch(() => []),
+      ]).then(([integsRes, docsRes]) => {
+        const list = Array.isArray(integsRes) ? integsRes : []
+        const docsList = Array.isArray(docsRes) ? docsRes : []
         setWizardSources(list)
+        setWizardDocsCount(docsList.length)
+        setIncludeDocuments(true)
         setSelectedSourceIds(list.map((i: any) => i.id))
-      }).catch(() => setWizardSources([]))
+      })
     }
   }, [showWizard, wizardProjectId])
 
@@ -155,12 +261,21 @@ export default function HandoverPage() {
     e.preventDefault()
     const pid = wizardProjectId || activeProject || projects[0]?.id
     if (!pid) {
-      setError("Please create or select a project before reconstructing a handover.")
+      setWizardError("Please create or select a project before reconstructing a handover.")
       return
     }
     try {
       setReconstructing(true)
+      setWizardError("")
       setError("")
+      const finalSourceIds = [
+        ...selectedSourceIds,
+        ...(includeDocuments ? ["documents"] : []),
+      ]
+      const finalSourceTypes = [
+        ...wizardSources.filter((s) => selectedSourceIds.includes(s.id)).map((s) => s.provider),
+        ...(includeDocuments ? ["document"] : []),
+      ]
       const created = await api.reconstructHandover({
         project_id: pid,
         departing_employee_name: departingName,
@@ -168,10 +283,8 @@ export default function HandoverPage() {
         incoming_employee_name: incomingName,
         incoming_employee_role: incomingRole,
         target_date: targetDate || undefined,
-        selected_source_ids: selectedSourceIds,
-        selected_sources: wizardSources
-          .filter((s) => selectedSourceIds.includes(s.id))
-          .map((s) => s.provider),
+        selected_source_ids: finalSourceIds,
+        selected_sources: finalSourceTypes,
         selected_categories: selectedCategories,
         approvers:
           customApprovers.length > 0
@@ -187,7 +300,9 @@ export default function HandoverPage() {
       setStatusMsg("Handover dossier reconstructed from project evidence.")
       await loadHandoverList(activeProject, created.id)
     } catch (err: any) {
-      setError(err.message || "Failed to reconstruct handover.")
+      const msg = err.message || "Failed to reconstruct handover."
+      setWizardError(msg)
+      setError(msg)
     } finally {
       setReconstructing(false)
     }
@@ -491,8 +606,8 @@ export default function HandoverPage() {
                       </div>
                     </form>
                   ) : (
-                    <div className="prose prose-sm max-w-none text-xs text-slate-700 whitespace-pre-line leading-relaxed bg-slate-50/70 p-4 rounded-xl border border-slate-100">
-                      {activeSection.content}
+                    <div className="bg-slate-50/70 p-4 rounded-xl border border-slate-100">
+                      <FormattedMarkdown text={activeSection.content || ""} />
                     </div>
                   )}
 
@@ -507,7 +622,9 @@ export default function HandoverPage() {
                         {activeSection.claims.map((cl: any) => (
                           <div key={cl.id} className="p-3 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                             <div className="space-y-1 min-w-0">
-                              <p className="text-slate-800 font-medium">{cl.claim_text}</p>
+                              <div className="text-slate-800 font-medium break-words">
+                                {renderInlineMarkdown(cl.claim_text || "")}
+                              </div>
                               <div className="flex items-center gap-2 text-[10px] text-slate-400">
                                 <span className={`px-2 py-0.5 rounded-full border font-semibold ${VERIF_BADGE(cl.verification_status)}`}>
                                   {cl.verification_status}
@@ -628,8 +745,13 @@ export default function HandoverPage() {
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-violet-600" /> Reconstruct 16-Section Handover Dossier
               </h3>
-              <button onClick={() => setShowWizard(false)} className="text-xs text-slate-400">✕ Close</button>
+              <button onClick={() => { setShowWizard(false); setWizardError("") }} className="text-xs text-slate-400">✕ Close</button>
             </div>
+            {wizardError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {wizardError}
+              </div>
+            )}
             <form onSubmit={handleReconstruct} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Target Project *</label>
@@ -701,30 +823,36 @@ export default function HandoverPage() {
                 />
               </div>
 
-              {wizardSources.length > 0 && (
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Connected Sources to Include</label>
-                  <div className="flex flex-wrap gap-2">
-                    {wizardSources.map((src) => {
-                      const checked = selectedSourceIds.includes(src.id)
-                      return (
-                        <label key={src.id} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() =>
-                              setSelectedSourceIds((prev) =>
-                                checked ? prev.filter((i) => i !== src.id) : [...prev, src.id]
-                              )
-                            }
-                          />
-                          <span>{src.name} ({src.provider})</span>
-                        </label>
-                      )
-                    })}
-                  </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1.5">Knowledge Sources to Include</label>
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-violet-50 border border-violet-200 text-xs cursor-pointer text-violet-900 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={includeDocuments}
+                      onChange={(e) => setIncludeDocuments(e.target.checked)}
+                    />
+                    <span>Uploaded Documents ({wizardDocsCount})</span>
+                  </label>
+                  {wizardSources.map((src) => {
+                    const checked = selectedSourceIds.includes(src.id)
+                    return (
+                      <label key={src.id} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setSelectedSourceIds((prev) =>
+                              checked ? prev.filter((i) => i !== src.id) : [...prev, src.id]
+                            )
+                          }
+                        />
+                        <span>{src.name} ({src.provider})</span>
+                      </label>
+                    )
+                  })}
                 </div>
-              )}
+              </div>
 
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1.5">Intelligence Scopes</label>

@@ -1,4 +1,5 @@
 import os
+import re
 from html import escape
 from typing import Any, Dict
 
@@ -150,9 +151,19 @@ class PDFGenerator:
 
             raw_content = str(sec.get("content", ""))
             for line in raw_content.splitlines():
-                clean = escape(line).replace("**", "")
-                if clean.strip():
-                    elements.append(Paragraph(clean, body_style))
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("- [ ] "):
+                    stripped = "[ ] " + stripped[6:]
+                elif stripped.startswith("- [x] ") or stripped.startswith("- [X] "):
+                    stripped = "[x] " + stripped[6:]
+                elif stripped.startswith("- "):
+                    stripped = "• " + stripped[2:]
+                clean = escape(stripped)
+                clean = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", clean)
+                clean = re.sub(r"`([^`]+)`", r'<font name="Courier" size="8.8">\1</font>', clean)
+                elements.append(Paragraph(clean, body_style))
 
             refs = sec.get("evidence_refs") or []
             if refs:

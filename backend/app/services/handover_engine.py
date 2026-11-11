@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
@@ -443,6 +444,8 @@ class HandoverEngine:
 
         # Section 1: Project Overview
         s1_evs = [e.id for e in evidences if e.source_type in ("document", "notion_page", "github_pr")][:6]
+        if not s1_evs and evidences:
+            s1_evs = [e.id for e in evidences[:6]]
         tech_entities = [e for e in entities if (e.entity_type or "").lower() in ("system", "service", "component", "database", "infrastructure")]
         s1_lines = [
             f"**Project:** {proj_name} ({project.status if project else 'active'})",
@@ -632,10 +635,28 @@ class HandoverEngine:
             )
         s13_status, s13_conf = ("Supported by Evidence" if stakeholders else "Needs Human Verification"), (0.85 if stakeholders else 0.5)
 
+        def _cfg_target(integ: Integration) -> str:
+            cfg = integ.config or {}
+            if isinstance(cfg.get("repos"), list) and cfg["repos"]:
+                return ", ".join(str(x) for x in cfg["repos"][:3])
+            if isinstance(cfg.get("channels"), list) and cfg["channels"]:
+                return ", ".join(str(x) for x in cfg["channels"][:3])
+            if isinstance(cfg.get("targets"), list) and cfg["targets"]:
+                return ", ".join(str(x) for x in cfg["targets"][:3])
+            return (
+                cfg.get("repo")
+                or cfg.get("channel_id")
+                or cfg.get("channel")
+                or cfg.get("database_id")
+                or cfg.get("page_id")
+                or cfg.get("target")
+                or "Connected Workspace"
+            )
+
         # Section 14: Required Access & Permissions (strictly NO raw secrets/tokens)
         access_targets = []
         for i in integrations:
-            cfg_target = (i.config or {}).get("repo") or (i.config or {}).get("channel") or (i.config or {}).get("target") or "Connected Workspace"
+            cfg_target = _cfg_target(i)
             access_targets.append(f"- [ ] **{i.provider.upper()}** (`{i.name}` — target: `{cfg_target}`): Grant least-privilege access to {incoming_name}")
         for comp in tech_entities[:8]:
             if (comp.entity_type or "").lower() in ("database", "infrastructure", "vendor"):
@@ -646,7 +667,7 @@ class HandoverEngine:
         s14_status, s14_conf = _sec_status(s1_evs, bool(integrations or tech_entities))
 
         # Section 15: Recommended Day 1-30 Action Plan (derived from actual project artifacts)
-        top_repos = ", ".join({(i.config or {}).get("repo") or i.name for i in integrations}) or proj_name
+        top_repos = ", ".join({_cfg_target(i) if _cfg_target(i) != "Connected Workspace" else i.name for i in integrations}) or proj_name
         top_decisions = ", ".join(d.title for d in decisions[:3]) or "logged project decisions"
         top_open = ", ".join(t.title for t in open_tasks[:3]) or "assigned backlog items"
         top_risk = risks[0].title if risks else (gaps[0].title if gaps else "unverified operational assumptions")
@@ -707,9 +728,17 @@ class HandoverEngine:
 
         results: List[Dict[str, Any]] = []
         for sec_num, sec_title, content, sec_evs, sec_status, sec_conf in raw_sections:
-            claims = [ln.lstrip("- ").strip() for ln in content.splitlines() if ln.strip().startswith("- ")][:6]
-            if not claims:
-                claims = [content[:300]]
+            bullet_claims = [
+                re.sub(r"^-\s*(\[[ xX]\]\s*)?", "", ln.strip()).strip()
+                for ln in content.splitlines()
+                if ln.strip().startswith("- ")
+            ]
+            if bullet_claims:
+                claims = bullet_claims[:6]
+            else:
+                claims = [ln.strip() for ln in content.splitlines() if ln.strip()][:6]
+                if not claims and content.strip():
+                    claims = [content.strip()]
             results.append({
                 "section_number": sec_num,
                 "title": sec_title,
