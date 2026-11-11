@@ -13,6 +13,10 @@ import {
 
 export default function LandingPage() {
   const router = useRouter()
+  const goProtected = (path: string) => {
+    const hasToken = typeof window !== "undefined" && Boolean(localStorage.getItem("obsidian_token"))
+    router.push(hasToken ? path : "/login")
+  }
 
   return (
     <div className="min-h-screen bg-[#F8F9FD] text-slate-900 selection:bg-violet-100 selection:text-violet-900 relative overflow-hidden font-sans">
@@ -33,7 +37,7 @@ export default function LandingPage() {
             Sign In
           </button>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => goProtected("/")}
             className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white flex items-center gap-2 shadow-md shadow-violet-600/20 transition-all hover:scale-[1.02]"
           >
             <span>Launch Platform</span>
@@ -62,14 +66,14 @@ export default function LandingPage() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4">
           <button
-            onClick={() => router.push("/")}
+            onClick={() => goProtected("/")}
             className="w-full sm:w-auto px-6 py-3 rounded-2xl text-xs font-bold bg-violet-600 hover:bg-violet-700 text-white flex items-center justify-center gap-2 shadow-lg shadow-violet-600/25 transition-all hover:scale-[1.02]"
           >
             <span>Enter Enterprise Workspace</span>
             <ArrowRight className="w-4 h-4" />
           </button>
           <button
-            onClick={() => router.push("/handover")}
+            onClick={() => goProtected("/handover")}
             className="w-full sm:w-auto px-6 py-3 rounded-2xl text-xs font-bold bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 flex items-center justify-center gap-2 shadow-sm transition-all"
           >
             <span>View Handover Dossier</span>

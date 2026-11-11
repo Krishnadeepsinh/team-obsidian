@@ -162,6 +162,7 @@ class PDFGenerator:
                     stripped = "• " + stripped[2:]
                 clean = escape(stripped)
                 clean = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", clean)
+                clean = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", clean)
                 clean = re.sub(r"`([^`]+)`", r'<font name="Courier" size="8.8">\1</font>', clean)
                 elements.append(Paragraph(clean, body_style))
 

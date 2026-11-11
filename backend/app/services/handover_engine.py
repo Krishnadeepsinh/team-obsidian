@@ -533,12 +533,13 @@ class HandoverEngine:
         # Section 7: Decision Reasoning & Alternatives
         s7_lines = []
         for d in decisions:
+            reasoning_text = (d.reasoning or "").strip() or (d.summary or "").strip() or "Not documented"
             alts = ", ".join(d.alternatives) if d.alternatives else "None documented"
             trds = ", ".join(d.tradeoffs) if d.tradeoffs else "None documented"
             cons = ", ".join(getattr(d, "consequences", None) or []) or "None documented"
             s7_lines.append(
                 f"- **{d.title}**\n"
-                f"  - *Reasoning:* {d.reasoning}\n"
+                f"  - *Reasoning:* {reasoning_text}\n"
                 f"  - *Rejected Alternatives:* {alts}\n"
                 f"  - *Trade-offs:* {trds} | *Consequences:* {cons}"
             )

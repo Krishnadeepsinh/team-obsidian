@@ -46,6 +46,10 @@ export default function OverviewPage() {
   const [seedingDemo, setSeedingDemo] = useState(false)
 
   const loadData = useCallback(async () => {
+    if (typeof window === "undefined" || !localStorage.getItem("obsidian_token")) {
+      setLoading(false)
+      return
+    }
     try {
       const activeProjId = getStoredProjectId() || undefined
       const [res, acts] = await Promise.all([
@@ -54,8 +58,8 @@ export default function OverviewPage() {
       ])
       setData(res)
       setActivities(Array.isArray(acts) ? acts : [])
-    } catch (err) {
-      console.error("Dashboard stats error:", err)
+    } catch {
+      setData(null)
     } finally {
       setLoading(false)
     }
