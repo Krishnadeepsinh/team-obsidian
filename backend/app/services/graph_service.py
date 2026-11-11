@@ -160,9 +160,9 @@ class GraphService:
             for idx, nid in enumerate(row_ids):
                 col_index[nid] = float(idx)
 
-        x_gap = 270.0
-        y_gap = 190.0
-        subrow_gap = 145.0
+        x_gap = 255.0
+        y_gap = 155.0
+        subrow_gap = 125.0
         max_cols = 5
 
         positions: Dict[str, Dict[str, float]] = {}
