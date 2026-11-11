@@ -1,10 +1,15 @@
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from pydantic import BaseModel, Field
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("ORT_NUM_THREADS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from app.core.config import settings
 
@@ -128,15 +133,18 @@ class AIEngine:
         if self._embedder is None:
             from fastembed import TextEmbedding
 
-            logger.info("Loading semantic embedding model: %s", self.embedding_model_name)
-            self._embedder = TextEmbedding(model_name=self.embedding_model_name)
+            logger.info("Loading semantic embedding model (single-thread low-RAM): %s", self.embedding_model_name)
+            self._embedder = TextEmbedding(model_name=self.embedding_model_name, threads=1)
         return self._embedder
 
     def _get_client(self):
         if self._genai_client is None and settings.GEMINI_API_KEY:
             from google import genai
 
-            self._genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            self._genai_client = genai.Client(
+                api_key=settings.GEMINI_API_KEY,
+                http_options={"api_version": "v1beta"},
+            )
         return self._genai_client
 
     def _generate_content_with_fallback(self, client, preferred_model: str, contents: str, config: Any):

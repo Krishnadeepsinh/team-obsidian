@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
@@ -20,6 +20,7 @@ const MAX_UPLOAD_MB = 25
 export default function DocumentsPage() {
   const [docs, setDocs] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
+  const projectsRef = useRef<any[]>([])
   const [activeProject, setActiveProject] = useState<string>("")
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -35,12 +36,22 @@ export default function DocumentsPage() {
   const [chunks, setChunks] = useState<any[]>([])
   const [loadingChunks, setLoadingChunks] = useState(false)
 
-  const loadData = async (pid?: string) => {
+  const loadData = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
-      const projsRaw = await api.getProjects().catch(() => [])
-      const projs = Array.isArray(projsRaw) ? projsRaw : []
-      setProjects(projs)
+      let projs = projectsRef.current
+      try {
+        const projsRaw = await api.getProjects()
+        if (Array.isArray(projsRaw)) {
+          projs = projsRaw
+          projectsRef.current = projsRaw
+          setProjects(projsRaw)
+        }
+      } catch (err: any) {
+        if (projectsRef.current.length === 0) {
+          setError(err?.message || "Unable to load projects right now. Retry in a moment.")
+        }
+      }
 
       let resolvedPid = ""
       if (pid === "") {
@@ -52,16 +63,22 @@ export default function DocumentsPage() {
       }
 
       setActiveProject(resolvedPid)
-      const res = await api.getDocuments(resolvedPid || undefined).catch(() => [])
-      setDocs(Array.isArray(res) ? res : [])
+      try {
+        const res = await api.getDocuments(resolvedPid || undefined)
+        if (Array.isArray(res)) {
+          setDocs(res)
+        }
+      } catch (err: any) {
+        setError((prev) => prev || err?.message || "Could not refresh documents list.")
+      }
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
 
   const handleFileChange = (picked: File | null) => {
     setError("")

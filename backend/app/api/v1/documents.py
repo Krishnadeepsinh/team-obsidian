@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import re
@@ -299,6 +300,7 @@ async def upload_document(
             logger.warning("Post-upload knowledge extraction skipped for doc %s: %s", doc_id, exc)
             db.refresh(doc)
 
+    gc.collect()
     return doc
 
 
