@@ -32,7 +32,7 @@ import {
   Pie,
   Cell
 } from "recharts"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
 
 export default function OverviewPage() {
   const router = useRouter()
@@ -45,16 +45,9 @@ export default function OverviewPage() {
   const [quickAsking, setQuickAsking] = useState(false)
   const [seedingDemo, setSeedingDemo] = useState(false)
 
-  const getActiveProjectId = () =>
-    typeof window !== "undefined"
-      ? localStorage.getItem("obsidian_active_project_id") ||
-        localStorage.getItem("obsidian_active_project") ||
-        undefined
-      : undefined
-
   const loadData = useCallback(async () => {
     try {
-      const activeProjId = getActiveProjectId()
+      const activeProjId = getStoredProjectId() || undefined
       const [res, acts] = await Promise.all([
         api.getStats(activeProjId).catch(() => null),
         api.getActivity(activeProjId).catch(() => [])
@@ -166,13 +159,16 @@ export default function OverviewPage() {
     try {
       setSeedingDemo(true)
       const res = await api.seedDemo()
-      if (res?.project_id && typeof window !== "undefined") {
-        localStorage.setItem("obsidian_active_project", res.project_id)
-        window.dispatchEvent(new Event("obsidian_project_changed"))
+      if (res?.project_id) {
+        setStoredProjectId(res.project_id)
       }
       await loadData()
     } catch (err: any) {
-      alert(err.message || "Failed to initialize demo sandbox")
+      setQuickAnswer({
+        answer: err.message || "Failed to initialize demo sandbox.",
+        is_grounded: false,
+        citations: [],
+      })
     } finally {
       setSeedingDemo(false)
     }
@@ -183,7 +179,7 @@ export default function OverviewPage() {
     if (!quickQuery.trim()) return
     try {
       setQuickAsking(true)
-      const res = await api.queryAssistant(getActiveProjectId() || "default", quickQuery.trim())
+      const res = await api.queryAssistant(getStoredProjectId() || "default", quickQuery.trim())
       setQuickAnswer(res)
     } catch (err: any) {
       setQuickAnswer({
@@ -718,7 +714,7 @@ export default function OverviewPage() {
             <div className="py-8 text-center text-xs text-slate-400">
               <Link2 className="w-8 h-8 text-slate-300 mx-auto mb-2" />
               <p className="font-medium text-slate-600">No integrations connected</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Connect GitHub, Slack, Notion or Google Drive.</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Connect GitHub, Slack, Notion, or upload project documents.</p>
             </div>
           ) : (
             <div className="space-y-2.5">

@@ -36,6 +36,7 @@ export default function SettingsPage() {
   const [threshold, setThreshold] = useState<number>(0.75)
   const [requireSecApproval, setRequireSecApproval] = useState<boolean>(false)
   const [savingGovernance, setSavingGovernance] = useState(false)
+  const [govError, setGovError] = useState("")
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -104,6 +105,7 @@ export default function SettingsPage() {
     e.preventDefault()
     try {
       setSavingGovernance(true)
+      setGovError("")
       const res = await api.updateOrgSettings({
         evidence_verification_threshold: Number(threshold),
         require_security_approval: Boolean(requireSecApproval),
@@ -112,7 +114,7 @@ export default function SettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (err: any) {
-      alert(err?.message || "Failed to update organization governance settings.")
+      setGovError(err?.message || "Failed to update organization governance settings.")
     } finally {
       setSavingGovernance(false)
     }
@@ -135,6 +137,12 @@ export default function SettingsPage() {
         )}
       </div>
 
+        {govError && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+            {govError}
+          </div>
+        )}
+
       {/* 1. User Profile & Personal Workspace */}
       <div className="apple-card p-5 space-y-4">
         <div className="flex items-center justify-between">
@@ -154,7 +162,7 @@ export default function SettingsPage() {
           </div>
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
             <span className="text-slate-400 uppercase text-[10px] font-bold block mb-0.5">Email Identity</span>
-            <p className="font-bold text-slate-900">{currentUser?.email || "user@obsidian.io"}</p>
+            <p className="font-bold text-slate-900">{currentUser?.email || "Not available"}</p>
           </div>
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
             <span className="text-slate-400 uppercase text-[10px] font-bold block mb-0.5">Assigned Role</span>
@@ -330,13 +338,13 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
             <span className="text-slate-400 uppercase text-[10px] font-bold block">Primary LLM</span>
-            <p className="text-sm font-bold text-slate-900">{orgSettings?.primary_llm || "gemini-2.5-flash"}</p>
+            <p className="text-sm font-bold text-slate-900">{orgSettings?.primary_llm || "gemini-3.5-flash"}</p>
             <p className="text-[11px] text-slate-500">Structured knowledge extraction &amp; 16-section dossier synthesis</p>
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
             <span className="text-slate-400 uppercase text-[10px] font-bold block">Secondary LLM</span>
-            <p className="text-sm font-bold text-slate-900">{orgSettings?.secondary_llm || "gemini-2.5-flash-lite"}</p>
+            <p className="text-sm font-bold text-slate-900">{orgSettings?.secondary_llm || "gemini-3.5-flash-lite"}</p>
             <p className="text-[11px] text-slate-500">Entity deduplication, contradiction triage &amp; query routing</p>
           </div>
 

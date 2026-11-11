@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react"
 import { Scale, Plus, Search, ShieldCheck } from "lucide-react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId } from "@/lib/api"
 
 export default function DecisionsPage() {
   const [decisions, setDecisions] = useState<any[]>([])
@@ -18,27 +18,14 @@ export default function DecisionsPage() {
   const [decisionMaker, setDecisionMaker] = useState("")
   const [component, setComponent] = useState("")
 
-  const getStoredProjectId = () =>
-    typeof window !== "undefined"
-      ? localStorage.getItem("obsidian_active_project_id") ||
-        localStorage.getItem("obsidian_active_project") ||
-        undefined
-      : undefined
-
   const loadDecisions = useCallback(async () => {
     try {
       setLoading(true)
-      const activePid = getStoredProjectId()
-      const [data, projs] = await Promise.all([
-        api.getDecisions(activePid),
-        api.getProjects().catch(() => [])
-      ])
+      const projs = await api.getProjects().catch(() => [])
+      const resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      const data = await api.getDecisions(resolvedPid || undefined)
       setDecisions(data)
-      if (activePid) {
-        setSelectedProjectId(activePid)
-      } else if (projs.length > 0) {
-        setSelectedProjectId((prev) => prev || projs[0].id)
-      }
+      setSelectedProjectId(resolvedPid)
     } catch (err) {
       console.error("Decisions load error:", err)
     } finally {

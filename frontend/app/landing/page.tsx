@@ -57,7 +57,7 @@ export default function LandingPage() {
         </h1>
 
         <p className="text-sm sm:text-base text-slate-600 max-w-2xl mx-auto leading-relaxed">
-          Autonomous institutional memory reconstruction across GitHub, Slack, Notion, and Google Drive. Synthesizes verified, audit-ready 16-section handover dossiers with cryptographic evidence.
+          Autonomous institutional memory reconstruction across GitHub, Slack, Notion, and uploaded Project Documents. Synthesizes verified, audit-ready 16-section handover dossiers with cryptographic evidence.
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4">

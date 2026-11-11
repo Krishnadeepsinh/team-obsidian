@@ -172,8 +172,9 @@ def get_effective_project(
     db: Session,
     require_write: bool = False,
 ) -> Optional[Project]:
-    if project_id:
-        return verify_project_access(project_id, user, db, require_write=require_write)
+    clean_pid = (project_id or "").strip()
+    if clean_pid and clean_pid.lower() != "default":
+        return verify_project_access(clean_pid, user, db, require_write=require_write)
     accessible = get_user_accessible_projects(user, db)
     if accessible:
         # Prefer non-demo project if available

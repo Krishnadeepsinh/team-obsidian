@@ -1,5 +1,9 @@
+import logging
 import os
+import re
+import uuid
 from typing import List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -19,13 +23,50 @@ from app.services.audit_service import record_activity
 from app.services.document_parser import document_parser
 from app.services.knowledge_extractor import extract_and_persist_project_knowledge
 
+logger = logging.getLogger("team_obsidian.documents")
 router = APIRouter(prefix="/documents", tags=["Document Library"])
 
 UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {"pdf", "docx", "doc", "xlsx", "xls", "txt", "md", "csv", "html", "htm", "json"}
+ALLOWED_EXTENSIONS = {
+    "pdf", "docx", "doc", "xlsx", "xls", "txt", "md", "csv",
+    "html", "htm", "json", "yaml", "yml", "log", "rst", "sql", "xml",
+}
 DANGEROUS_EXTENSIONS = {"exe", "bat", "sh", "cmd", "ps1", "dll", "vbs", "jar", "bin", "msi", "js", "php"}
+
+
+def _clean_text(value: Optional[str], max_len: Optional[int] = None) -> str:
+    cleaned = (value or "").replace("\x00", "").strip()
+    if max_len is not None:
+        return cleaned[:max_len]
+    return cleaned
+
+
+def _safe_disk_name(sha_prefix: str, filename: str) -> str:
+    stem, ext = os.path.splitext(filename)
+    clean_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_") or "document"
+    clean_ext = re.sub(r"[^A-Za-z0-9]+", "", ext.lstrip("."))[:16]
+    suffix = f".{clean_ext}" if clean_ext else ""
+    max_path_total = 220
+    budget = max(16, min(80, max_path_total - len(UPLOAD_DIR) - len(sha_prefix) - len(suffix) - 4))
+    return f"{sha_prefix}_{clean_stem[:budget]}{suffix}"
+
+
+def _fit_filename(raw_name: str, max_len: int = 255) -> str:
+    cleaned = _clean_text(raw_name) or "uploaded_doc"
+    if len(cleaned) <= max_len:
+        return cleaned
+    stem, ext = os.path.splitext(cleaned)
+    if ext and len(ext) < max_len - 1:
+        return f"{stem[:max_len - len(ext)]}{ext}"
+    return cleaned[:max_len]
+
+
+def _ascii_header_filename(raw_name: str, fallback: str = "document.bin") -> str:
+    cleaned = (raw_name or fallback).replace('"', "").replace("\r", "").replace("\n", "")
+    ascii_only = re.sub(r"[^\x20-\x7E]", "_", cleaned).strip()
+    return ascii_only or fallback
 
 
 @router.get("", response_model=List[DocumentResponse])
@@ -48,16 +89,17 @@ def list_documents(
 
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
-    project_id: str = Form(...),
-    title: str = Form(...),
+    project_id: str = Form(""),
+    title: str = Form(""),
     extract_knowledge: bool = Form(True),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Upload PDF, DOCX, XLSX, CSV, TXT, MD, HTML, or JSON; parse metadata, chunk, hash, index embeddings, and create traceable evidence."""
-    filename = os.path.basename(file.filename or "uploaded_doc")
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
+    """Upload PDF, DOCX, XLSX, CSV, TXT, MD, HTML, JSON, YAML, SQL, or LOG; parse, chunk, hash, index embeddings, and create traceable evidence."""
+    raw_filename = os.path.basename(file.filename or "uploaded_doc")
+    filename = _fit_filename(raw_filename, 255)
+    ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt")[:20]
 
     if ext in DANGEROUS_EXTENSIONS or ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -77,7 +119,7 @@ async def upload_document(
 
     eff_proj = get_effective_project(project_id, current_user, db, require_write=True)
     if not eff_proj:
-        raise HTTPException(status_code=404, detail="No accessible project found.")
+        raise HTTPException(status_code=404, detail="No accessible project found. Create a project first.")
     project_id = eff_proj.id
 
     sha256 = document_parser.calculate_sha256(file_bytes)
@@ -93,23 +135,31 @@ async def upload_document(
 
     try:
         parsed = document_parser.parse_file(filename, file_bytes)
-        extracted_text = parsed.get("text") or ""
+        extracted_text = _clean_text(parsed.get("text") or "")
         chunks = document_parser.chunk_sections(parsed.get("sections") or [], fallback_text=extracted_text)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to parse document '{filename}': {exc}")
 
-    safe_filename = f"{sha256[:16]}_{filename}"
-    save_path = os.path.join(UPLOAD_DIR, safe_filename)
+    clean_title = _clean_text(title, 255) or _clean_text(os.path.splitext(filename)[0], 255) or filename
+    author_label = _clean_text(current_user.name or current_user.email, 255) or "Workspace Member"
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    safe_filename = _safe_disk_name(sha256[:16], filename)
+    save_path = os.path.join(UPLOAD_DIR, safe_filename)[:500]
     with open(save_path, "wb") as f:
         f.write(file_bytes)
 
+    doc_id = str(uuid.uuid4())
     doc = Document(
+        id=doc_id,
         project_id=project_id,
         user_id=current_user.id,
-        title=title.strip(),
+        title=clean_title,
         filename=filename,
         file_type=ext,
-        mime_type=file.content_type,
+        mime_type=_clean_text(file.content_type, 120) or None,
         file_size_bytes=file_size,
         storage_path=save_path,
         sha256_hash=sha256,
@@ -117,100 +167,137 @@ async def upload_document(
         extracted_text=extracted_text,
         chunk_count=len(chunks),
         page_count=parsed.get("page_count"),
-        sheet_names=parsed.get("sheet_names") or [],
+        sheet_names=[_clean_text(str(s), 255) for s in (parsed.get("sheet_names") or []) if _clean_text(str(s))],
         metadata_json=parsed.get("metadata") or {},
-        uploaded_by=current_user.name,
+        uploaded_by=author_label,
     )
     db.add(doc)
     db.flush()
 
-    # Persist overlapping chunks, create traceable Evidence items, and index semantic embeddings
-    chunk_texts = [c["content"] for c in chunks if c["content"].strip()]
-    vectors = ai_engine.generate_embeddings_batch(chunk_texts) if chunk_texts else []
-    vec_idx = 0
+    # Pre-compute semantic embeddings once per chunk in a single batch
+    chunk_texts = [_clean_text(c.get("content")) for c in chunks]
+    non_empty_texts = [t for t in chunk_texts if t]
+    vectors: List[List[float]] = []
+    if non_empty_texts:
+        try:
+            vectors = ai_engine.generate_embeddings_batch(non_empty_texts)
+        except Exception as exc:
+            logger.warning("Embedding generation failed during upload of doc %s: %s", doc_id, exc)
+            vectors = []
 
-    for c in chunks:
-        chunk_rec = DocumentChunk(
-            document_id=doc.id,
-            project_id=project_id,
-            chunk_index=c["chunk_index"],
-            page_number=c.get("page_number"),
-            sheet_name=c.get("sheet_name"),
-            heading=c.get("heading"),
-            paragraph_ref=c.get("paragraph_ref"),
-            start_char=c["start_char"],
-            end_char=c["end_char"],
-            content=c["content"],
-            sha256_hash=c["sha256"],
+    vec_idx = 0
+    chunk_recs: List[DocumentChunk] = []
+    evidences: List[Evidence] = []
+    embedding_recs: List[EmbeddingRecord] = []
+
+    for c, chunk_content in zip(chunks, chunk_texts):
+        if not chunk_content:
+            continue
+        chunk_id = str(uuid.uuid4())
+        ev_id = str(uuid.uuid4())
+        sheet_name = _clean_text(c.get("sheet_name"), 255) or None
+        heading = _clean_text(c.get("heading"), 500) or None
+        paragraph_ref = _clean_text(c.get("paragraph_ref"), 255) or None
+
+        chunk_recs.append(
+            DocumentChunk(
+                id=chunk_id,
+                document_id=doc_id,
+                project_id=project_id,
+                chunk_index=c["chunk_index"],
+                page_number=c.get("page_number"),
+                sheet_name=sheet_name,
+                heading=heading,
+                paragraph_ref=paragraph_ref,
+                start_char=c["start_char"],
+                end_char=c["end_char"],
+                content=chunk_content,
+                sha256_hash=c["sha256"],
+            )
         )
-        db.add(chunk_rec)
-        db.flush()
 
         loc_parts = [filename]
         if c.get("page_number"):
             loc_parts.append(f"Page {c['page_number']}")
-        if c.get("sheet_name"):
-            loc_parts.append(f"Sheet {c['sheet_name']}")
-        if c.get("heading"):
-            loc_parts.append(c["heading"])
+        if sheet_name:
+            loc_parts.append(f"Sheet {sheet_name}")
+        if heading:
+            loc_parts.append(heading[:120])
         loc_label = " • ".join(loc_parts)
 
-        ev = Evidence(
-            project_id=project_id,
-            document_id=doc.id,
-            chunk_id=chunk_rec.id,
-            source_type="document",
-            source_id=doc.id,
-            source_title=f"Doc: {doc.title} ({loc_label})",
-            source_url=f"/documents?doc={doc.id}",
-            source_author=current_user.name,
-            claim_type="document_chunk",
-            excerpt=c["content"][:800],
-            ai_interpretation=f"Extracted chunk #{c['chunk_index'] + 1} from '{filename}' ({loc_label}).",
-            confidence=0.80,
-            verification_status="Supported by Evidence",
-            content_hash=c["sha256"],
-            metadata_json={
-                "filename": filename,
-                "page_number": c.get("page_number"),
-                "sheet_name": c.get("sheet_name"),
-                "heading": c.get("heading"),
-                "paragraph_ref": c.get("paragraph_ref"),
-                "chunk_index": c["chunk_index"],
-            },
+        source_title = _clean_text(f"Doc: {clean_title} ({loc_label})", 500) or clean_title
+        evidences.append(
+            Evidence(
+                id=ev_id,
+                project_id=project_id,
+                document_id=doc_id,
+                chunk_id=chunk_id,
+                source_type="document",
+                source_id=doc_id,
+                source_title=source_title,
+                source_url=f"/documents?doc={doc_id}"[:1000],
+                source_author=author_label,
+                claim_type="document_chunk",
+                excerpt=chunk_content[:800],
+                ai_interpretation=f"Extracted chunk #{c['chunk_index'] + 1} from '{filename}' ({loc_label[:200]}).",
+                confidence=0.80,
+                verification_status="Supported by Evidence",
+                content_hash=c["sha256"],
+                metadata_json={
+                    "filename": filename,
+                    "page_number": c.get("page_number"),
+                    "sheet_name": sheet_name,
+                    "heading": heading,
+                    "paragraph_ref": paragraph_ref,
+                    "chunk_index": c["chunk_index"],
+                },
+            )
         )
-        db.add(ev)
-        db.flush()
 
-        if c["content"].strip() and vec_idx < len(vectors):
+        if vec_idx < len(vectors):
             vec = vectors[vec_idx]
             vec_idx += 1
-            db.add(
+            embedding_recs.append(
                 EmbeddingRecord(
                     project_id=project_id,
                     entity_type="evidence",
-                    entity_id=ev.id,
-                    text_content=f"{doc.title} ({loc_label})\n{c['content']}",
+                    entity_id=ev_id,
+                    text_content=f"{clean_title} ({loc_label})\n{chunk_content}",
                     embedding=vec,
                     embedding_vector=vec,
                 )
             )
 
+    doc.chunk_count = len(chunk_recs)
+    if chunk_recs:
+        db.add_all(chunk_recs)
+        db.flush()
+    if evidences:
+        db.add_all(evidences)
+        db.flush()
+    if embedding_recs:
+        db.add_all(embedding_recs)
+
     record_activity(
         db=db,
         action="document.uploaded",
         entity_type="document",
-        entity_id=doc.id,
+        entity_id=doc_id,
         user_id=current_user.id,
         project_id=project_id,
         actor_email=current_user.email,
-        details={"message": f"Uploaded '{doc.title}' ({filename}, {len(chunks)} chunks)"},
+        details={"message": f"Uploaded '{clean_title}' ({filename}, {len(chunk_recs)} chunks)"},
     )
     db.commit()
     db.refresh(doc)
 
-    if extract_knowledge and chunks:
-        extract_and_persist_project_knowledge(db, project_id, actor_user_id=current_user.id)
+    if extract_knowledge and chunk_recs:
+        try:
+            extract_and_persist_project_knowledge(db, project_id, actor_user_id=current_user.id)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Post-upload knowledge extraction skipped for doc %s: %s", doc_id, exc)
+            db.refresh(doc)
 
     return doc
 
@@ -257,7 +344,8 @@ def download_document(
         raise HTTPException(status_code=404, detail="Document not found")
     verify_project_access(doc.project_id, current_user, db)
     if doc.storage_path and os.path.exists(doc.storage_path):
-        return FileResponse(doc.storage_path, filename=doc.filename)
+        ascii_name = _ascii_header_filename(doc.filename, f"document.{doc.file_type or 'bin'}")
+        return FileResponse(doc.storage_path, filename=ascii_name)
 
     # Cloud/ephemeral container fallback: reconstruct text from persisted PostgreSQL chunks
     chunks = (
@@ -273,12 +361,14 @@ def download_document(
         [f"# {doc.title} ({doc.filename})\n# SHA-256: {doc.sha256_hash}\n"]
         + [f"## Chunk {c.chunk_index + 1}\n{c.content}" for c in chunks]
     )
-    safe_base = os.path.splitext(doc.filename or doc.title or "document")[0]
+    raw_base = os.path.splitext(doc.filename or doc.title or "document")[0]
+    download_name = f"{raw_base}_chunks.txt"
+    ascii_download = _ascii_header_filename(download_name, "document_chunks.txt")
     return Response(
         content=reconstructed.encode("utf-8"),
         media_type="text/plain; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_base}_chunks.txt"',
+            "Content-Disposition": f"attachment; filename=\"{ascii_download}\"; filename*=UTF-8''{quote(download_name)}",
             "X-Obsidian-Source": "database-chunks",
         },
     )

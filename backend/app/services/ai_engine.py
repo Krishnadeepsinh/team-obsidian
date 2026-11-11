@@ -167,7 +167,20 @@ class AIEngine:
                 err_s = str(exc)
                 is_recoverable = any(
                     marker in err_s
-                    for marker in ("404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED", "no longer available")
+                    for marker in (
+                        "404",
+                        "NOT_FOUND",
+                        "429",
+                        "RESOURCE_EXHAUSTED",
+                        "503",
+                        "UNAVAILABLE",
+                        "500",
+                        "INTERNAL",
+                        "overloaded",
+                        "timeout",
+                        "timed out",
+                        "no longer available",
+                    )
                 )
                 if is_recoverable and idx < len(candidates) - 1:
                     logger.info("Gemini model %s unavailable (%s); trying fallback", model_name, err_s[:100])

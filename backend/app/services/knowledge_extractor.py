@@ -1,6 +1,14 @@
+from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
+
+
+def _s(val: Optional[str], max_len: Optional[int] = None, default: str = "") -> str:
+    cleaned = (val or default).replace("\x00", "").strip()
+    if max_len is not None:
+        return cleaned[:max_len]
+    return cleaned
 
 from app.models.evidence import Evidence
 from app.models.integration import SourceRecord
@@ -67,7 +75,7 @@ def extract_and_persist_project_knowledge(
         for e in db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id == project_id).all()
     }
     for item in bundle.entities:
-        key = item.name.strip().lower()
+        key = _s(item.name).lower()
         if not key or key in entity_map:
             continue
         ev = _ev_for(item.evidence_index)
@@ -75,10 +83,10 @@ def extract_and_persist_project_knowledge(
             project_id=project_id,
             created_by_user_id=actor_user_id,
             source_record_id=ev.source_record_id if ev else None,
-            entity_type=item.entity_type,
-            name=item.name.strip()[:255],
-            description=item.description or "",
-            properties={"owner": item.owner} if item.owner else {},
+            entity_type=_s(item.entity_type, 50, "component") or "component",
+            name=_s(item.name, 255),
+            description=_s(item.description),
+            properties={"owner": _s(item.owner, 255)} if item.owner else {},
             confidence=0.75 if ev else 0.4,
             verification_status="Draft / AI Suggested",
             evidence_id=ev.id if ev else None,
@@ -90,8 +98,9 @@ def extract_and_persist_project_knowledge(
 
     # 2. Relationships
     for rel in bundle.relationships:
-        src = entity_map.get(rel.source_name.strip().lower())
-        dst = entity_map.get(rel.target_name.strip().lower())
+        src = entity_map.get(_s(rel.source_name).lower())
+        dst = entity_map.get(_s(rel.target_name).lower())
+        rel_type = _s(rel.relation_type, 50, "relates_to") or "relates_to"
         if not src or not dst or src.id == dst.id:
             continue
         exists = (
@@ -100,7 +109,7 @@ def extract_and_persist_project_knowledge(
                 KnowledgeRelationship.project_id == project_id,
                 KnowledgeRelationship.source_entity_id == src.id,
                 KnowledgeRelationship.target_entity_id == dst.id,
-                KnowledgeRelationship.relation_type == rel.relation_type,
+                KnowledgeRelationship.relation_type == rel_type,
             )
             .first()
         )
@@ -112,8 +121,8 @@ def extract_and_persist_project_knowledge(
                 project_id=project_id,
                 source_entity_id=src.id,
                 target_entity_id=dst.id,
-                relation_type=rel.relation_type,
-                context=rel.context or "",
+                relation_type=rel_type,
+                context=_s(rel.context),
                 confidence=0.75 if ev else 0.4,
                 verification_status="Draft / AI Suggested",
                 evidence_id=ev.id if ev else None,
@@ -127,31 +136,33 @@ def extract_and_persist_project_knowledge(
         d.title.strip().lower()
         for d in db.query(Decision).filter(Decision.project_id == project_id).all()
     }
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     for dec in bundle.decisions:
-        if not dec.title.strip() or dec.title.strip().lower() in existing_decs:
+        dec_title = _s(dec.title, 500)
+        if not dec_title or dec_title.lower() in existing_decs:
             continue
         ev = _ev_for(dec.evidence_index)
         db.add(
             Decision(
                 project_id=project_id,
                 created_by_user_id=actor_user_id,
-                title=dec.title.strip()[:500],
-                summary=dec.summary,
-                reasoning=dec.reasoning,
-                decision_maker=dec.decision_maker or "Contributor",
-                date=dec.date or (ev.created_at.strftime("%Y-%m-%d") if ev else "2026-11-10"),
-                component=dec.component,
-                decision_type=dec.decision_type,
+                title=dec_title,
+                summary=_s(dec.summary) or dec_title,
+                reasoning=_s(dec.reasoning) or _s(dec.summary) or dec_title,
+                decision_maker=_s(dec.decision_maker, 255, "Contributor") or "Contributor",
+                date=_s(dec.date, 50) or (ev.created_at.strftime("%Y-%m-%d") if ev else today_str),
+                component=_s(dec.component, 255) or None,
+                decision_type=_s(dec.decision_type, 50, "technical") or "technical",
                 status="accepted",
                 verification_status="Draft / AI Suggested",
-                alternatives=dec.alternatives,
-                tradeoffs=dec.tradeoffs,
-                consequences=dec.consequences,
+                alternatives=dec.alternatives or [],
+                tradeoffs=dec.tradeoffs or [],
+                consequences=dec.consequences or [],
                 confidence=0.75 if ev else 0.4,
                 evidence_ids=[ev.id] if ev else [],
             )
         )
-        existing_decs.add(dec.title.strip().lower())
+        existing_decs.add(dec_title.lower())
         counts["decisions"] += 1
 
     # 4. Tasks
@@ -160,26 +171,29 @@ def extract_and_persist_project_knowledge(
         for t in db.query(TaskItem).filter(TaskItem.project_id == project_id).all()
     }
     for t in bundle.tasks:
-        if not t.title.strip() or t.title.strip().lower() in existing_tasks:
+        task_title = _s(t.title, 500)
+        if not task_title or task_title.lower() in existing_tasks:
             continue
         ev = _ev_for(t.evidence_index)
+        raw_prio = _s(t.priority, 20).lower()
+        raw_status = _s(t.status, 50).lower()
         db.add(
             TaskItem(
                 project_id=project_id,
                 created_by_user_id=actor_user_id,
-                title=t.title.strip()[:500],
-                description=t.description,
-                owner=t.owner or "Unassigned",
-                component=t.component,
-                priority=t.priority if t.priority in ("critical", "high", "medium", "low") else "medium",
-                status=t.status if t.status in ("open", "in_progress", "blocked", "completed") else "open",
-                deadline=t.deadline,
+                title=task_title,
+                description=_s(t.description),
+                owner=_s(t.owner, 255, "Unassigned") or "Unassigned",
+                component=_s(t.component, 255) or None,
+                priority=raw_prio if raw_prio in ("critical", "high", "medium", "low") else "medium",
+                status=raw_status if raw_status in ("open", "in_progress", "blocked", "completed") else "open",
+                deadline=_s(t.deadline, 50) or None,
                 verification_status="Draft / AI Suggested",
                 confidence=0.72 if ev else 0.4,
                 evidence_ids=[ev.id] if ev else [],
             )
         )
-        existing_tasks.add(t.title.strip().lower())
+        existing_tasks.add(task_title.lower())
         counts["tasks"] += 1
 
     # 5. Risks
@@ -188,27 +202,30 @@ def extract_and_persist_project_knowledge(
         for r in db.query(RiskItem).filter(RiskItem.project_id == project_id).all()
     }
     for r in bundle.risks:
-        if not r.title.strip() or r.title.strip().lower() in existing_risks:
+        risk_title = _s(r.title, 500)
+        if not risk_title or risk_title.lower() in existing_risks:
             continue
         ev = _ev_for(r.evidence_index)
+        raw_sev = _s(r.severity, 20).lower()
+        raw_like = _s(r.likelihood, 20).lower()
         db.add(
             RiskItem(
                 project_id=project_id,
                 created_by_user_id=actor_user_id,
-                title=r.title.strip()[:500],
-                description=r.description,
-                category=r.category,
-                severity=r.severity if r.severity in ("critical", "high", "medium", "low") else "high",
-                likelihood=r.likelihood if r.likelihood in ("high", "medium", "low") else "medium",
-                impact=r.impact,
-                owner=r.owner,
-                mitigation_strategy=r.mitigation_strategy,
-                related_components=r.related_components,
+                title=risk_title,
+                description=_s(r.description) or risk_title,
+                category=_s(r.category, 50, "technical_risk") or "technical_risk",
+                severity=raw_sev if raw_sev in ("critical", "high", "medium", "low") else "high",
+                likelihood=raw_like if raw_like in ("high", "medium", "low") else "medium",
+                impact=_s(r.impact) or None,
+                owner=_s(r.owner, 255) or None,
+                mitigation_strategy=_s(r.mitigation_strategy) or None,
+                related_components=[_s(str(c), 255) for c in (r.related_components or []) if _s(str(c))],
                 verification_status="Draft / AI Suggested",
                 evidence_ids=[ev.id] if ev else [],
             )
         )
-        existing_risks.add(r.title.strip().lower())
+        existing_risks.add(risk_title.lower())
         counts["risks"] += 1
 
     # 6. Dependencies
@@ -217,19 +234,22 @@ def extract_and_persist_project_knowledge(
         for d in db.query(Dependency).filter(Dependency.project_id == project_id).all()
     }
     for dep in bundle.dependencies:
-        pair = (dep.source_component.strip().lower(), dep.target_component.strip().lower())
+        src_comp = _s(dep.source_component, 255)
+        dst_comp = _s(dep.target_component, 255)
+        pair = (src_comp.lower(), dst_comp.lower())
         if not pair[0] or not pair[1] or pair in existing_deps:
             continue
         ev = _ev_for(dep.evidence_index)
+        raw_crit = _s(dep.criticality, 20, "high").lower() or "high"
         db.add(
             Dependency(
                 project_id=project_id,
-                source_component=dep.source_component.strip()[:255],
-                target_component=dep.target_component.strip()[:255],
-                dependency_type=dep.dependency_type,
-                description=dep.description,
-                owner=dep.owner,
-                criticality=dep.criticality,
+                source_component=src_comp,
+                target_component=dst_comp,
+                dependency_type=_s(dep.dependency_type, 50, "hard_blocker") or "hard_blocker",
+                description=_s(dep.description) or None,
+                owner=_s(dep.owner, 255) or None,
+                criticality=raw_crit,
                 verification_status="Draft / AI Suggested",
                 evidence_ids=[ev.id] if ev else [],
             )
@@ -240,12 +260,16 @@ def extract_and_persist_project_knowledge(
     # 7. Responsibilities
     for resp in bundle.responsibilities:
         ev = _ev_for(resp.evidence_index)
+        r_owner = _s(resp.owner, 255)
+        r_domain = _s(resp.domain, 255)
+        if not r_owner or not r_domain:
+            continue
         exists = (
             db.query(Responsibility)
             .filter(
                 Responsibility.project_id == project_id,
-                Responsibility.owner == resp.owner,
-                Responsibility.domain == resp.domain,
+                Responsibility.owner == r_owner,
+                Responsibility.domain == r_domain,
             )
             .first()
         )
@@ -253,11 +277,11 @@ def extract_and_persist_project_knowledge(
             db.add(
                 Responsibility(
                     project_id=project_id,
-                    owner=resp.owner,
-                    domain=resp.domain,
-                    scope=resp.scope,
-                    criticality=resp.criticality,
-                    backup_owner=resp.backup_owner,
+                    owner=r_owner,
+                    domain=r_domain,
+                    scope=_s(resp.scope) or f"Ownership of {r_domain}",
+                    criticality=_s(resp.criticality, 20, "high").lower() or "high",
+                    backup_owner=_s(resp.backup_owner, 255) or None,
                     verification_status="Draft / AI Suggested",
                     evidence_ids=[ev.id] if ev else [],
                 )
@@ -269,23 +293,26 @@ def extract_and_persist_project_knowledge(
         for g in db.query(KnowledgeGap).filter(KnowledgeGap.project_id == project_id).all()
     }
     for gap in bundle.knowledge_gaps:
-        if not gap.title.strip() or gap.title.strip().lower() in existing_gaps:
+        gap_title = _s(gap.title, 500)
+        if not gap_title or gap_title.lower() in existing_gaps:
             continue
+        gap_sev = _s(gap.severity, 20, "high").lower() or "high"
+        gap_impact = _s(gap.business_impact) or _s(gap.technical_impact) or _s(gap.description) or gap_title
         db.add(
             KnowledgeGap(
                 project_id=project_id,
-                title=gap.title.strip()[:500],
-                description=gap.description,
-                gap_type=gap.gap_type,
-                severity=gap.severity,
-                priority=gap.severity,
-                impact=gap.business_impact or gap.technical_impact,
-                business_impact=gap.business_impact,
-                technical_impact=gap.technical_impact,
-                recommended_action=gap.recommended_action,
+                title=gap_title,
+                description=_s(gap.description) or gap_title,
+                gap_type=_s(gap.gap_type, 50, "missing_documentation") or "missing_documentation",
+                severity=gap_sev,
+                priority=gap_sev,
+                impact=gap_impact,
+                business_impact=_s(gap.business_impact) or None,
+                technical_impact=_s(gap.technical_impact) or None,
+                recommended_action=_s(gap.recommended_action) or "Document and assign an owner during handover review.",
             )
         )
-        existing_gaps.add(gap.title.strip().lower())
+        existing_gaps.add(gap_title.lower())
         counts["gaps"] += 1
 
     record_activity(

@@ -115,7 +115,7 @@ function ForgotPasswordForm() {
                     <span>Password Recovery Emails Not Enabled Yet</span>
                   </div>
                   <p className="leading-relaxed">
-                    This deployment does not have an outbound email provider configured (`RESEND_API_KEY` or `SMTP_*`), so reset links cannot be emailed yet.
+                    This deployment does not have an outbound email provider configured (<code>RESEND_API_KEY</code> or <code>SMTP_*</code>), so reset links cannot be emailed yet.
                   </p>
                   <p className="text-[11px] text-amber-800">
                     If you are already signed in, update your password under <Link href="/profile" className="underline font-semibold">Profile &amp; Security</Link>.

@@ -13,11 +13,12 @@ function getAuthHeaders(extra: Record<string, string> = {}): Record<string, stri
 
 async function performFetchWithRetry(url: string, options: RequestInit): Promise<Response> {
   const retryableStatuses = new Set([502, 503, 504])
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const retryDelaysMs = [2000, 4000, 6000]
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
     try {
       const res = await fetch(url, options)
-      if (attempt === 0 && retryableStatuses.has(res.status)) {
-        await new Promise((r) => setTimeout(r, 1500))
+      if (attempt < retryDelaysMs.length && retryableStatuses.has(res.status)) {
+        await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]))
         continue
       }
       return res
@@ -25,8 +26,8 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
       const isNetworkError =
         err instanceof TypeError ||
         (typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch"))
-      if (attempt === 0 && isNetworkError) {
-        await new Promise((r) => setTimeout(r, 1500))
+      if (attempt < retryDelaysMs.length && isNetworkError) {
+        await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]))
         continue
       }
       if (isNetworkError) {
@@ -59,7 +60,15 @@ async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promis
     let detail = res.statusText
     try {
       const parsed = await res.json()
-      detail = parsed?.detail || parsed?.message || JSON.stringify(parsed)
+      if (Array.isArray(parsed?.detail)) {
+        detail = parsed.detail
+          .map((d: any) => d?.msg || (typeof d === "string" ? d : JSON.stringify(d)))
+          .join("; ")
+      } else if (parsed?.detail && typeof parsed.detail === "object") {
+        detail = JSON.stringify(parsed.detail)
+      } else {
+        detail = parsed?.detail || parsed?.message || JSON.stringify(parsed)
+      }
     } catch {
       const errText = await res.text().catch(() => "")
       if (errText) detail = errText
@@ -113,6 +122,19 @@ export function setStoredProjectId(pid?: string, dispatch = true): void {
   if (dispatch) {
     window.dispatchEvent(new Event("obsidian_project_changed"))
   }
+}
+
+export function resolveActiveProjectId(projects: any[], preferredId?: string): string {
+  const list = Array.isArray(projects) ? projects : []
+  const candidate = (preferredId !== undefined ? preferredId : getStoredProjectId()).trim()
+  if (candidate && candidate !== "default" && list.some((p) => p?.id === candidate)) {
+    return candidate
+  }
+  const fallbackId = list[0]?.id || ""
+  if (typeof window !== "undefined") {
+    setStoredProjectId(fallbackId || undefined, false)
+  }
+  return fallbackId
 }
 
 function persistAuthSession(res: any): void {

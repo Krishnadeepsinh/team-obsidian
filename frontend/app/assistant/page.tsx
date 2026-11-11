@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Sparkles,
   Send,
@@ -31,10 +31,10 @@ export default function AssistantPage() {
 
   useEffect(() => {
     const loadProjects = async () => {
-      const storedPid = getStoredProjectId()
       const projs = await api.getProjects().catch(() => [])
-      setProjects(Array.isArray(projs) ? projs : [])
-      setActiveProject(storedPid || (Array.isArray(projs) && projs[0]?.id) || "default")
+      const list = Array.isArray(projs) ? projs : []
+      setProjects(list)
+      setActiveProject(resolveActiveProjectId(list, getStoredProjectId()))
     }
     loadProjects()
   }, [])
@@ -104,7 +104,7 @@ export default function AssistantPage() {
             }}
             className="px-3 py-1.5 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-800"
           >
-            {projects.length === 0 && <option value="default">Default Project</option>}
+            {projects.length === 0 && <option value="">No project available</option>}
             {projects.map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}

@@ -100,6 +100,7 @@ def query_assistant(
             for eid, sim in rows:
                 semantic_scores[eid] = float(sim or 0.0)
         except Exception:
+            db.rollback()
             semantic_scores = {}
 
     if not semantic_scores:

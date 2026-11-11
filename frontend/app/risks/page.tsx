@@ -2,13 +2,14 @@
 
 import React, { useCallback, useEffect, useState } from "react"
 import { AlertTriangle, Plus, Search, CheckCircle2 } from "lucide-react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId } from "@/lib/api"
 
 export default function RisksPage() {
   const [risks, setRisks] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
+  const [selectedProjectId, setSelectedProjectId] = useState("")
 
   // Form state
   const [title, setTitle] = useState("")
@@ -18,17 +19,13 @@ export default function RisksPage() {
   const [mitigation, setMitigation] = useState("")
   const [components, setComponents] = useState("")
 
-  const getStoredProjectId = () =>
-    typeof window !== "undefined"
-      ? localStorage.getItem("obsidian_active_project_id") ||
-        localStorage.getItem("obsidian_active_project") ||
-        undefined
-      : undefined
-
   const loadRisks = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await api.getRisks(getStoredProjectId())
+      const projs = await api.getProjects().catch(() => [])
+      const resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      setSelectedProjectId(resolvedPid)
+      const data = await api.getRisks(resolvedPid || undefined)
       setRisks(data)
     } catch (err) {
       console.error("Risks error:", err)
@@ -50,7 +47,7 @@ export default function RisksPage() {
     try {
       const compList = components.split(",").map(c => c.trim()).filter(Boolean)
       await api.createRisk({
-        project_id: getStoredProjectId() || "default",
+        project_id: selectedProjectId || getStoredProjectId() || undefined,
         title,
         description,
         severity,

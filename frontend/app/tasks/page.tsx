@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react"
 import { CheckSquare, Plus, Search, UserCheck, AlertCircle, Check } from "lucide-react"
-import { api } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId } from "@/lib/api"
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<any[]>([])
@@ -10,6 +10,7 @@ export default function TasksPage() {
   const [filterDeparting, setFilterDeparting] = useState(false)
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
+  const [selectedProjectId, setSelectedProjectId] = useState("")
 
   // Form state
   const [title, setTitle] = useState("")
@@ -20,17 +21,13 @@ export default function TasksPage() {
   const [isDeparting, setIsDeparting] = useState(false)
   const [reassignmentTarget, setReassignmentTarget] = useState("")
 
-  const getStoredProjectId = () =>
-    typeof window !== "undefined"
-      ? localStorage.getItem("obsidian_active_project_id") ||
-        localStorage.getItem("obsidian_active_project") ||
-        undefined
-      : undefined
-
   const loadTasks = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await api.getTasks(getStoredProjectId())
+      const projs = await api.getProjects().catch(() => [])
+      const resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      setSelectedProjectId(resolvedPid)
+      const data = await api.getTasks(resolvedPid || undefined)
       setTasks(data)
     } catch (err) {
       console.error("Tasks load error:", err)
@@ -51,7 +48,7 @@ export default function TasksPage() {
     if (!title.trim() || !owner.trim()) return
     try {
       await api.createTask({
-        project_id: getStoredProjectId() || "default",
+        project_id: selectedProjectId || getStoredProjectId() || undefined,
         title,
         description,
         owner,

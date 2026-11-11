@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   FileText,
   Sparkles,
@@ -83,8 +83,9 @@ export default function HandoverPage() {
         api.getUserContext().catch(() => null),
       ])
       if (ctx?.user?.name) setUserName(ctx.user.name)
-      setProjects(Array.isArray(projs) ? projs : [])
-      const resolvedPid = storedPid || (Array.isArray(projs) && projs[0]?.id) || ""
+      const projsList = Array.isArray(projs) ? projs : []
+      setProjects(projsList)
+      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projsList, storedPid)
       if (pid === undefined) setActiveProject(resolvedPid)
       setWizardProjectId(resolvedPid)
 

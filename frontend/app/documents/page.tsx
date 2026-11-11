@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { useEffect, useRef, useState } from "react"
+import Link from "next/link"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   FileUp,
   FileText,
@@ -14,6 +15,8 @@ import {
   Search,
 } from "lucide-react"
 
+const MAX_UPLOAD_MB = 25
+
 export default function DocumentsPage() {
   const [docs, setDocs] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
@@ -22,6 +25,7 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false)
   const [title, setTitle] = useState("")
   const [file, setFile] = useState<File | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [search, setSearch] = useState("")
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
@@ -34,14 +38,21 @@ export default function DocumentsPage() {
   const loadData = async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, res] = await Promise.all([
-        api.getProjects().catch(() => []),
-        api.getDocuments(storedPid || undefined).catch(() => []),
-      ])
-      setProjects(Array.isArray(projs) ? projs : [])
-      const resolvedPid = storedPid || (Array.isArray(projs) && projs[0]?.id) || ""
+      const projsRaw = await api.getProjects().catch(() => [])
+      const projs = Array.isArray(projsRaw) ? projsRaw : []
+      setProjects(projs)
+
+      let resolvedPid = ""
+      if (pid === "") {
+        resolvedPid = ""
+      } else if (pid !== undefined) {
+        resolvedPid = resolveActiveProjectId(projs, pid)
+      } else {
+        resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      }
+
       setActiveProject(resolvedPid)
+      const res = await api.getDocuments(resolvedPid || undefined).catch(() => [])
       setDocs(Array.isArray(res) ? res : [])
     } finally {
       setLoading(false)
@@ -52,18 +63,39 @@ export default function DocumentsPage() {
     loadData()
   }, [])
 
+  const handleFileChange = (picked: File | null) => {
+    setError("")
+    setFile(picked)
+    if (picked && !title.trim()) {
+      const stem = picked.name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim()
+      if (stem) setTitle(stem)
+    }
+  }
+
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!file || !title.trim()) return
+    if (!file) {
+      setError("Select a document file to upload.")
+      return
+    }
+    if (file.size === 0) {
+      setError("Selected file is empty (0 bytes). Choose a non-empty file.")
+      return
+    }
+    if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+      setError(`File exceeds the ${MAX_UPLOAD_MB} MB upload limit.`)
+      return
+    }
     const targetPid = activeProject || projects[0]?.id || ""
     if (!targetPid) {
       setError("Create a project in Projects before uploading documents.")
       return
     }
 
+    const effectiveTitle = title.trim() || file.name.replace(/\.[^/.]+$/, "") || file.name
     const formData = new FormData()
     formData.append("project_id", targetPid)
-    formData.append("title", title.trim())
+    formData.append("title", effectiveTitle)
     formData.append("extract_knowledge", "true")
     formData.append("file", file)
 
@@ -71,11 +103,19 @@ export default function DocumentsPage() {
       setUploading(true)
       setError("")
       setMessage("")
-      await api.uploadDocument(formData)
+      const alreadyIds = new Set(docs.map((d) => d.id))
+      const uploaded = await api.uploadDocument(formData)
       setTitle("")
       setFile(null)
-      setMessage("Document uploaded, parsed into searchable chunks, SHA-256 hashed, and indexed.")
-      await loadData(activeProject || undefined)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+      if (uploaded?.id && alreadyIds.has(uploaded.id)) {
+        setMessage(`Identical file (same SHA-256) is already indexed as "${uploaded.title}".`)
+      } else {
+        setMessage(
+          `Uploaded "${uploaded?.title || effectiveTitle}" (${uploaded?.chunk_count || 0} searchable chunks, SHA-256 verified).`
+        )
+      }
+      await loadData(activeProject || targetPid)
     } catch (err: any) {
       setError(err.message || "Document upload failed.")
     } finally {
@@ -168,28 +208,39 @@ export default function DocumentsPage() {
             <FileUp className="w-4 h-4 text-violet-600" />
             <span>Upload Project Knowledge Document</span>
           </h2>
-          <span className="text-[11px] text-slate-400">Supported: PDF, DOCX, XLSX, CSV, MD, TXT, HTML, JSON</span>
+          <span className="text-[11px] text-slate-400">
+            Supported (max {MAX_UPLOAD_MB} MB): PDF, DOCX, XLSX, CSV, MD, TXT, HTML, JSON, YAML, SQL, LOG
+          </span>
         </div>
+
+        {!loading && projects.length === 0 && (
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center justify-between gap-2">
+            <span>You need at least one project before indexing documents.</span>
+            <Link href="/projects" className="font-semibold underline whitespace-nowrap">
+              Go to Projects →
+            </Link>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
           <input
             type="text"
-            required
-            placeholder="Document Title (e.g. Payment Gateway Architecture Runbook)"
+            placeholder="Document Title (auto-filled from filename if blank)"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             className="md:col-span-5 px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500 focus:bg-white"
           />
           <input
+            ref={fileInputRef}
             type="file"
             required
-            accept=".pdf,.docx,.doc,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            accept=".pdf,.docx,.doc,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json,.yaml,.yml,.log,.rst,.sql,.xml"
+            onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
             className="md:col-span-5 text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-200 file:bg-slate-50 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-100"
           />
           <button
             type="submit"
-            disabled={uploading || !file || !title.trim()}
+            disabled={uploading || !file || projects.length === 0}
             className="md:col-span-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white shadow-md shadow-violet-600/20"
           >
             {uploading ? "Parsing..." : "Upload & Index"}
