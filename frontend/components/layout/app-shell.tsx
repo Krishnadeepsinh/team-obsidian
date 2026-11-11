@@ -33,7 +33,7 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { api } from "@/lib/api"
+import { ALL_PROJECTS_VALUE, api, setStoredProjectId } from "@/lib/api"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -138,13 +138,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             const savedProjId =
               localStorage.getItem("obsidian_active_project_id") ||
               localStorage.getItem("obsidian_active_project")
-            const found = ctx.projects.find((p: any) => p.id === savedProjId)
-            if (found) {
-              setActiveProject(found.name)
+            if (savedProjId === ALL_PROJECTS_VALUE) {
+              setActiveProject("All Projects")
             } else {
-              setActiveProject(ctx.projects[0].name)
-              localStorage.setItem("obsidian_active_project_id", ctx.projects[0].id)
-              localStorage.setItem("obsidian_active_project", ctx.projects[0].id)
+              const found = ctx.projects.find((p: any) => p.id === savedProjId)
+              if (found) {
+                setActiveProject(found.name)
+              } else {
+                setActiveProject(ctx.projects[0].name)
+                localStorage.setItem("obsidian_active_project_id", ctx.projects[0].id)
+                localStorage.setItem("obsidian_active_project", ctx.projects[0].id)
+              }
             }
           }
         }
@@ -160,6 +164,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {})
   }, [pathname, isPublic])
+
+  useEffect(() => {
+    if (isPublic || typeof window === "undefined") return
+    const syncFromStorage = () => {
+      const savedProjId =
+        localStorage.getItem("obsidian_active_project_id") ||
+        localStorage.getItem("obsidian_active_project")
+      if (savedProjId === ALL_PROJECTS_VALUE) {
+        setActiveProject("All Projects")
+      } else if (savedProjId) {
+        const matched = projectsList.find((p: any) => p.id === savedProjId)
+        if (matched) setActiveProject(matched.name)
+      }
+    }
+    window.addEventListener("obsidian_project_changed", syncFromStorage)
+    return () => window.removeEventListener("obsidian_project_changed", syncFromStorage)
+  }, [isPublic, projectsList])
 
   const handleSignOut = async () => {
     setShowUserMenu(false)
@@ -247,17 +268,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {showProjectMenu && (
             <div className="absolute top-full left-3 right-3 mt-1 bg-white border border-[#E8EBF2] rounded-xl shadow-xl p-1 z-50 max-h-64 overflow-y-auto">
               <div className="text-[10px] uppercase font-bold text-slate-400 px-2.5 py-1">Projects</div>
+              <button
+                onClick={() => {
+                  setActiveProject("All Projects")
+                  setStoredProjectId("")
+                  setShowProjectMenu(false)
+                }}
+                className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between ${
+                  activeProject === "All Projects" ? "bg-violet-50 text-violet-700" : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                <span className="truncate">All Accessible Projects</span>
+                {activeProject === "All Projects" && <CheckCircle2 className="w-3 h-3 text-violet-600 flex-shrink-0" />}
+              </button>
               {projectsList.length > 0 ? (
                 projectsList.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => {
                       setActiveProject(p.name)
-                      if (typeof window !== "undefined") {
-                        localStorage.setItem("obsidian_active_project_id", p.id)
-                        localStorage.setItem("obsidian_active_project", p.id)
-                        window.dispatchEvent(new Event("obsidian_project_changed"))
-                      }
+                      setStoredProjectId(p.id)
                       setShowProjectMenu(false)
                     }}
                     className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between ${

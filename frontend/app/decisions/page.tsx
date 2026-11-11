@@ -2,12 +2,14 @@
 
 import React, { useCallback, useEffect, useState } from "react"
 import { Scale, Plus, Search, ShieldCheck } from "lucide-react"
-import { api, getStoredProjectId, resolveActiveProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 
 export default function DecisionsPage() {
   const [decisions, setDecisions] = useState<any[]>([])
+  const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("All")
   const [showModal, setShowModal] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string>("")
   const [errorMsg, setErrorMsg] = useState("")
@@ -24,10 +26,13 @@ export default function DecisionsPage() {
   const loadDecisions = useCallback(async () => {
     try {
       setLoading(true)
+      const allSelected = isAllProjectsSelected()
       const projs = await api.getProjects().catch(() => [])
-      const resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = allSelected ? "" : resolveActiveProjectId(projList, getStoredProjectId())
       const data = await api.getDecisions(resolvedPid || undefined)
-      setDecisions(data)
+      setDecisions(Array.isArray(data) ? data : [])
       setSelectedProjectId(resolvedPid)
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load decisions.")
@@ -51,7 +56,7 @@ export default function DecisionsPage() {
       setModalError("")
       setErrorMsg("")
       await api.createDecision({
-        project_id: selectedProjectId || undefined,
+        project_id: selectedProjectId || projects[0]?.id || undefined,
         title,
         summary,
         reasoning,
@@ -73,11 +78,27 @@ export default function DecisionsPage() {
     }
   }
 
-  const filtered = decisions.filter(d =>
-    (d.title && d.title.toLowerCase().includes(search.toLowerCase())) ||
-    (d.summary && d.summary.toLowerCase().includes(search.toLowerCase())) ||
-    (d.component && d.component.toLowerCase().includes(search.toLowerCase()))
-  )
+  const projectNames: Record<string, string> = {}
+  for (const p of projects) {
+    if (p?.id) projectNames[p.id] = p.name
+  }
+
+  const statusOptions = [
+    "All",
+    ...Array.from(new Set(decisions.map((d) => String(d.status || "accepted").toLowerCase()))),
+  ]
+
+  const filtered = decisions.filter((d) => {
+    if (statusFilter !== "All" && String(d.status || "accepted").toLowerCase() !== statusFilter) return false
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (
+      d.title?.toLowerCase().includes(q) ||
+      d.summary?.toLowerCase().includes(q) ||
+      d.component?.toLowerCase().includes(q) ||
+      d.decision_maker?.toLowerCase().includes(q)
+    )
+  })
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -86,13 +107,29 @@ export default function DecisionsPage() {
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">Decisions & Architectural Records (ADRs)</h1>
           <p className="text-xs text-slate-500 mt-0.5">Every architectural choice, discarded alternative, and technical tradeoff with cryptographic evidence</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white flex items-center gap-2 shadow-md shadow-violet-600/20 transition-all hover:scale-[1.02]"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>New Decision (ADR)</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={selectedProjectId}
+            onChange={(e) => {
+              const pid = e.target.value
+              setSelectedProjectId(pid)
+              setStoredProjectId(pid)
+            }}
+            className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
+          >
+            <option value="">All Accessible Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => setShowModal(true)}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white flex items-center gap-2 shadow-md shadow-violet-600/20 transition-all hover:scale-[1.02]"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Decision (ADR)</span>
+          </button>
+        </div>
       </div>
 
       {errorMsg && (
@@ -101,7 +138,7 @@ export default function DecisionsPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 apple-card p-3">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 apple-card p-3">
         <div className="relative flex-1 max-w-md">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -112,8 +149,23 @@ export default function DecisionsPage() {
             className="w-full pl-9 pr-4 py-1.5 rounded-full text-xs bg-slate-50 border border-slate-200 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-violet-500 focus:bg-white"
           />
         </div>
-        <div className="text-xs text-slate-500 font-mono">
-          {filtered.length} Architectural Decisions
+        <div className="flex flex-wrap items-center gap-1.5">
+          {statusOptions.map((st) => (
+            <button
+              key={st}
+              onClick={() => setStatusFilter(st)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                statusFilter === st
+                  ? "bg-violet-600 text-white border-violet-600"
+                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+              }`}
+            >
+              {st}
+            </button>
+          ))}
+          <span className="text-xs text-slate-500 font-mono ml-2">
+            {filtered.length} ADRs
+          </span>
         </div>
       </div>
 
@@ -125,13 +177,20 @@ export default function DecisionsPage() {
           >
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
-                <div className="flex items-center gap-2 mb-1.5">
+                <div className="flex flex-wrap items-center gap-2 mb-1.5">
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold uppercase">
                     {d.status || "accepted"}
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                    {d.component}
-                  </span>
+                  {d.component && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                      {d.component}
+                    </span>
+                  )}
+                  {!selectedProjectId && d.project_id && projectNames[d.project_id] && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold">
+                      {projectNames[d.project_id]}
+                    </span>
+                  )}
                   <span className="text-[10px] text-slate-400 font-mono">
                     {d.date}
                   </span>

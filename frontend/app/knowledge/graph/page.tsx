@@ -17,7 +17,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Network,
   Sparkles,
@@ -151,14 +151,15 @@ export default function KnowledgeGraphPage() {
   const loadGraph = useCallback(async (pid?: string, etype?: string, q?: string) => {
     try {
       setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
+      const allSelected = pid === undefined && isAllProjectsSelected()
+      const storedPid = allSelected || pid === "" ? "" : pid !== undefined ? pid : getStoredProjectId()
       const [projs, graphResRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getGraphReactFlow(storedPid || undefined, etype, q || undefined).catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} })),
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
-      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      const resolvedPid = allSelected || pid === "" ? "" : resolveActiveProjectId(projList, pid)
       setActiveProject(resolvedPid)
 
       let graphRes = graphResRaw
@@ -278,8 +279,7 @@ export default function KnowledgeGraphPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
-              setStoredProjectId(pid || undefined)
-              handleFilterChange(entityType, search, pid)
+              setStoredProjectId(pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
           >

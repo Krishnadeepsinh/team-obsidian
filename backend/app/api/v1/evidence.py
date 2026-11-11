@@ -1,7 +1,9 @@
+import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -15,10 +17,26 @@ from app.services.audit_service import record_activity
 router = APIRouter(prefix="/evidence", tags=["Evidence Center"])
 
 
+def _extract_evidence_origin(e: Evidence) -> str:
+    meta = e.metadata_json if isinstance(e.metadata_json, dict) else {}
+    for key in ("repository", "repo", "channel_name", "channel_id", "filename", "database_id"):
+        val = meta.get(key)
+        if val:
+            return str(val).strip()
+    url = e.source_url or ""
+    gh_match = re.search(r"github\.com/([^/]+/[^/]+)", url, re.IGNORECASE)
+    if gh_match:
+        return gh_match.group(1)
+    return ""
+
+
 @router.get("", response_model=List[EvidenceResponse])
 def list_evidence(
     project_id: Optional[str] = None,
     status: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
+    source_origin: Optional[str] = Query(None),
+    author: Optional[str] = Query(None),
     search: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -33,19 +51,37 @@ def list_evidence(
             return []
         query = query.filter(Evidence.project_id.in_(p_ids))
 
-    if status and status.lower() != "all":
-        query = query.filter(Evidence.verification_status == status)
+    if status and status.strip().lower() != "all":
+        norm_status = status.strip().lower()
+        if norm_status in ("verified", "verified by reviewer"):
+            query = query.filter(func.lower(Evidence.verification_status).in_(["verified", "verified by reviewer"]))
+        else:
+            query = query.filter(func.lower(Evidence.verification_status) == norm_status)
+
+    if source_type and source_type.strip().lower() != "all":
+        query = query.filter(func.lower(Evidence.source_type) == source_type.strip().lower())
 
     evidences = query.order_by(Evidence.created_at.desc()).all()
-    if search:
-        s = search.lower()
+
+    if source_origin and source_origin.strip().lower() != "all":
+        origin_q = source_origin.strip().lower()
+        evidences = [e for e in evidences if origin_q in _extract_evidence_origin(e).lower()]
+
+    if author and author.strip():
+        author_q = author.strip().lower()
+        evidences = [e for e in evidences if e.source_author and author_q in e.source_author.lower()]
+
+    if search and search.strip():
+        s = search.strip().lower()
         evidences = [
             e
             for e in evidences
-            if s in e.source_title.lower()
-            or s in e.excerpt.lower()
-            or s in e.ai_interpretation.lower()
+            if s in (e.source_title or "").lower()
+            or s in (e.excerpt or "").lower()
+            or s in (e.ai_interpretation or "").lower()
             or (e.source_author and s in e.source_author.lower())
+            or (e.source_url and s in e.source_url.lower())
+            or s in _extract_evidence_origin(e).lower()
         ]
     return evidences
 

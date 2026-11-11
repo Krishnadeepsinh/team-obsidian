@@ -101,18 +101,31 @@ async function downloadAuthFile(endpoint: string, fallbackFilename: string): Pro
   window.URL.revokeObjectURL(url)
 }
 
+export const ALL_PROJECTS_VALUE = "__all__"
+
+export function isAllProjectsSelected(): boolean {
+  if (typeof window === "undefined") return false
+  return (
+    localStorage.getItem("obsidian_active_project_id") === ALL_PROJECTS_VALUE ||
+    localStorage.getItem("obsidian_active_project") === ALL_PROJECTS_VALUE
+  )
+}
+
 export function getStoredProjectId(): string {
   if (typeof window === "undefined") return ""
-  return (
+  const raw =
     localStorage.getItem("obsidian_active_project_id") ||
     localStorage.getItem("obsidian_active_project") ||
     ""
-  )
+  return raw === ALL_PROJECTS_VALUE ? "" : raw
 }
 
 export function setStoredProjectId(pid?: string, dispatch = true): void {
   if (typeof window === "undefined") return
-  if (pid) {
+  if (pid === "") {
+    localStorage.setItem("obsidian_active_project_id", ALL_PROJECTS_VALUE)
+    localStorage.setItem("obsidian_active_project", ALL_PROJECTS_VALUE)
+  } else if (pid) {
     localStorage.setItem("obsidian_active_project_id", pid)
     localStorage.setItem("obsidian_active_project", pid)
   } else {
@@ -126,8 +139,14 @@ export function setStoredProjectId(pid?: string, dispatch = true): void {
 
 export function resolveActiveProjectId(projects: any[], preferredId?: string): string {
   const list = Array.isArray(projects) ? projects : []
+  if (preferredId === "" || preferredId === ALL_PROJECTS_VALUE) {
+    return ""
+  }
+  if (preferredId === undefined && isAllProjectsSelected()) {
+    return ""
+  }
   const candidate = (preferredId !== undefined ? preferredId : getStoredProjectId()).trim()
-  if (candidate && candidate !== "default" && list.some((p) => p?.id === candidate)) {
+  if (candidate && candidate !== "default" && candidate !== ALL_PROJECTS_VALUE && list.some((p) => p?.id === candidate)) {
     return candidate
   }
   const fallbackId = list[0]?.id || ""
@@ -282,18 +301,23 @@ export const api = {
     }),
 
   // Decisions
-  getDecisions: async (projectId?: string) => {
-    const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
-    return fetchJson<any[]>(`/decisions${params}`)
+  getDecisions: async (projectId?: string, status?: string) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set("project_id", projectId)
+    if (status) params.set("status", status)
+    const qs = params.toString()
+    return fetchJson<any[]>(`/decisions${qs ? `?${qs}` : ""}`)
   },
   createDecision: async (data: any) =>
     fetchJson<any>("/decisions", { method: "POST", body: JSON.stringify(data) }),
 
   // Tasks
-  getTasks: async (projectId?: string, departingOnly?: boolean) => {
+  getTasks: async (projectId?: string, departingOnly?: boolean, status?: string, priority?: string) => {
     const params = new URLSearchParams()
     if (projectId) params.set("project_id", projectId)
     if (departingOnly) params.set("departing_only", "true")
+    if (status) params.set("status", status)
+    if (priority) params.set("priority", priority)
     return fetchJson<any[]>(`/tasks?${params.toString()}`)
   },
   createTask: async (data: any) =>
@@ -310,9 +334,13 @@ export const api = {
     }),
 
   // Risks & Gaps
-  getRisks: async (projectId?: string) => {
-    const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
-    return fetchJson<any[]>(`/risks${params}`)
+  getRisks: async (projectId?: string, severity?: string, status?: string) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set("project_id", projectId)
+    if (severity) params.set("severity", severity)
+    if (status) params.set("status", status)
+    const qs = params.toString()
+    return fetchJson<any[]>(`/risks${qs ? `?${qs}` : ""}`)
   },
   createRisk: async (data: any) =>
     fetchJson<any>("/risks", { method: "POST", body: JSON.stringify(data) }),
@@ -321,9 +349,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ status }),
     }),
-  getGaps: async (projectId?: string) => {
-    const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
-    return fetchJson<any[]>(`/gaps${params}`)
+  getGaps: async (projectId?: string, severity?: string, status?: string) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set("project_id", projectId)
+    if (severity) params.set("severity", severity)
+    if (status) params.set("status", status)
+    const qs = params.toString()
+    return fetchJson<any[]>(`/gaps${qs ? `?${qs}` : ""}`)
   },
   createGap: async (data: any) =>
     fetchJson<any>("/gaps", { method: "POST", body: JSON.stringify(data) }),
@@ -379,11 +411,21 @@ export const api = {
     fetchJson<any>(`/documents/${docId}`, { method: "DELETE" }),
 
   // Evidence Center
-  getEvidence: async (projectId?: string, status?: string, search?: string) => {
+  getEvidence: async (
+    projectId?: string,
+    status?: string,
+    search?: string,
+    sourceType?: string,
+    sourceOrigin?: string,
+    author?: string
+  ) => {
     const params = new URLSearchParams()
     if (projectId) params.set("project_id", projectId)
     if (status) params.set("status", status)
     if (search) params.set("search", search)
+    if (sourceType) params.set("source_type", sourceType)
+    if (sourceOrigin) params.set("source_origin", sourceOrigin)
+    if (author) params.set("author", author)
     return fetchJson<any[]>(`/evidence?${params.toString()}`)
   },
   auditEvidence: async (id: string, newStatus: string, reviewNotes?: string) =>

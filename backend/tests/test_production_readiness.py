@@ -707,3 +707,89 @@ def test_no_secret_keys_in_api_responses():
         for secret in sensitive_strings:
             if secret:
                 assert secret not in body, f"Critical Secret Leaked in {ep} response!"
+
+
+def test_evidence_and_explorer_multi_filtering(audit_context):
+    """Verify Evidence Center and Knowledge Explorer support source_type, origin, author, status, and category filters."""
+    proj_id = audit_context["project"].id
+    headers = audit_context["headers"]
+
+    db = SessionLocal()
+    created_ids = []
+    try:
+        ev_pr = Evidence(
+            project_id=proj_id,
+            source_type="github_pr",
+            source_id="pr-999",
+            source_title="PR #999: Implement Razorpay webhook backoff",
+            source_url="https://github.com/acme/checkout-api/pull/999",
+            source_author="alice-dev",
+            excerpt="Added exponential backoff for webhook retries.",
+            ai_interpretation="Extracted reliability change.",
+            confidence=0.92,
+            verification_status="Verified",
+            content_hash=hashlib.sha256(b"pr-999").hexdigest(),
+            metadata_json={"repository": "acme/checkout-api"},
+        )
+        ev_doc = Evidence(
+            project_id=proj_id,
+            source_type="document",
+            source_id="doc-999",
+            source_title="Billing Runbook",
+            source_url="/documents?doc=doc-999",
+            source_author="bob-ops",
+            excerpt="Runbook details for billing worker restarts.",
+            ai_interpretation="Extracted runbook context.",
+            confidence=0.88,
+            verification_status="Needs Human Verification",
+            content_hash=hashlib.sha256(b"doc-999").hexdigest(),
+            metadata_json={"filename": "billing_runbook.md"},
+        )
+        db.add_all([ev_pr, ev_doc])
+        db.commit()
+        created_ids = [ev_pr.id, ev_doc.id]
+
+        # 1. Filter Evidence by source_type
+        r_pr = client.get(f"/api/v1/evidence?project_id={proj_id}&source_type=github_pr", headers=headers)
+        assert r_pr.status_code == 200
+        pr_titles = [e["source_title"] for e in r_pr.json()]
+        assert "PR #999: Implement Razorpay webhook backoff" in pr_titles
+        assert all(e["source_type"] == "github_pr" for e in r_pr.json())
+
+        # 2. Filter Evidence by source_origin & author
+        r_orig = client.get(
+            f"/api/v1/evidence?project_id={proj_id}&source_origin=acme/checkout-api&author=alice",
+            headers=headers,
+        )
+        assert r_orig.status_code == 200
+        assert any(e["id"] == ev_pr.id for e in r_orig.json())
+        assert all(e["id"] != ev_doc.id for e in r_orig.json())
+
+        # 3. Filter "Verified by Reviewer" matches both "Verified by Reviewer" and "Verified"
+        r_ver = client.get(
+            f"/api/v1/evidence?project_id={proj_id}&status=Verified%20by%20Reviewer",
+            headers=headers,
+        )
+        assert r_ver.status_code == 200
+        assert any(e["id"] == ev_pr.id for e in r_ver.json())
+        assert all(e["id"] != ev_doc.id for e in r_ver.json())
+
+        # 4. Knowledge Explorer includes project_id and applies verification_status uniformly across Entities & Gaps
+        r_exp_all = client.get(f"/api/v1/knowledge/explorer?project_id={proj_id}", headers=headers)
+        assert r_exp_all.status_code == 200
+        exp_items = r_exp_all.json()
+        assert len(exp_items) > 0
+        assert all("project_id" in item for item in exp_items)
+
+        r_exp_ver = client.get(
+            f"/api/v1/knowledge/explorer?project_id={proj_id}&verification_status=Verified%20by%20Reviewer",
+            headers=headers,
+        )
+        assert r_exp_ver.status_code == 200
+        for item in r_exp_ver.json():
+            assert item["verification_status"].lower() in ("verified", "verified by reviewer")
+    finally:
+        if created_ids:
+            db.query(Evidence).filter(Evidence.id.in_(created_ids)).delete(synchronize_session=False)
+            db.commit()
+        db.close()

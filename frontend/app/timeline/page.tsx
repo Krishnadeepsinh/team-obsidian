@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
-import { Clock, Scale, CheckSquare, GitCommit, ExternalLink } from "lucide-react"
+import { Clock, Scale, CheckSquare, GitCommit, ExternalLink, Search } from "lucide-react"
 
 export default function TimelinePage() {
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState("")
   const [events, setEvents] = useState<any[]>([])
+  const [typeFilter, setTypeFilter] = useState("All")
+  const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
 
   const loadTimeline = useCallback(async (pid?: string) => {
@@ -18,7 +20,7 @@ export default function TimelinePage() {
       const list = Array.isArray(projs) ? projs : []
       setProjects(list)
 
-      const targetPid = resolveActiveProjectId(list, storedPid)
+      const targetPid = resolveActiveProjectId(list, storedPid) || list[0]?.id || ""
       setActiveProject(targetPid)
 
       if (targetPid) {
@@ -44,6 +46,23 @@ export default function TimelinePage() {
     return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [loadTimeline])
 
+  const eventTypes = [
+    "All",
+    ...Array.from(new Set(events.map((e) => String(e.type || "event").toLowerCase()))),
+  ]
+
+  const filteredEvents = events.filter((ev) => {
+    if (typeFilter !== "All" && String(ev.type || "").toLowerCase() !== typeFilter) return false
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (
+      ev.title?.toLowerCase().includes(q) ||
+      ev.description?.toLowerCase().includes(q) ||
+      ev.author?.toLowerCase().includes(q) ||
+      ev.badge?.toLowerCase().includes(q)
+    )
+  })
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -59,8 +78,7 @@ export default function TimelinePage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            setStoredProjectId(pid || undefined)
-            loadTimeline(pid)
+            setStoredProjectId(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
         >
@@ -71,19 +89,47 @@ export default function TimelinePage() {
         </select>
       </div>
 
+      <div className="apple-card p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search timeline events, authors..."
+            className="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500 focus:bg-white"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {eventTypes.map((et) => (
+            <button
+              key={et}
+              onClick={() => setTypeFilter(et)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                typeFilter === et
+                  ? "bg-violet-600 text-white border-violet-600"
+                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+              }`}
+            >
+              {et.replace("_", " ")}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {loading ? (
         <div className="apple-card p-10 text-center text-xs text-slate-400">Loading project chronology...</div>
-      ) : events.length === 0 ? (
+      ) : filteredEvents.length === 0 ? (
         <div className="apple-card p-12 text-center space-y-2">
           <Clock className="w-9 h-9 text-slate-300 mx-auto" />
-          <h3 className="text-sm font-bold text-slate-800">No Timeline Events Yet</h3>
+          <h3 className="text-sm font-bold text-slate-800">No Matching Timeline Events</h3>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
             Create a project and sync integrations or upload documentation to track project milestones.
           </p>
         </div>
       ) : (
         <div className="relative pl-6 space-y-4 before:content-[''] before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-violet-200">
-          {events.map((ev) => (
+          {filteredEvents.map((ev) => (
             <div key={ev.id} className="relative apple-card p-4 space-y-2">
               <div className="absolute -left-[22px] top-5 w-3.5 h-3.5 rounded-full bg-violet-600 border-2 border-white shadow" />
               <div className="flex flex-wrap items-center justify-between gap-2">

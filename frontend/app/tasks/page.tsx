@@ -2,12 +2,15 @@
 
 import React, { useCallback, useEffect, useState } from "react"
 import { CheckSquare, Plus, Search, UserCheck, AlertCircle, Check } from "lucide-react"
-import { api, getStoredProjectId, resolveActiveProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<any[]>([])
+  const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [filterDeparting, setFilterDeparting] = useState(false)
+  const [statusFilter, setStatusFilter] = useState("All")
+  const [priorityFilter, setPriorityFilter] = useState("All")
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState("")
@@ -27,11 +30,14 @@ export default function TasksPage() {
   const loadTasks = useCallback(async () => {
     try {
       setLoading(true)
+      const allSelected = isAllProjectsSelected()
       const projs = await api.getProjects().catch(() => [])
-      const resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = allSelected ? "" : resolveActiveProjectId(projList, getStoredProjectId())
       setSelectedProjectId(resolvedPid)
       const data = await api.getTasks(resolvedPid || undefined)
-      setTasks(data)
+      setTasks(Array.isArray(data) ? data : [])
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load tasks.")
     } finally {
@@ -54,7 +60,7 @@ export default function TasksPage() {
       setModalError("")
       setErrorMsg("")
       await api.createTask({
-        project_id: selectedProjectId || getStoredProjectId() || undefined,
+        project_id: selectedProjectId || projects[0]?.id || undefined,
         title,
         description,
         owner,
@@ -98,6 +104,8 @@ export default function TasksPage() {
 
   const filtered = tasks.filter(t => {
     if (filterDeparting && !t.is_departing_owner) return false
+    if (statusFilter !== "All" && String(t.status || "open").toLowerCase() !== statusFilter) return false
+    if (priorityFilter !== "All" && String(t.priority || "medium").toLowerCase() !== priorityFilter) return false
     if (search && !t.title?.toLowerCase().includes(search.toLowerCase()) && !t.owner?.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
@@ -109,7 +117,21 @@ export default function TasksPage() {
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">Tasks & Responsibilities</h1>
           <p className="text-xs text-slate-500 mt-0.5">Track task ownership, detect departing employee assignments, and manage successor reassignment</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={selectedProjectId}
+            onChange={(e) => {
+              const pid = e.target.value
+              setSelectedProjectId(pid)
+              setStoredProjectId(pid)
+            }}
+            className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
+          >
+            <option value="">All Accessible Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
           <button
             onClick={() => setFilterDeparting(!filterDeparting)}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${filterDeparting
@@ -135,19 +157,55 @@ export default function TasksPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 apple-card p-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search tasks by title or owner..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-1.5 rounded-full text-xs bg-slate-50 border border-slate-200 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-violet-500 focus:bg-white"
-          />
+      <div className="apple-card p-3 space-y-2.5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search tasks by title or owner..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-4 py-1.5 rounded-full text-xs bg-slate-50 border border-slate-200 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-violet-500 focus:bg-white"
+            />
+          </div>
+          <div className="text-xs text-slate-500 font-mono">
+            {filtered.length} Tasks
+          </div>
         </div>
-        <div className="text-xs text-slate-500 font-mono">
-          {filtered.length} Tasks
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Status:</span>
+            {["All", "open", "in_progress", "blocked", "completed"].map((st) => (
+              <button
+                key={st}
+                onClick={() => setStatusFilter(st)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                  statusFilter === st
+                    ? "bg-violet-600 text-white border-violet-600"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {st.replace("_", " ")}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Priority:</span>
+            {["All", "critical", "high", "medium", "low"].map((pr) => (
+              <button
+                key={pr}
+                onClick={() => setPriorityFilter(pr)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                  priorityFilter === pr
+                    ? "bg-violet-600 text-white border-violet-600"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {pr}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

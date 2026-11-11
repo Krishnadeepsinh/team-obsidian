@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { GitMerge, Search, ShieldAlert } from "lucide-react"
 
 export default function DependenciesPage() {
@@ -15,14 +15,15 @@ export default function DependenciesPage() {
   const loadData = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
+      const allSelected = pid === undefined && isAllProjectsSelected()
+      const storedPid = allSelected || pid === "" ? "" : pid !== undefined ? pid : getStoredProjectId()
       const [projs, rowsRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getDependencies(storedPid || undefined).catch(() => []),
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
-      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      const resolvedPid = allSelected || pid === "" ? "" : resolveActiveProjectId(projList, pid)
       setActiveProject(resolvedPid)
 
       let finalRows = Array.isArray(rowsRaw) ? rowsRaw : []
@@ -74,8 +75,7 @@ export default function DependenciesPage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            setStoredProjectId(pid || undefined)
-            loadData(pid)
+            setStoredProjectId(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
         >

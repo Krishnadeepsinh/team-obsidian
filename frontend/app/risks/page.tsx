@@ -2,12 +2,15 @@
 
 import React, { useCallback, useEffect, useState } from "react"
 import { AlertTriangle, Plus, Search, CheckCircle2 } from "lucide-react"
-import { api, getStoredProjectId, resolveActiveProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 
 export default function RisksPage() {
   const [risks, setRisks] = useState<any[]>([])
+  const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const [severityFilter, setSeverityFilter] = useState("All")
+  const [statusFilter, setStatusFilter] = useState("All")
   const [showModal, setShowModal] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState("")
   const [errorMsg, setErrorMsg] = useState("")
@@ -25,11 +28,14 @@ export default function RisksPage() {
   const loadRisks = useCallback(async () => {
     try {
       setLoading(true)
+      const allSelected = isAllProjectsSelected()
       const projs = await api.getProjects().catch(() => [])
-      const resolvedPid = resolveActiveProjectId(projs, getStoredProjectId())
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = allSelected ? "" : resolveActiveProjectId(projList, getStoredProjectId())
       setSelectedProjectId(resolvedPid)
       const data = await api.getRisks(resolvedPid || undefined)
-      setRisks(data)
+      setRisks(Array.isArray(data) ? data : [])
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load risks.")
     } finally {
@@ -53,7 +59,7 @@ export default function RisksPage() {
       setErrorMsg("")
       const compList = components.split(",").map(c => c.trim()).filter(Boolean)
       await api.createRisk({
-        project_id: selectedProjectId || getStoredProjectId() || undefined,
+        project_id: selectedProjectId || projects[0]?.id || undefined,
         title,
         description,
         severity,
@@ -84,10 +90,17 @@ export default function RisksPage() {
     }
   }
 
-  const filtered = risks.filter(r =>
-    (r.title && r.title.toLowerCase().includes(search.toLowerCase())) ||
-    (r.description && r.description.toLowerCase().includes(search.toLowerCase()))
-  )
+  const filtered = risks.filter((r) => {
+    if (severityFilter !== "All" && String(r.severity || "").toLowerCase() !== severityFilter) return false
+    if (statusFilter !== "All" && String(r.status || "open").toLowerCase() !== statusFilter) return false
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (
+      r.title?.toLowerCase().includes(q) ||
+      r.description?.toLowerCase().includes(q) ||
+      r.category?.toLowerCase().includes(q)
+    )
+  })
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -96,13 +109,29 @@ export default function RisksPage() {
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">Technical Risks & Bottlenecks</h1>
           <p className="text-xs text-slate-500 mt-0.5">Identified single points of failure, code vulnerabilities, and dependency bottlenecks</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 shadow-md shadow-rose-600/20 transition-all hover:scale-[1.02]"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Log Risk</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={selectedProjectId}
+            onChange={(e) => {
+              const pid = e.target.value
+              setSelectedProjectId(pid)
+              setStoredProjectId(pid)
+            }}
+            className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
+          >
+            <option value="">All Accessible Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => setShowModal(true)}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 shadow-md shadow-rose-600/20 transition-all hover:scale-[1.02]"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Log Risk</span>
+          </button>
+        </div>
       </div>
 
       {errorMsg && (
@@ -111,19 +140,55 @@ export default function RisksPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 apple-card p-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search risks by keyword, component..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-1.5 rounded-full text-xs bg-slate-50 border border-slate-200 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-rose-500 focus:bg-white"
-          />
+      <div className="apple-card p-3 space-y-2.5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search risks by keyword, component..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-4 py-1.5 rounded-full text-xs bg-slate-50 border border-slate-200 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-rose-500 focus:bg-white"
+            />
+          </div>
+          <div className="text-xs text-slate-500 font-mono">
+            {filtered.length} Risks Logged
+          </div>
         </div>
-        <div className="text-xs text-slate-500 font-mono">
-          {filtered.length} Risks Logged
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Severity:</span>
+            {["All", "critical", "high", "medium", "low"].map((sv) => (
+              <button
+                key={sv}
+                onClick={() => setSeverityFilter(sv)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                  severityFilter === sv
+                    ? "bg-rose-600 text-white border-rose-600"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {sv}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Status:</span>
+            {["All", "open", "mitigated"].map((st) => (
+              <button
+                key={st}
+                onClick={() => setStatusFilter(st)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                  statusFilter === st
+                    ? "bg-violet-600 text-white border-violet-600"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

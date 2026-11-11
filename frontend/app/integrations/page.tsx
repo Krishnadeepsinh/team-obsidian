@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Github,
   MessageSquare,
@@ -354,7 +354,8 @@ function IntegrationsContent() {
     async (pid?: string) => {
       try {
         setLoading(true)
-        const storedPid = pid !== undefined ? pid : getStoredProjectId()
+        const allSelected = pid === undefined && isAllProjectsSelected()
+        const storedPid = allSelected || pid === "" ? "" : pid !== undefined ? pid : getStoredProjectId()
         const [projs, integsRaw, caps] = await Promise.all([
           api.getProjects().catch(() => []),
           api.getIntegrations(storedPid || undefined).catch(() => []),
@@ -363,7 +364,7 @@ function IntegrationsContent() {
         if (caps?.oauth_providers) setOauthProviders(caps.oauth_providers)
         const projList = Array.isArray(projs) ? projs : []
         setProjects(projList)
-        const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+        const resolvedPid = allSelected || pid === "" ? "" : resolveActiveProjectId(projList, pid)
         setActiveProject(resolvedPid)
 
         let finalIntegs = Array.isArray(integsRaw) ? integsRaw : []
@@ -653,8 +654,7 @@ function IntegrationsContent() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            setStoredProjectId(pid || undefined)
-            loadAll(pid)
+            setStoredProjectId(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
         >

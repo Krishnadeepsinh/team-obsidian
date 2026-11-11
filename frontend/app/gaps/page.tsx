@@ -1,13 +1,16 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
-import { HelpCircle, Plus, CheckCircle2, AlertTriangle, RotateCcw } from "lucide-react"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { HelpCircle, Plus, CheckCircle2, AlertTriangle, RotateCcw, Search } from "lucide-react"
 
 export default function GapsPage() {
   const [gaps, setGaps] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState("")
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("All")
+  const [severityFilter, setSeverityFilter] = useState("All")
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [errorMsg, setErrorMsg] = useState("")
@@ -21,21 +24,22 @@ export default function GapsPage() {
   const [recommendedAction, setRecommendedAction] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
-  const loadAll = useCallback(async (pid?: string) => {
+  const loadAll = useCallback(async () => {
     try {
       setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
+      const allSelected = isAllProjectsSelected()
+      const storedPid = allSelected ? "" : getStoredProjectId()
       const [projs, listRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getGaps(storedPid || undefined).catch(() => []),
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
-      const resolved = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      const resolved = allSelected ? "" : resolveActiveProjectId(projList, storedPid || undefined)
       setActiveProject(resolved)
 
       let finalList = Array.isArray(listRaw) ? listRaw : []
-      if (resolved && resolved !== storedPid) {
+      if (!allSelected && resolved && resolved !== storedPid) {
         finalList = await api.getGaps(resolved).catch(() => [])
       }
       setGaps(Array.isArray(finalList) ? finalList : [])
@@ -80,7 +84,7 @@ export default function GapsPage() {
       setDescription("")
       setImpact("")
       setRecommendedAction("")
-      await loadAll(activeProject)
+      await loadAll()
     } catch (err: any) {
       setErrorMsg(err.message || "Could not log knowledge gap")
     } finally {
@@ -93,11 +97,23 @@ export default function GapsPage() {
     try {
       setErrorMsg("")
       await api.resolveGap(gap.id, nextStatus)
-      await loadAll(activeProject)
+      await loadAll()
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to update gap status")
     }
   }
+
+  const filteredGaps = gaps.filter((g) => {
+    if (statusFilter !== "All" && String(g.status || "open").toLowerCase() !== statusFilter) return false
+    if (severityFilter !== "All" && String(g.severity || "high").toLowerCase() !== severityFilter) return false
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (
+      g.title?.toLowerCase().includes(q) ||
+      g.description?.toLowerCase().includes(q) ||
+      g.gap_type?.toLowerCase().includes(q)
+    )
+  })
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
@@ -115,8 +131,7 @@ export default function GapsPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
-              setStoredProjectId(pid || undefined)
-              loadAll(pid)
+              setStoredProjectId(pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
           >
@@ -136,6 +151,56 @@ export default function GapsPage() {
         </div>
       </div>
 
+      <div className="apple-card p-3 space-y-2.5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search knowledge gaps by title, description, type..."
+              className="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500 focus:bg-white"
+            />
+          </div>
+          <span className="text-xs font-mono text-slate-500">{filteredGaps.length} Knowledge Gaps</span>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Status:</span>
+            {["All", "open", "resolved"].map((st) => (
+              <button
+                key={st}
+                onClick={() => setStatusFilter(st)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                  statusFilter === st
+                    ? "bg-violet-600 text-white border-violet-600"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Severity:</span>
+            {["All", "critical", "high", "medium", "low"].map((sv) => (
+              <button
+                key={sv}
+                onClick={() => setSeverityFilter(sv)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border transition-all ${
+                  severityFilter === sv
+                    ? "bg-violet-600 text-white border-violet-600"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {sv}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {errorMsg && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
           {errorMsg}
@@ -143,7 +208,7 @@ export default function GapsPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {gaps.map((g) => {
+        {filteredGaps.map((g) => {
           const isResolved = g.status === "resolved"
           return (
             <div key={g.id} className="apple-card p-5 flex flex-col justify-between gap-4">
@@ -218,10 +283,10 @@ export default function GapsPage() {
           )
         })}
 
-        {!loading && gaps.length === 0 && (
+        {!loading && filteredGaps.length === 0 && (
           <div className="col-span-full apple-card p-12 text-center space-y-2">
             <HelpCircle className="w-10 h-10 text-slate-300 mx-auto" />
-            <h3 className="text-sm font-bold text-slate-800">No Knowledge Gaps Open</h3>
+            <h3 className="text-sm font-bold text-slate-800">No Matching Knowledge Gaps</h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
               Detected undocumented workflows or manually flagged handover blind spots will appear here.
             </p>

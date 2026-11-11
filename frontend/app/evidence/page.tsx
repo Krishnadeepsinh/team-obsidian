@@ -1,9 +1,9 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
-import { ShieldCheck, Search, ExternalLink, Clock, User } from "lucide-react"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { ShieldCheck, Search, ExternalLink, Clock, User, FolderGit2, Layers, RotateCcw } from "lucide-react"
 
 const STATUS_FILTERS = [
   "All",
@@ -15,6 +15,46 @@ const STATUS_FILTERS = [
   "Outdated",
   "Unknown / Missing Evidence",
 ]
+
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  github_commit: "Commits",
+  github_pr: "Pull Requests",
+  github_issue: "Issues",
+  github_repository: "Repositories",
+  document: "Documents",
+  slack_message: "Slack",
+  notion_page: "Notion Pages",
+  notion_database: "Notion DBs",
+}
+
+const PAGE_SIZE = 24
+
+function formatSourceType(st?: string): string {
+  if (!st) return "Other"
+  const norm = st.toLowerCase()
+  return SOURCE_TYPE_LABELS[norm] || st.replace(/_/g, " ")
+}
+
+function getEvidenceOrigin(ev: any): string {
+  const meta = ev?.metadata_json && typeof ev.metadata_json === "object" ? ev.metadata_json : {}
+  for (const key of ["repository", "repo", "channel_name", "channel_id", "filename", "database_id"]) {
+    if (meta[key]) return String(meta[key]).trim()
+  }
+  const url = String(ev?.source_url || "")
+  const ghMatch = url.match(/github\.com\/([^/]+\/[^/]+)/i)
+  if (ghMatch) return ghMatch[1]
+  return ""
+}
+
+function statusMatches(actual?: string, selected?: string): boolean {
+  if (!selected || selected === "All") return true
+  const a = (actual || "").trim().toLowerCase()
+  const s = selected.trim().toLowerCase()
+  if (s === "verified by reviewer" || s === "verified") {
+    return a === "verified by reviewer" || a === "verified"
+  }
+  return a === s
+}
 
 const STATUS_BADGE_CLASS = (status: string) => {
   if (status === "Verified by Reviewer" || status === "Verified") {
@@ -38,48 +78,105 @@ export default function EvidencePage() {
   const [activeProject, setActiveProject] = useState("")
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState("All")
+  const [sourceTypeFilter, setSourceTypeFilter] = useState("All")
+  const [originFilter, setOriginFilter] = useState("All")
+  const [authorFilter, setAuthorFilter] = useState("All")
   const [search, setSearch] = useState("")
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE)
   const [selectedAudit, setSelectedAudit] = useState<any>(null)
   const [auditNotes, setAuditNotes] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [auditError, setAuditError] = useState("")
 
-  const loadData = useCallback(async (pid?: string, status?: string, query?: string) => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
+      const allSelected = isAllProjectsSelected()
+      const storedPid = allSelected ? "" : getStoredProjectId()
       const [projs, resRaw] = await Promise.all([
         api.getProjects().catch(() => []),
-        api.getEvidence(storedPid || undefined, status === "All" ? undefined : status, query || undefined).catch(() => []),
+        api.getEvidence(storedPid || undefined).catch(() => []),
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
-      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      const resolvedPid = allSelected ? "" : resolveActiveProjectId(projList, storedPid || undefined)
       setActiveProject(resolvedPid)
 
       let finalRes = Array.isArray(resRaw) ? resRaw : []
-      if (resolvedPid && resolvedPid !== storedPid) {
-        finalRes = await api
-          .getEvidence(resolvedPid, status === "All" ? undefined : status, query || undefined)
-          .catch(() => [])
+      if (!allSelected && resolvedPid && resolvedPid !== storedPid) {
+        finalRes = await api.getEvidence(resolvedPid).catch(() => [])
       }
       setEvidences(Array.isArray(finalRes) ? finalRes : [])
+      setVisibleLimit(PAGE_SIZE)
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    loadData(undefined, "All", "")
+    loadData()
   }, [loadData])
 
   useEffect(() => {
     const onProjectChange = () => {
-      loadData(undefined, statusFilter, search)
+      setOriginFilter("All")
+      setAuthorFilter("All")
+      setSourceTypeFilter("All")
+      loadData()
     }
     window.addEventListener("obsidian_project_changed", onProjectChange)
     return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
-  }, [loadData, statusFilter, search])
+  }, [loadData])
+
+  const projectNames = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const p of projects) {
+      if (p?.id) map[p.id] = p.name
+    }
+    return map
+  }, [projects])
+
+  const sourceTypeOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const ev of evidences) {
+      const st = (ev.source_type || "other").toLowerCase()
+      counts[st] = (counts[st] || 0) + 1
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [evidences])
+
+  const originOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const ev of evidences) {
+      const orig = getEvidenceOrigin(ev)
+      if (orig) counts[orig] = (counts[orig] || 0) + 1
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [evidences])
+
+  const authorOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const ev of evidences) {
+      const auth = (ev.source_author || "").trim()
+      if (auth) counts[auth] = (counts[auth] || 0) + 1
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [evidences])
+
+  const statusCounts = useMemo(() => {
+    const baseFiltered = evidences.filter((ev) => {
+      if (sourceTypeFilter !== "All" && (ev.source_type || "").toLowerCase() !== sourceTypeFilter.toLowerCase()) return false
+      if (originFilter !== "All" && getEvidenceOrigin(ev) !== originFilter) return false
+      if (authorFilter !== "All" && (ev.source_author || "").trim() !== authorFilter) return false
+      return true
+    })
+    const map: Record<string, number> = { All: baseFiltered.length }
+    for (const st of STATUS_FILTERS) {
+      if (st === "All") continue
+      map[st] = baseFiltered.filter((ev) => statusMatches(ev.verification_status, st)).length
+    }
+    return map
+  }, [evidences, sourceTypeFilter, originFilter, authorFilter])
 
   const handleAuditAction = async (newStatus: string) => {
     if (!selectedAudit) return
@@ -89,7 +186,7 @@ export default function EvidencePage() {
       await api.auditEvidence(selectedAudit.id, newStatus, auditNotes)
       setSelectedAudit(null)
       setAuditNotes("")
-      await loadData(activeProject, statusFilter, search)
+      await loadData()
     } catch (err: any) {
       setAuditError(err.message || "Audit submission failed")
     } finally {
@@ -97,16 +194,39 @@ export default function EvidencePage() {
     }
   }
 
-  const filtered = evidences.filter((ev) => {
-    const matchStatus = statusFilter === "All" || ev.verification_status === statusFilter
-    const matchSearch =
-      !search.trim() ||
-      ev.source_title?.toLowerCase().includes(search.toLowerCase()) ||
-      ev.excerpt?.toLowerCase().includes(search.toLowerCase()) ||
-      ev.ai_interpretation?.toLowerCase().includes(search.toLowerCase()) ||
-      ev.source_author?.toLowerCase().includes(search.toLowerCase())
-    return matchStatus && matchSearch
-  })
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return evidences.filter((ev) => {
+      if (!statusMatches(ev.verification_status, statusFilter)) return false
+      if (sourceTypeFilter !== "All" && (ev.source_type || "").toLowerCase() !== sourceTypeFilter.toLowerCase()) return false
+      if (originFilter !== "All" && getEvidenceOrigin(ev) !== originFilter) return false
+      if (authorFilter !== "All" && (ev.source_author || "").trim() !== authorFilter) return false
+      if (q) {
+        const origin = getEvidenceOrigin(ev).toLowerCase()
+        const matchesQ =
+          ev.source_title?.toLowerCase().includes(q) ||
+          ev.excerpt?.toLowerCase().includes(q) ||
+          ev.ai_interpretation?.toLowerCase().includes(q) ||
+          ev.source_author?.toLowerCase().includes(q) ||
+          origin.includes(q)
+        if (!matchesQ) return false
+      }
+      return true
+    })
+  }, [evidences, statusFilter, sourceTypeFilter, originFilter, authorFilter, search])
+
+  const visibleItems = filtered.slice(0, visibleLimit)
+  const hasActiveFilters =
+    statusFilter !== "All" || sourceTypeFilter !== "All" || originFilter !== "All" || authorFilter !== "All" || search.trim() !== ""
+
+  const resetFilters = () => {
+    setStatusFilter("All")
+    setSourceTypeFilter("All")
+    setOriginFilter("All")
+    setAuthorFilter("All")
+    setSearch("")
+    setVisibleLimit(PAGE_SIZE)
+  }
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
@@ -123,8 +243,7 @@ export default function EvidencePage() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            setStoredProjectId(pid || undefined)
-            loadData(pid, statusFilter, search)
+            setStoredProjectId(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
         >
@@ -135,40 +254,141 @@ export default function EvidencePage() {
         </select>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search evidence title, author, excerpt..."
-            className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-900 shadow-sm focus:outline-none focus:border-violet-500"
-          />
+      {/* Filters Card */}
+      <div className="apple-card p-4 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5">
+          <div className="relative md:col-span-5">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                setVisibleLimit(PAGE_SIZE)
+              }}
+              placeholder="Search title, repo, author, excerpt..."
+              className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500 focus:bg-white"
+            />
+          </div>
+
+          <select
+            value={originFilter}
+            onChange={(e) => {
+              setOriginFilter(e.target.value)
+              setVisibleLimit(PAGE_SIZE)
+            }}
+            aria-label="Filter by repository or source"
+            className="md:col-span-4 px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500"
+          >
+            <option value="All">All Repositories &amp; Sources ({originOptions.length})</option>
+            {originOptions.map(([orig, cnt]) => (
+              <option key={orig} value={orig}>
+                {orig} ({cnt})
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={authorFilter}
+            onChange={(e) => {
+              setAuthorFilter(e.target.value)
+              setVisibleLimit(PAGE_SIZE)
+            }}
+            aria-label="Filter by author"
+            className="md:col-span-3 px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500"
+          >
+            <option value="All">All Authors ({authorOptions.length})</option>
+            {authorOptions.map(([auth, cnt]) => (
+              <option key={auth} value={auth}>
+                {auth} ({cnt})
+              </option>
+            ))}
+          </select>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {STATUS_FILTERS.map((st) => (
+        {/* Source Type Tabs */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-100">
+          <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Type:</span>
+          <button
+            onClick={() => {
+              setSourceTypeFilter("All")
+              setVisibleLimit(PAGE_SIZE)
+            }}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all ${
+              sourceTypeFilter === "All"
+                ? "bg-violet-600 text-white border-violet-600 shadow-xs"
+                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+            }`}
+          >
+            All Sources ({evidences.length})
+          </button>
+          {sourceTypeOptions.map(([st, cnt]) => (
             <button
               key={st}
-              onClick={() => setStatusFilter(st)}
-              className={`px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border transition-all ${
-                statusFilter === st
-                  ? "bg-violet-600 text-white border-violet-600 shadow-sm"
-                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+              onClick={() => {
+                setSourceTypeFilter(st)
+                setVisibleLimit(PAGE_SIZE)
+              }}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all capitalize ${
+                sourceTypeFilter === st
+                  ? "bg-violet-600 text-white border-violet-600 shadow-xs"
+                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
               }`}
             >
-              {st}
+              {formatSourceType(st)} ({cnt})
             </button>
           ))}
+        </div>
+
+        {/* Verification Status Filters */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Status:</span>
+            {STATUS_FILTERS.map((st) => {
+              const cnt = statusCounts[st] ?? 0
+              return (
+                <button
+                  key={st}
+                  onClick={() => {
+                    setStatusFilter(st)
+                    setVisibleLimit(PAGE_SIZE)
+                  }}
+                  className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold border transition-all ${
+                    statusFilter === st
+                      ? "bg-violet-600 text-white border-violet-600 shadow-xs"
+                      : cnt === 0
+                      ? "bg-white text-slate-400 border-slate-200 hover:bg-slate-50"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  {st} ({cnt})
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="font-mono text-[11px]">
+              Showing {visibleItems.length} of {filtered.length}
+            </span>
+            {hasActiveFilters && (
+              <button
+                onClick={resetFilters}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200"
+              >
+                <RotateCcw className="w-3 h-3" /> Reset
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Evidence Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {filtered.map((ev) => {
+        {visibleItems.map((ev) => {
           const isExternalUrl = ev.source_url && /^https?:\/\//i.test(ev.source_url)
+          const origin = getEvidenceOrigin(ev)
+          const projName = !activeProject && ev.project_id ? projectNames[ev.project_id] : ""
           return (
             <div key={ev.id} className="apple-card p-5 flex flex-col justify-between gap-4">
               <div className="space-y-3">
@@ -176,8 +396,20 @@ export default function EvidencePage() {
                   <div className="space-y-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold uppercase">
-                        {ev.source_type?.replace("_", " ")}
+                        {formatSourceType(ev.source_type)}
                       </span>
+                      {origin && (
+                        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-violet-50 text-violet-700 border border-violet-100 font-semibold max-w-[200px] truncate">
+                          <FolderGit2 className="w-2.5 h-2.5 flex-shrink-0" />
+                          {origin}
+                        </span>
+                      )}
+                      {projName && (
+                        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold max-w-[160px] truncate">
+                          <Layers className="w-2.5 h-2.5 flex-shrink-0" />
+                          {projName}
+                        </span>
+                      )}
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${STATUS_BADGE_CLASS(ev.verification_status)}`}>
                         {ev.verification_status}
                       </span>
@@ -264,13 +496,40 @@ export default function EvidencePage() {
         {filtered.length === 0 && !loading && (
           <div className="col-span-full apple-card p-12 text-center space-y-3">
             <ShieldCheck className="w-10 h-10 text-slate-300 mx-auto" />
-            <h3 className="text-sm font-bold text-slate-800">No Evidence Records Found</h3>
+            <h3 className="text-sm font-bold text-slate-800">No Evidence Records Match Current Filters</h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Verified and candidate evidence items will appear here as repositories, channels, and documents are ingested.
+              {hasActiveFilters
+                ? "Try resetting your source type, repository, status, or search filter."
+                : "Verified and candidate evidence items will appear here as repositories, channels, and documents are ingested."}
             </p>
+            {hasActiveFilters && (
+              <button
+                onClick={resetFilters}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white"
+              >
+                Reset All Filters
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {filtered.length > visibleItems.length && (
+        <div className="flex items-center justify-center gap-3 pt-2">
+          <button
+            onClick={() => setVisibleLimit((prev) => prev + PAGE_SIZE)}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 shadow-xs"
+          >
+            Load {Math.min(PAGE_SIZE, filtered.length - visibleItems.length)} More ({filtered.length - visibleItems.length} remaining)
+          </button>
+          <button
+            onClick={() => setVisibleLimit(filtered.length)}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200"
+          >
+            Show All ({filtered.length})
+          </button>
+        </div>
+      )}
 
       {/* Review & Audit Modal */}
       {selectedAudit && (

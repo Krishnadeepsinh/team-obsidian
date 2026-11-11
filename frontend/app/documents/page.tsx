@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   FileUp,
   FileText,
@@ -29,6 +29,7 @@ export default function DocumentsPage() {
   const [file, setFile] = useState<File | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [search, setSearch] = useState("")
+  const [typeFilter, setTypeFilter] = useState("All")
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
 
@@ -40,6 +41,7 @@ export default function DocumentsPage() {
   const loadData = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
+      const allSelected = pid === undefined && isAllProjectsSelected()
       let projs = projectsRef.current
       try {
         const projsRaw = await api.getProjects()
@@ -55,7 +57,7 @@ export default function DocumentsPage() {
       }
 
       let resolvedPid = ""
-      if (pid === "") {
+      if (pid === "" || allSelected) {
         resolvedPid = ""
       } else if (pid !== undefined) {
         resolvedPid = resolveActiveProjectId(projs, pid)
@@ -188,12 +190,19 @@ export default function DocumentsPage() {
     }
   }
 
-  const filtered = docs.filter(
-    (d) =>
+  const fileTypeOptions = [
+    "All",
+    ...Array.from(new Set(docs.map((d) => String(d.file_type || "file").toUpperCase()))),
+  ]
+
+  const filtered = docs.filter((d) => {
+    if (typeFilter !== "All" && String(d.file_type || "file").toUpperCase() !== typeFilter) return false
+    return (
       !search.trim() ||
       d.title?.toLowerCase().includes(search.toLowerCase()) ||
       d.filename?.toLowerCase().includes(search.toLowerCase())
-  )
+    )
+  })
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
@@ -211,8 +220,7 @@ export default function DocumentsPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
-              setStoredProjectId(pid || undefined)
-              loadData(pid)
+              setStoredProjectId(pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
           >
@@ -280,16 +288,33 @@ export default function DocumentsPage() {
         </div>
       </form>
 
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search documents by title or filename..."
-          className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-900 shadow-sm focus:outline-none focus:border-violet-500"
-        />
+      {/* Search & File Type Filter */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search documents by title or filename..."
+            className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-900 shadow-sm focus:outline-none focus:border-violet-500"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {fileTypeOptions.map((ft) => (
+            <button
+              key={ft}
+              onClick={() => setTypeFilter(ft)}
+              className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold border transition-all ${
+                typeFilter === ft
+                  ? "bg-violet-600 text-white border-violet-600 shadow-xs"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {ft}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Document Grid */}

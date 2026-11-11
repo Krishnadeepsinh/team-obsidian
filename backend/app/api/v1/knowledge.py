@@ -44,9 +44,17 @@ def explore_knowledge(
     if not p_ids:
         return []
 
-    s_lower = search.lower() if search else None
-    emp_lower = employee.lower() if employee else None
-    vs_lower = verification_status.lower() if verification_status and verification_status.lower() != "all" else None
+    s_lower = search.strip().lower() if search and search.strip() else None
+    emp_lower = employee.strip().lower() if employee and employee.strip() else None
+    vs_lower = verification_status.strip().lower() if verification_status and verification_status.strip().lower() != "all" else None
+
+    def _status_matches(raw_vstat: Optional[str]) -> bool:
+        if not vs_lower:
+            return True
+        actual = (raw_vstat or "").strip().lower()
+        if vs_lower in ("verified", "verified by reviewer"):
+            return actual in ("verified", "verified by reviewer")
+        return actual == vs_lower
 
     if not category or category.lower() in ["all", "decisions"]:
         for d in db.query(Decision).filter(Decision.project_id.in_(p_ids)).all():
@@ -55,12 +63,13 @@ def explore_knowledge(
             if emp_lower and emp_lower not in (d.decision_maker or "").lower():
                 continue
             vstat = getattr(d, "verification_status", "Needs Human Verification")
-            if vs_lower and vs_lower != vstat.lower():
+            if not _status_matches(vstat):
                 continue
             if s_lower and s_lower not in d.title.lower() and s_lower not in d.summary.lower():
                 continue
             items.append({
                 "id": d.id,
+                "project_id": d.project_id,
                 "category": "Decisions",
                 "title": d.title,
                 "subtitle": f"Decided by {d.decision_maker} on {d.date}",
@@ -84,12 +93,13 @@ def explore_knowledge(
             if emp_lower and emp_lower not in (t.owner or "").lower():
                 continue
             vstat = getattr(t, "verification_status", "Needs Human Verification")
-            if vs_lower and vs_lower != vstat.lower():
+            if not _status_matches(vstat):
                 continue
             if s_lower and s_lower not in t.title.lower() and not (t.description and s_lower in t.description.lower()):
                 continue
             items.append({
                 "id": t.id,
+                "project_id": t.project_id,
                 "category": "Tasks",
                 "title": t.title,
                 "subtitle": f"Owner: {t.owner} (Priority: {t.priority.upper()})",
@@ -108,15 +118,19 @@ def explore_knowledge(
 
     if not category or category.lower() in ["all", "responsibilities"]:
         for resp in db.query(Responsibility).filter(Responsibility.project_id.in_(p_ids)).all():
+            conf = 0.85 if resp.evidence_ids else 0.5
+            if min_confidence and conf < min_confidence:
+                continue
             if emp_lower and emp_lower not in (resp.owner or "").lower():
                 continue
             vstat = getattr(resp, "verification_status", "Needs Human Verification")
-            if vs_lower and vs_lower != vstat.lower():
+            if not _status_matches(vstat):
                 continue
             if s_lower and s_lower not in resp.domain.lower() and s_lower not in resp.scope.lower():
                 continue
             items.append({
                 "id": resp.id,
+                "project_id": resp.project_id,
                 "category": "Responsibilities",
                 "title": f"{resp.domain} ({resp.owner})",
                 "subtitle": f"Owner: {resp.owner} | Criticality: {resp.criticality.upper()}",
@@ -126,22 +140,26 @@ def explore_knowledge(
                 "date": resp.created_at.strftime("%Y-%m-%d") if resp.created_at else "",
                 "status": resp.criticality,
                 "verification_status": vstat,
-                "confidence": 0.85 if resp.evidence_ids else 0.5,
+                "confidence": conf,
                 "evidence_ids": resp.evidence_ids or [],
                 "tags": ["Responsibility", resp.criticality],
             })
 
     if not category or category.lower() in ["all", "dependencies"]:
         for dep in db.query(Dependency).filter(Dependency.project_id.in_(p_ids)).all():
+            conf = 0.9 if dep.evidence_ids else 0.6
+            if min_confidence and conf < min_confidence:
+                continue
             if emp_lower and emp_lower not in (dep.owner or "").lower():
                 continue
             vstat = getattr(dep, "verification_status", "Needs Human Verification")
-            if vs_lower and vs_lower != vstat.lower():
+            if not _status_matches(vstat):
                 continue
             if s_lower and s_lower not in dep.source_component.lower() and s_lower not in dep.target_component.lower():
                 continue
             items.append({
                 "id": dep.id,
+                "project_id": dep.project_id,
                 "category": "Dependencies",
                 "title": f"{dep.source_component} → {dep.target_component}",
                 "subtitle": f"Type: {dep.dependency_type.replace('_', ' ').capitalize()} | Criticality: {dep.criticality.upper()}",
@@ -149,7 +167,7 @@ def explore_knowledge(
                 "summary": dep.description or "Component dependency boundary.",
                 "owner": dep.owner or "Unassigned",
                 "date": dep.created_at.strftime("%Y-%m-%d") if dep.created_at else "",
-                "confidence": 0.9 if dep.evidence_ids else 0.6,
+                "confidence": conf,
                 "status": dep.criticality,
                 "verification_status": vstat,
                 "evidence_ids": dep.evidence_ids or [],
@@ -158,15 +176,19 @@ def explore_knowledge(
 
     if not category or category.lower() in ["all", "risks"]:
         for r in db.query(RiskItem).filter(RiskItem.project_id.in_(p_ids)).all():
+            conf = 0.88 if r.evidence_ids else 0.55
+            if min_confidence and conf < min_confidence:
+                continue
             if emp_lower and emp_lower not in (getattr(r, "owner", None) or "").lower():
                 continue
             vstat = getattr(r, "verification_status", "Needs Human Verification")
-            if vs_lower and vs_lower != vstat.lower():
+            if not _status_matches(vstat):
                 continue
             if s_lower and s_lower not in r.title.lower() and s_lower not in r.description.lower():
                 continue
             items.append({
                 "id": r.id,
+                "project_id": r.project_id,
                 "category": "Risks",
                 "title": r.title,
                 "subtitle": f"Severity: {r.severity.upper()} | Likelihood: {r.likelihood.upper()}",
@@ -177,17 +199,26 @@ def explore_knowledge(
                 "date": r.created_at.strftime("%Y-%m-%d") if r.created_at else "",
                 "status": r.status,
                 "verification_status": vstat,
-                "confidence": 0.88 if r.evidence_ids else 0.55,
+                "confidence": conf,
                 "evidence_ids": r.evidence_ids or [],
                 "tags": ["Risk", r.severity],
             })
 
     if not category or category.lower() in ["all", "gaps", "knowledge gaps", "questions"]:
         for g in db.query(KnowledgeGap).filter(KnowledgeGap.project_id.in_(p_ids)).all():
+            gap_owner = getattr(g, "assigned_reviewer", None) or "Unassigned"
+            gap_vstat = "Unknown / Missing Evidence"
+            if min_confidence and 0.85 < min_confidence:
+                continue
+            if emp_lower and emp_lower not in gap_owner.lower():
+                continue
+            if not _status_matches(gap_vstat):
+                continue
             if s_lower and s_lower not in g.title.lower() and s_lower not in g.description.lower():
                 continue
             items.append({
                 "id": g.id,
+                "project_id": g.project_id,
                 "category": "Knowledge Gaps",
                 "title": g.title,
                 "subtitle": f"Type: {g.gap_type.replace('_', ' ').capitalize()} | Severity: {g.severity.upper()}",
@@ -195,29 +226,39 @@ def explore_knowledge(
                 "summary": g.description,
                 "impact": g.impact,
                 "recommended_action": g.recommended_action,
-                "owner": getattr(g, "assigned_reviewer", None) or "Unassigned",
+                "owner": gap_owner,
                 "date": g.created_at.strftime("%Y-%m-%d") if g.created_at else "",
                 "status": g.status,
-                "verification_status": "Unknown / Missing Evidence",
+                "verification_status": gap_vstat,
                 "confidence": 0.85,
                 "tags": ["Gap", g.gap_type],
             })
 
-    if category and category.lower() in ["entities", "technical"]:
+    if not category or category.lower() in ["all", "entities", "technical"]:
         for e in db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id.in_(p_ids)).all():
+            ent_owner = (e.properties or {}).get("owner", "System")
+            ent_vstat = getattr(e, "verification_status", "Needs Human Verification")
+            if min_confidence and (e.confidence or 0.0) < min_confidence:
+                continue
+            if emp_lower and emp_lower not in str(ent_owner).lower():
+                continue
+            if not _status_matches(ent_vstat):
+                continue
             if s_lower and s_lower not in e.name.lower() and not (e.description and s_lower in e.description.lower()):
                 continue
             items.append({
                 "id": e.id,
-                "category": e.entity_type,
+                "project_id": e.project_id,
+                "category": "Entities",
+                "entity_type": e.entity_type,
                 "title": e.name,
                 "subtitle": f"Entity Type: {e.entity_type}",
                 "content": e.description or "",
                 "summary": e.description or "",
-                "owner": (e.properties or {}).get("owner", "System"),
+                "owner": ent_owner,
                 "date": e.created_at.strftime("%Y-%m-%d") if e.created_at else "",
                 "status": "active",
-                "verification_status": getattr(e, "verification_status", "Needs Human Verification"),
+                "verification_status": ent_vstat,
                 "confidence": e.confidence,
                 "evidence_ids": [e.evidence_id] if e.evidence_id else [],
                 "tags": [e.entity_type],

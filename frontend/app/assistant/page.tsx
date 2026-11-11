@@ -34,7 +34,7 @@ export default function AssistantPage() {
       const projs = await api.getProjects().catch(() => [])
       const list = Array.isArray(projs) ? projs : []
       setProjects(list)
-      setActiveProject(resolveActiveProjectId(list, getStoredProjectId()))
+      setActiveProject(resolveActiveProjectId(list, getStoredProjectId()) || list[0]?.id || "")
     }
     loadProjects()
     const onProjectChange = () => {

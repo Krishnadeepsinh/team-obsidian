@@ -2,13 +2,15 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { Compass, Search, User, ShieldCheck } from "lucide-react"
 
 const CATEGORIES = [
   "All",
   "Decisions",
   "Tasks",
+  "Responsibilities",
+  "Dependencies",
   "Risks",
   "Knowledge Gaps",
   "Entities",
@@ -37,10 +39,11 @@ function KnowledgeExplorerContent() {
   const [search, setSearch] = useState(urlSearch)
   const [loading, setLoading] = useState(true)
 
-  const loadData = useCallback(async (pid?: string, cat?: string, q?: string, vstat?: string, emp?: string) => {
+  const loadData = useCallback(async (cat?: string, q?: string, vstat?: string, emp?: string) => {
     try {
       setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
+      const allSelected = isAllProjectsSelected()
+      const storedPid = allSelected ? "" : getStoredProjectId()
       const [projs, rowsRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api
@@ -55,11 +58,11 @@ function KnowledgeExplorerContent() {
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
-      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      const resolvedPid = allSelected ? "" : resolveActiveProjectId(projList, storedPid || undefined)
       setActiveProject(resolvedPid)
 
       let finalRows = Array.isArray(rowsRaw) ? rowsRaw : []
-      if (resolvedPid && resolvedPid !== storedPid) {
+      if (!allSelected && resolvedPid && resolvedPid !== storedPid) {
         finalRows = await api
           .getKnowledgeExplorer(
             resolvedPid,
@@ -79,21 +82,26 @@ function KnowledgeExplorerContent() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearch(urlSearch)
-      loadData(undefined, "All", urlSearch, "All", "")
+      loadData("All", urlSearch, "All", "")
     }, 0)
     return () => clearTimeout(timer)
   }, [loadData, urlSearch])
 
   useEffect(() => {
     const onProjectChange = () => {
-      loadData(undefined, category, search, verificationStatus, employee)
+      loadData(category, search, verificationStatus, employee)
     }
     window.addEventListener("obsidian_project_changed", onProjectChange)
     return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [loadData, category, search, verificationStatus, employee])
 
-  const applyFilters = (nextPid = activeProject, nextCat = category, nextQ = search, nextVs = verificationStatus, nextEmp = employee) => {
-    loadData(nextPid, nextCat, nextQ, nextVs, nextEmp)
+  const applyFilters = (nextCat = category, nextQ = search, nextVs = verificationStatus, nextEmp = employee) => {
+    loadData(nextCat, nextQ, nextVs, nextEmp)
+  }
+
+  const projectNames: Record<string, string> = {}
+  for (const p of projects) {
+    if (p?.id) projectNames[p.id] = p.name
   }
 
   return (
@@ -111,8 +119,7 @@ function KnowledgeExplorerContent() {
           onChange={(e) => {
             const pid = e.target.value
             setActiveProject(pid)
-            setStoredProjectId(pid || undefined)
-            applyFilters(pid, category, search, verificationStatus, employee)
+            setStoredProjectId(pid)
           }}
           className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
         >
@@ -133,7 +140,7 @@ function KnowledgeExplorerContent() {
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value)
-                applyFilters(activeProject, category, e.target.value, verificationStatus, employee)
+                applyFilters(category, e.target.value, verificationStatus, employee)
               }}
               placeholder="Search titles, summaries, rationale..."
               className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500 focus:bg-white"
@@ -147,7 +154,7 @@ function KnowledgeExplorerContent() {
               value={employee}
               onChange={(e) => {
                 setEmployee(e.target.value)
-                applyFilters(activeProject, category, search, verificationStatus, e.target.value)
+                applyFilters(category, search, verificationStatus, e.target.value)
               }}
               placeholder="Filter by owner / author..."
               className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500 focus:bg-white"
@@ -158,7 +165,7 @@ function KnowledgeExplorerContent() {
             value={verificationStatus}
             onChange={(e) => {
               setVerificationStatus(e.target.value)
-              applyFilters(activeProject, category, search, e.target.value, employee)
+              applyFilters(category, search, e.target.value, employee)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500"
           >
@@ -168,23 +175,26 @@ function KnowledgeExplorerContent() {
           </select>
         </div>
 
-        <div className="flex flex-wrap gap-1.5">
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => {
-                setCategory(cat)
-                applyFilters(activeProject, cat, search, verificationStatus, employee)
-              }}
-              className={`px-3 py-1 rounded-xl text-[11px] font-semibold border transition-all ${
-                category === cat
-                  ? "bg-violet-600 text-white border-violet-600 shadow-sm"
-                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => {
+                  setCategory(cat)
+                  applyFilters(cat, search, verificationStatus, employee)
+                }}
+                className={`px-3 py-1 rounded-xl text-[11px] font-semibold border transition-all ${
+                  category === cat
+                    ? "bg-violet-600 text-white border-violet-600 shadow-sm"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+          <span className="text-[11px] font-mono text-slate-500">{items.length} Records</span>
         </div>
       </div>
 
@@ -193,10 +203,17 @@ function KnowledgeExplorerContent() {
         {items.map((item) => (
           <div key={`${item.category}-${item.id}`} className="apple-card p-5 flex flex-col justify-between gap-3">
             <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase bg-violet-50 text-violet-700 border border-violet-200">
-                  {item.category}
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase bg-violet-50 text-violet-700 border border-violet-200">
+                    {item.entity_type ? `${item.category}: ${item.entity_type}` : item.category}
+                  </span>
+                  {!activeProject && item.project_id && projectNames[item.project_id] && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold truncate max-w-[120px]">
+                      {projectNames[item.project_id]}
+                    </span>
+                  )}
+                </div>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold">
                   {item.verification_status || item.status}
                 </span>
