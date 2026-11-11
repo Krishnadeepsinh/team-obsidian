@@ -9,6 +9,7 @@ from app.core.permissions import get_user_accessible_project_ids, normalize_role
 from app.core.security import get_current_user
 from app.models.workspace import ActivityLog, Notification, Organization, ProjectMember, User
 from app.schemas.auth import UserResponse
+from app.services.ai_engine import ai_engine
 from app.services.audit_service import record_activity
 
 router = APIRouter(prefix="/team", tags=["Organisation"])
@@ -116,7 +117,7 @@ def get_org_settings(
         "org_name": org.name if org else f"{current_user.name}'s Organization",
         "primary_llm": settings.PRIMARY_LLM,
         "secondary_llm": settings.SECONDARY_LLM,
-        "embedding_model": f"{settings.EMBEDDING_MODEL} ({settings.EMBEDDING_DIMENSIONS} dim)",
+        "embedding_model": f"{ai_engine.effective_embedding_model} ({settings.EMBEDDING_DIMENSIONS} dim)",
         "database": "PostgreSQL + pgvector" if "postgres" in settings.DATABASE_URL else "SQLite (Local)",
         "evidence_verification_threshold": stored_settings.get("evidence_verification_threshold", 0.75),
         "require_security_approval": stored_settings.get("require_security_approval", False),

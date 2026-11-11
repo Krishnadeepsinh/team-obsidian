@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
+from app.services.ai_engine import ai_engine
 
 from app.api.v1.assistant import router as assistant_router
 from app.api.v1.auth import router as auth_router
@@ -82,7 +83,7 @@ def healthcheck():
         "version": settings.VERSION,
         "primary_llm": settings.PRIMARY_LLM,
         "secondary_llm": settings.SECONDARY_LLM,
-        "embedding_model": settings.EMBEDDING_MODEL,
+        "embedding_model": ai_engine.effective_embedding_model,
         "embedding_dimensions": settings.EMBEDDING_DIMENSIONS,
     }
 

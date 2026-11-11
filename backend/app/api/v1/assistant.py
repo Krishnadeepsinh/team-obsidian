@@ -112,21 +112,25 @@ def query_assistant(
         }
         missing_evs = [ev for ev in all_evidences if ev.id not in existing_embeddings]
         if missing_evs:
-            batch_texts = [f"{ev.source_title}\n{ev.excerpt}" for ev in missing_evs]
-            batch_vecs = ai_engine.generate_embeddings_batch(batch_texts)
-            for ev, vec in zip(missing_evs, batch_vecs):
-                existing_embeddings[ev.id] = vec
-                db.add(
-                    EmbeddingRecord(
-                        project_id=project_id,
-                        entity_type="evidence",
-                        entity_id=ev.id,
-                        text_content=f"{ev.source_title}\n{ev.excerpt}",
-                        embedding=vec,
-                        embedding_vector=vec,
-                    )
-                )
-            db.flush()
+            try:
+                batch_texts = [f"{ev.source_title}\n{ev.excerpt}" for ev in missing_evs]
+                batch_vecs = ai_engine.generate_embeddings_batch(batch_texts)
+                if len(batch_vecs) == len(missing_evs):
+                    for ev, vec in zip(missing_evs, batch_vecs):
+                        existing_embeddings[ev.id] = vec
+                        db.add(
+                            EmbeddingRecord(
+                                project_id=project_id,
+                                entity_type="evidence",
+                                entity_id=ev.id,
+                                text_content=f"{ev.source_title}\n{ev.excerpt}",
+                                embedding=vec,
+                                embedding_vector=vec,
+                            )
+                        )
+                    db.flush()
+            except Exception:
+                db.rollback()
 
         for ev in all_evidences:
             ev_vec = existing_embeddings.get(ev.id)

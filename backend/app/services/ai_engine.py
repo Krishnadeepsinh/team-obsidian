@@ -129,6 +129,17 @@ class AIEngine:
         self._embedder = None
         self._genai_client = None
 
+    @property
+    def effective_embedding_model(self) -> str:
+        if self._should_use_api_embeddings():
+            return "gemini-embedding-001"
+        return self.embedding_model_name
+
+    def _should_use_api_embeddings(self) -> bool:
+        return bool(settings.GEMINI_API_KEY) and (
+            settings.APP_ENV == "production" or "gemini" in (self.embedding_model_name or "").lower()
+        )
+
     def _get_embedder(self):
         if self._embedder is None:
             from fastembed import TextEmbedding
@@ -140,10 +151,11 @@ class AIEngine:
     def _get_client(self):
         if self._genai_client is None and settings.GEMINI_API_KEY:
             from google import genai
+            from google.genai import types
 
             self._genai_client = genai.Client(
                 api_key=settings.GEMINI_API_KEY,
-                http_options={"api_version": "v1beta"},
+                http_options=types.HttpOptions(api_version="v1beta", timeout=15000),
             )
         return self._genai_client
 
@@ -196,11 +208,44 @@ class AIEngine:
                 raise
         raise last_exc or RuntimeError("No Gemini model candidates succeeded")
 
+    def _embed_via_gemini_api(self, cleaned_texts: List[str]) -> List[List[float]]:
+        from google.genai import types
+
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Gemini client not configured for API embeddings.")
+
+        vectors: List[List[float]] = []
+        batch_size = 64
+        for start in range(0, len(cleaned_texts), batch_size):
+            batch = cleaned_texts[start : start + batch_size]
+            res = client.models.embed_content(
+                model="gemini-embedding-001",
+                contents=batch,
+                config=types.EmbedContentConfig(output_dimensionality=self.embedding_dimensions),
+            )
+            for emb in res.embeddings or []:
+                arr = np.asarray(emb.values, dtype=np.float32)
+                norm = np.linalg.norm(arr)
+                if norm > 0:
+                    arr = arr / norm
+                vectors.append(arr.tolist())
+        return vectors
+
     def generate_embedding(self, text: str) -> List[float]:
-        """Generate a real 384-dimensional normalized semantic embedding using BAAI/bge-small-en-v1.5."""
+        """Generate a 384-dim normalized semantic embedding (low-RAM Gemini API in prod, BAAI/bge-small-en-v1.5 locally)."""
         cleaned = (text or "").strip()
         if not cleaned:
             return [0.0] * self.embedding_dimensions
+        if self._should_use_api_embeddings():
+            try:
+                vecs = self._embed_via_gemini_api([cleaned[:4000]])
+                if vecs:
+                    return vecs[0]
+            except Exception as exc:
+                logger.warning("Gemini API single embedding failed (%s)", str(exc)[:120])
+                if settings.APP_ENV == "production":
+                    return [0.0] * self.embedding_dimensions
         embedder = self._get_embedder()
         vec = next(embedder.embed([cleaned[:4000]]))
         arr = np.asarray(vec, dtype=np.float32)
@@ -212,6 +257,23 @@ class AIEngine:
     def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
+        non_empty_positions = [(idx, (t or "").strip()[:4000]) for idx, t in enumerate(texts) if (t or "").strip()]
+        if not non_empty_positions:
+            return [[0.0] * self.embedding_dimensions for _ in texts]
+
+        if self._should_use_api_embeddings():
+            try:
+                api_vecs = self._embed_via_gemini_api([txt for _, txt in non_empty_positions])
+                if len(api_vecs) == len(non_empty_positions):
+                    out = [[0.0] * self.embedding_dimensions for _ in texts]
+                    for (orig_idx, _), vec in zip(non_empty_positions, api_vecs):
+                        out[orig_idx] = vec
+                    return out
+            except Exception as exc:
+                logger.warning("Gemini API batch embedding failed (%s)", str(exc)[:120])
+                if settings.APP_ENV == "production":
+                    return []
+
         embedder = self._get_embedder()
         cleaned = [(t or "").strip()[:4000] or "empty" for t in texts]
         vectors: List[List[float]] = []
