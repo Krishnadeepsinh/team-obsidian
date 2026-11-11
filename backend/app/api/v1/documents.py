@@ -6,12 +6,12 @@ import uuid
 from typing import List, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_effective_project, get_user_accessible_project_ids, verify_project_access
 from app.core.security import get_current_user
 from app.models.evidence import Evidence
@@ -88,8 +88,22 @@ def list_documents(
     return query.order_by(Document.created_at.desc()).all()
 
 
+def _run_background_extraction(project_id: str, actor_user_id: str, doc_id: str) -> None:
+    """Extract structured knowledge graph items in a standalone DB session after upload responds."""
+    bg_db = SessionLocal()
+    try:
+        extract_and_persist_project_knowledge(bg_db, project_id, actor_user_id=actor_user_id)
+    except Exception as exc:
+        bg_db.rollback()
+        logger.warning("Post-upload knowledge extraction skipped for doc %s: %s", doc_id, exc)
+    finally:
+        bg_db.close()
+        gc.collect()
+
+
 @router.post("/upload", response_model=DocumentResponse)
-async def upload_document(
+def upload_document(
+    background_tasks: BackgroundTasks,
     project_id: str = Form(""),
     title: str = Form(""),
     extract_knowledge: bool = Form(True),
@@ -108,7 +122,7 @@ async def upload_document(
             detail=f"Unsupported or dangerous file type '.{ext}'. Allowed types: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     file_size = len(file_bytes)
     if file_size == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -293,12 +307,7 @@ async def upload_document(
     db.refresh(doc)
 
     if extract_knowledge and chunk_recs:
-        try:
-            extract_and_persist_project_knowledge(db, project_id, actor_user_id=current_user.id)
-        except Exception as exc:
-            db.rollback()
-            logger.warning("Post-upload knowledge extraction skipped for doc %s: %s", doc_id, exc)
-            db.refresh(doc)
+        background_tasks.add_task(_run_background_extraction, project_id, current_user.id, doc_id)
 
     gc.collect()
     return doc

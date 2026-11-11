@@ -155,21 +155,19 @@ class AIEngine:
 
             self._genai_client = genai.Client(
                 api_key=settings.GEMINI_API_KEY,
-                http_options=types.HttpOptions(api_version="v1beta", timeout=15000),
+                http_options=types.HttpOptions(api_version="v1beta", timeout=12000),
             )
         return self._genai_client
 
     def _generate_content_with_fallback(self, client, preferred_model: str, contents: str, config: Any):
-        """Try preferred Gemini model, falling back on retired (404) or rate-limited (429) Flash tiers."""
+        """Try preferred Gemini model, falling back on retired (404), overloaded (503), or rate-limited (429) tiers."""
         candidates = []
-        for m in [
-            preferred_model,
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-flash-latest",
-            "gemini-flash-lite-latest",
-            "gemini-2.5-flash",
-        ]:
+        fallback_order = (
+            [preferred_model, "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"]
+            if preferred_model == self.secondary_model_name
+            else [preferred_model, "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"]
+        )
+        for m in fallback_order:
             if m and m not in candidates:
                 candidates.append(m)
 
