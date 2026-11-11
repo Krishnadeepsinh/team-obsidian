@@ -24,6 +24,7 @@ export default function DocumentsPage() {
   const [activeProject, setActiveProject] = useState<string>("")
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [title, setTitle] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -163,13 +164,19 @@ export default function DocumentsPage() {
   }
 
   const handleDelete = async (doc: any) => {
+    if (deletingId === doc.id) return
     if (!confirm(`Delete "${doc.title}"? Associated chunk references will be removed.`)) return
     try {
+      setDeletingId(doc.id)
+      setError("")
       await api.deleteDocument(doc.id)
+      setDocs((prev) => prev.filter((d) => d.id !== doc.id))
       setMessage(`Deleted "${doc.title}".`)
       await loadData(activeProject || undefined)
     } catch (err: any) {
       setError(err.message || "Delete failed.")
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -347,7 +354,8 @@ export default function DocumentsPage() {
                 </button>
                 <button
                   onClick={() => handleDelete(doc)}
-                  className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                  disabled={deletingId === doc.id}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40"
                   title="Delete Document"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
