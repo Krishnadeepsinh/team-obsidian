@@ -446,6 +446,17 @@ def test_knowledge_graph_database_integration(audit_context):
     assert "stats" in data
     assert data["stats"]["total_nodes"] == len(data["nodes"])
 
+    positions = [(n["position"]["x"], n["position"]["y"]) for n in data["nodes"]]
+    assert len(set(positions)) == len(positions)
+    for n in data["nodes"]:
+        assert n["type"] == "customKnowledgeNode"
+        assert "isSpof" in n["data"]
+        assert n["data"]["color"].startswith("#")
+    for sp in data.get("spof_warnings", []):
+        assert sp.get("component_name")
+        assert sp.get("sole_owner")
+        assert "downstream_impact_count" in sp
+
     # Test blast radius on the checkout API node
     first_node_id = audit_context["first_entity_id"]
     br_res = client.get(f"/api/v1/graph/blast-radius/{first_node_id}", headers=audit_context["headers"])

@@ -6,8 +6,13 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
+  Handle,
+  Position,
+  MarkerType,
   useNodesState,
   useEdgesState,
+  type ReactFlowInstance,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
@@ -20,26 +25,100 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   ShieldCheck,
+  Maximize2,
   X,
 } from "lucide-react"
 
-const ENTITY_TYPES = [
+const DEFAULT_ENTITY_TYPES = [
   "All",
   "person",
+  "component",
   "service",
-  "database",
   "infrastructure",
+  "database",
   "external_service",
+  "organization",
   "decision",
   "risk",
 ]
 
+function CustomKnowledgeNode({ data, selected }: { data: any; selected?: boolean }) {
+  const accentColor = data?.color || "#0EA5E9"
+  const badgeBg = data?.bg || "#F0F9FF"
+  const badgeText = data?.textColor || "#0C4A6E"
+  const isSpof = Boolean(data?.isSpof)
+  const confidencePct = Math.round((data?.confidence ?? 0.75) * 100)
+
+  return (
+    <div
+      className={`w-[224px] rounded-2xl bg-white px-3.5 py-2.5 transition-all select-none ${
+        selected
+          ? "ring-2 ring-violet-500 shadow-lg"
+          : isSpof
+          ? "ring-2 ring-amber-400/80 shadow-md"
+          : "shadow-sm hover:shadow-md"
+      }`}
+      style={{
+        border: `1.5px solid ${selected ? "#7C3AED" : isSpof ? "#F59E0B" : accentColor}`,
+      }}
+    >
+      <Handle type="target" position={Position.Top} className="!w-2 !h-2 !bg-slate-400 !border-white" />
+
+      <div className="flex items-center justify-between gap-1.5">
+        <span
+          className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide truncate max-w-[130px]"
+          style={{
+            backgroundColor: badgeBg,
+            color: badgeText,
+            border: `1px solid ${accentColor}40`,
+          }}
+        >
+          {String(data?.entityType || "entity").replace(/_/g, " ")}
+        </span>
+        {isSpof ? (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-[9px] font-bold">
+            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+            SPOF
+          </span>
+        ) : (
+          <span className="text-[9px] font-semibold text-slate-400">{confidencePct}%</span>
+        )}
+      </div>
+
+      <div className="mt-1.5 text-xs font-bold text-slate-900 leading-snug line-clamp-2" title={data?.label}>
+        {data?.label || "Entity"}
+      </div>
+
+      {data?.description && (
+        <p className="mt-1 text-[10px] text-slate-500 leading-snug line-clamp-2" title={data.description}>
+          {data.description}
+        </p>
+      )}
+
+      <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-[9px] text-slate-400">
+        <span>{data?.degree ?? 0} {(data?.degree ?? 0) === 1 ? "link" : "links"}</span>
+        <span className="truncate max-w-[130px]">
+          {data?.soleOwner ? `Owner: ${data.soleOwner}` : `${confidencePct}% conf`}
+        </span>
+      </div>
+
+      <Handle type="source" position={Position.Bottom} className="!w-2 !h-2 !bg-slate-400 !border-white" />
+    </div>
+  )
+}
+
+const nodeTypes = {
+  customKnowledgeNode: CustomKnowledgeNode,
+}
+
 export default function KnowledgeGraphPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<any>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<any>([])
+  const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null)
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState("")
   const [entityType, setEntityType] = useState("All")
+  const [availableTypes, setAvailableTypes] = useState<string[]>(DEFAULT_ENTITY_TYPES)
   const [search, setSearch] = useState("")
   const [spofWarnings, setSpofWarnings] = useState<any[]>([])
   const [stats, setStats] = useState<any>({})
@@ -71,10 +150,32 @@ export default function KnowledgeGraphPage() {
           .getGraphReactFlow(resolvedPid, etype, q || undefined)
           .catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} }))
       }
-      setNodes(graphRes.nodes || [])
-      setEdges(graphRes.edges || [])
+      const nextNodes = Array.isArray(graphRes.nodes) ? graphRes.nodes : []
+      const nextEdges = (Array.isArray(graphRes.edges) ? graphRes.edges : []).map((edge: any) => ({
+        ...edge,
+        markerEnd: edge.markerEnd || {
+          type: MarkerType.ArrowClosed,
+          width: 15,
+          height: 15,
+          color: edge.style?.stroke || "#7C3AED",
+        },
+      }))
+      setNodes(nextNodes)
+      setEdges(nextEdges)
       setSpofWarnings(graphRes.spof_warnings || [])
       setStats(graphRes.stats || {})
+
+      if (!etype || etype === "All") {
+        const discovered = Array.from(
+          new Set(
+            nextNodes
+              .map((n: any) => String(n?.data?.entityType || "").trim().toLowerCase())
+              .filter(Boolean)
+          )
+        )
+        const merged = Array.from(new Set([...DEFAULT_ENTITY_TYPES, ...discovered]))
+        setAvailableTypes(merged)
+      }
     } finally {
       setLoading(false)
     }
@@ -92,9 +193,18 @@ export default function KnowledgeGraphPage() {
     return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [loadGraph, entityType, search])
 
+  useEffect(() => {
+    if (!rfInstance || loading || nodes.length === 0) return
+    const timer = window.setTimeout(() => {
+      rfInstance.fitView({ padding: 0.22, maxZoom: 1.0, duration: 250 })
+    }, 60)
+    return () => window.clearTimeout(timer)
+  }, [rfInstance, loading, nodes.length, activeProject, entityType])
+
   const handleFilterChange = (nextType: string, nextSearch: string, nextPid: string) => {
     setEntityType(nextType)
     setSearch(nextSearch)
+    setSelectedNode(null)
     loadGraph(nextPid, nextType, nextSearch)
   }
 
@@ -132,8 +242,18 @@ export default function KnowledgeGraphPage() {
     }
   }, [])
 
+  const focusNodeById = (nodeId?: string) => {
+    if (!nodeId) return
+    const target = nodes.find((n: any) => n.id === nodeId)
+    if (!target) return
+    onNodeClick(null, target)
+    if (rfInstance) {
+      rfInstance.fitView({ nodes: [{ id: nodeId }], padding: 0.8, maxZoom: 1.05, duration: 300 })
+    }
+  }
+
   return (
-    <div className="p-6 max-w-[1440px] mx-auto space-y-4">
+    <div className="p-4 sm:p-5 max-w-[1440px] mx-auto space-y-3.5">
       {/* Header & Actions */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
@@ -183,9 +303,9 @@ export default function KnowledgeGraphPage() {
       )}
 
       {/* Search & Entity Filters + SPOF Summary */}
-      <div className="apple-card p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="apple-card p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2 flex-1">
-          <div className="relative flex-1 min-w-[220px] max-w-sm">
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -197,7 +317,7 @@ export default function KnowledgeGraphPage() {
           </div>
 
           <div className="flex flex-wrap gap-1.5">
-            {ENTITY_TYPES.map((et) => (
+            {availableTypes.map((et) => (
               <button
                 key={et}
                 onClick={() => handleFilterChange(et, search, activeProject)}
@@ -207,13 +327,13 @@ export default function KnowledgeGraphPage() {
                     : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                 }`}
               >
-                {et.replace("_", " ")}
+                {et.replace(/_/g, " ")}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-slate-500">
+        <div className="flex items-center gap-3 text-xs text-slate-500 flex-shrink-0">
           <span className="font-semibold text-slate-700">{nodes.length} Nodes</span>
           <span>•</span>
           <span className="font-semibold text-slate-700">{edges.length} Relationships</span>
@@ -228,17 +348,30 @@ export default function KnowledgeGraphPage() {
 
       {/* SPOF Warnings */}
       {spofWarnings.length > 0 && (
-        <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 flex flex-wrap items-center gap-3 text-xs">
+        <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 flex flex-wrap items-center gap-2.5 text-xs">
           <div className="flex items-center gap-1.5 font-bold text-amber-800">
             <AlertTriangle className="w-4 h-4 text-amber-600" />
             <span>Single Points of Failure Detected ({spofWarnings.length}):</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {spofWarnings.slice(0, 5).map((sp: any, idx: number) => (
-              <span key={idx} className="px-2.5 py-0.5 rounded-full bg-white border border-amber-200 text-amber-800 font-semibold text-[11px]">
-                {sp.name || sp.entity_name || sp.node_name} ({sp.dependent_count ?? sp.impact_score ?? "Critical"})
-              </span>
-            ))}
+            {spofWarnings.slice(0, 6).map((sp: any, idx: number) => {
+              const spofName = sp.component_name || sp.name || sp.entity_name || sp.node_name || "Unnamed Component"
+              const owner = sp.sole_owner ? ` — Owner: ${sp.sole_owner}` : ""
+              const impact = sp.downstream_impact_count ?? sp.dependent_count ?? sp.impact_score
+              const impactLabel = impact !== undefined ? `${impact} downstream` : "Critical"
+              return (
+                <button
+                  key={sp.component_id || idx}
+                  type="button"
+                  onClick={() => focusNodeById(sp.component_id)}
+                  className="px-2.5 py-0.5 rounded-full bg-white hover:bg-amber-100 border border-amber-300 text-amber-900 font-semibold text-[11px] transition-colors cursor-pointer"
+                  title="Click to focus node and inspect blast radius"
+                >
+                  {spofName}
+                  <span className="font-normal text-amber-700">{owner} ({impactLabel})</span>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
@@ -246,7 +379,7 @@ export default function KnowledgeGraphPage() {
       {/* Interactive Graph Canvas */}
       <div
         data-testid="graph-canvas"
-        className="apple-card relative h-[560px] w-full overflow-hidden border border-slate-200 bg-[#FAFBFF]"
+        className="apple-card relative h-[calc(100vh-290px)] min-h-[430px] max-h-[600px] w-full overflow-hidden border border-slate-200 bg-[#FAFBFF]"
       >
         {loading ? (
           <div className="h-full flex items-center justify-center text-xs text-slate-400">
@@ -264,14 +397,36 @@ export default function KnowledgeGraphPage() {
           <ReactFlow
             nodes={nodes}
             edges={edges}
+            nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
+            onInit={setRfInstance}
+            minZoom={0.2}
+            maxZoom={1.75}
             fitView
+            fitViewOptions={{ padding: 0.22, maxZoom: 1.0 }}
+            zoomOnScroll={false}
+            panOnScroll={false}
+            zoomOnPinch
+            zoomOnDoubleClick={false}
           >
             <Background color="#CBD5E1" gap={18} />
-            <Controls />
+            <Controls showInteractive={false} />
             <MiniMap zoomable pannable nodeColor="#7C3AED" />
+            <Panel position="top-right" className="flex items-center gap-2">
+              <span className="hidden sm:inline-block px-2.5 py-1 rounded-lg bg-white/90 border border-slate-200 text-[10px] text-slate-500 shadow-xs">
+                Click any node for blast radius • Drag canvas to pan
+              </span>
+              <button
+                type="button"
+                onClick={() => rfInstance?.fitView({ padding: 0.22, maxZoom: 1.0, duration: 250 })}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white hover:bg-slate-50 border border-slate-200 text-[11px] font-semibold text-slate-700 shadow-xs"
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>Fit View</span>
+              </button>
+            </Panel>
           </ReactFlow>
         )}
 
