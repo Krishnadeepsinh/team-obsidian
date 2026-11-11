@@ -10,6 +10,9 @@ export default function RisksPage() {
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState("")
+  const [errorMsg, setErrorMsg] = useState("")
+  const [modalError, setModalError] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
   // Form state
   const [title, setTitle] = useState("")
@@ -27,8 +30,8 @@ export default function RisksPage() {
       setSelectedProjectId(resolvedPid)
       const data = await api.getRisks(resolvedPid || undefined)
       setRisks(data)
-    } catch (err) {
-      console.error("Risks error:", err)
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to load risks.")
     } finally {
       setLoading(false)
     }
@@ -45,6 +48,9 @@ export default function RisksPage() {
     e.preventDefault()
     if (!title.trim() || !description.trim()) return
     try {
+      setSubmitting(true)
+      setModalError("")
+      setErrorMsg("")
       const compList = components.split(",").map(c => c.trim()).filter(Boolean)
       await api.createRisk({
         project_id: selectedProjectId || getStoredProjectId() || undefined,
@@ -61,17 +67,20 @@ export default function RisksPage() {
       setDescription("")
       setMitigation("")
       setComponents("")
-    } catch (err) {
-      console.error("Create risk error:", err)
+    } catch (err: any) {
+      setModalError(err?.message || "Failed to log risk.")
+    } finally {
+      setSubmitting(false)
     }
   }
 
   const handleToggleRiskStatus = async (riskId: string, currentStatus: string) => {
     try {
+      setErrorMsg("")
       await api.updateRiskStatus(riskId, currentStatus === "mitigated" ? "open" : "mitigated")
       await loadRisks()
-    } catch (err) {
-      console.error("Risk status update error:", err)
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to update risk status.")
     }
   }
 
@@ -95,6 +104,12 @@ export default function RisksPage() {
           <span>Log Risk</span>
         </button>
       </div>
+
+      {errorMsg && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+          {errorMsg}
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-3 apple-card p-3">
         <div className="relative flex-1 max-w-md">
@@ -203,8 +218,13 @@ export default function RisksPage() {
           <div className="apple-card max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">Log Technical Risk</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
+              <button onClick={() => { setShowModal(false); setModalError("") }} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
             </div>
+            {modalError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {modalError}
+              </div>
+            )}
             <form onSubmit={handleCreate} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Risk Title *</label>
@@ -285,9 +305,10 @@ export default function RisksPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20"
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white shadow-md shadow-rose-600/20"
                 >
-                  Save Risk
+                  {submitting ? "Saving..." : "Save Risk"}
                 </button>
               </div>
             </form>

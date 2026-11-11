@@ -10,6 +10,9 @@ export default function DecisionsPage() {
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string>("")
+  const [errorMsg, setErrorMsg] = useState("")
+  const [modalError, setModalError] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
   // Form state
   const [title, setTitle] = useState("")
@@ -26,8 +29,8 @@ export default function DecisionsPage() {
       const data = await api.getDecisions(resolvedPid || undefined)
       setDecisions(data)
       setSelectedProjectId(resolvedPid)
-    } catch (err) {
-      console.error("Decisions load error:", err)
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to load decisions.")
     } finally {
       setLoading(false)
     }
@@ -44,6 +47,9 @@ export default function DecisionsPage() {
     e.preventDefault()
     if (!title.trim()) return
     try {
+      setSubmitting(true)
+      setModalError("")
+      setErrorMsg("")
       await api.createDecision({
         project_id: selectedProjectId || undefined,
         title,
@@ -60,8 +66,10 @@ export default function DecisionsPage() {
       setTitle("")
       setSummary("")
       setReasoning("")
-    } catch (err) {
-      console.error("Create decision error:", err)
+    } catch (err: any) {
+      setModalError(err?.message || "Failed to save decision.")
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -86,6 +94,12 @@ export default function DecisionsPage() {
           <span>New Decision (ADR)</span>
         </button>
       </div>
+
+      {errorMsg && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+          {errorMsg}
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-3 apple-card p-3">
         <div className="relative flex-1 max-w-md">
@@ -178,8 +192,13 @@ export default function DecisionsPage() {
           <div className="apple-card max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">Record Architectural Decision (ADR)</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
+              <button onClick={() => { setShowModal(false); setModalError("") }} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
             </div>
+            {modalError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {modalError}
+              </div>
+            )}
             <form onSubmit={handleCreate} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Decision Title *</label>
@@ -245,9 +264,10 @@ export default function DecisionsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-600/20"
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white shadow-md shadow-violet-600/20"
                 >
-                  Save Decision
+                  {submitting ? "Saving..." : "Save Decision"}
                 </button>
               </div>
             </form>

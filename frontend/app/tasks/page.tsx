@@ -11,6 +11,9 @@ export default function TasksPage() {
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState("")
+  const [errorMsg, setErrorMsg] = useState("")
+  const [modalError, setModalError] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
   // Form state
   const [title, setTitle] = useState("")
@@ -29,8 +32,8 @@ export default function TasksPage() {
       setSelectedProjectId(resolvedPid)
       const data = await api.getTasks(resolvedPid || undefined)
       setTasks(data)
-    } catch (err) {
-      console.error("Tasks load error:", err)
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to load tasks.")
     } finally {
       setLoading(false)
     }
@@ -47,6 +50,9 @@ export default function TasksPage() {
     e.preventDefault()
     if (!title.trim() || !owner.trim()) return
     try {
+      setSubmitting(true)
+      setModalError("")
+      setErrorMsg("")
       await api.createTask({
         project_id: selectedProjectId || getStoredProjectId() || undefined,
         title,
@@ -63,26 +69,30 @@ export default function TasksPage() {
       setDescription("")
       setOwner("")
       setReassignmentTarget("")
-    } catch (err) {
-      console.error("Create task error:", err)
+    } catch (err: any) {
+      setModalError(err?.message || "Failed to create task.")
+    } finally {
+      setSubmitting(false)
     }
   }
 
   const handleReassign = async (taskId: string, newOwner: string) => {
     try {
+      setErrorMsg("")
       await api.reassignTask(taskId, newOwner)
       loadTasks()
-    } catch (err) {
-      console.error("Reassign error:", err)
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to reassign task.")
     }
   }
 
   const handleToggleStatus = async (taskId: string, currentStatus: string) => {
     try {
+      setErrorMsg("")
       await api.updateTaskStatus(taskId, currentStatus === "completed" ? "open" : "completed")
       await loadTasks()
-    } catch (err) {
-      console.error("Task status error:", err)
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to update task status.")
     }
   }
 
@@ -118,6 +128,12 @@ export default function TasksPage() {
           </button>
         </div>
       </div>
+
+      {errorMsg && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+          {errorMsg}
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-3 apple-card p-3">
         <div className="relative flex-1 max-w-md">
@@ -230,8 +246,13 @@ export default function TasksPage() {
           <div className="apple-card max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">Create New Task</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
+              <button onClick={() => { setShowModal(false); setModalError("") }} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
             </div>
+            {modalError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {modalError}
+              </div>
+            )}
             <form onSubmit={handleCreate} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Task Title *</label>
@@ -325,9 +346,10 @@ export default function TasksPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-600/20"
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white shadow-md shadow-violet-600/20"
                 >
-                  Save Task
+                  {submitting ? "Saving..." : "Save Task"}
                 </button>
               </div>
             </form>
