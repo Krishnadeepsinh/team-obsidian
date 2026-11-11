@@ -10,7 +10,7 @@ import {
   useEdgesState,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Network,
   Sparkles,
@@ -46,6 +46,7 @@ export default function KnowledgeGraphPage() {
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
   const [statusMsg, setStatusMsg] = useState("")
+  const [errorMsg, setErrorMsg] = useState("")
 
   const [selectedNode, setSelectedNode] = useState<any>(null)
   const [blastRadius, setBlastRadius] = useState<any>(null)
@@ -55,13 +56,21 @@ export default function KnowledgeGraphPage() {
     try {
       setLoading(true)
       const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, graphRes] = await Promise.all([
+      const [projs, graphResRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getGraphReactFlow(storedPid || undefined, etype, q || undefined).catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} })),
       ])
-      setProjects(Array.isArray(projs) ? projs : [])
-      const resolvedPid = storedPid || (Array.isArray(projs) && projs[0]?.id) || ""
-      if (pid === undefined) setActiveProject(resolvedPid)
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      setActiveProject(resolvedPid)
+
+      let graphRes = graphResRaw
+      if (resolvedPid && resolvedPid !== storedPid) {
+        graphRes = await api
+          .getGraphReactFlow(resolvedPid, etype, q || undefined)
+          .catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} }))
+      }
       setNodes(graphRes.nodes || [])
       setEdges(graphRes.edges || [])
       setSpofWarnings(graphRes.spof_warnings || [])
@@ -75,6 +84,14 @@ export default function KnowledgeGraphPage() {
     loadGraph(undefined, "All", "")
   }, [loadGraph])
 
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadGraph(undefined, entityType, search)
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadGraph, entityType, search])
+
   const handleFilterChange = (nextType: string, nextSearch: string, nextPid: string) => {
     setEntityType(nextType)
     setSearch(nextSearch)
@@ -84,17 +101,18 @@ export default function KnowledgeGraphPage() {
   const handleExtract = async () => {
     const pid = activeProject || projects[0]?.id
     if (!pid) {
-      alert("Select or create a project first.")
+      setErrorMsg("Select or create a project first.")
       return
     }
     try {
       setExtracting(true)
       setStatusMsg("")
+      setErrorMsg("")
       const res = await api.extractKnowledgeGraph(pid)
       setStatusMsg(res.message || "Extracted entities, relationships, ADRs, risks, and dependencies from project evidence.")
       await loadGraph(pid, entityType, search)
     } catch (err: any) {
-      alert(err.message || "AI Knowledge Extraction failed.")
+      setErrorMsg(err.message || "AI Knowledge Extraction failed.")
     } finally {
       setExtracting(false)
     }
@@ -153,6 +171,11 @@ export default function KnowledgeGraphPage() {
         </div>
       </div>
 
+      {errorMsg && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+          {errorMsg}
+        </div>
+      )}
       {statusMsg && (
         <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium">
           {statusMsg}

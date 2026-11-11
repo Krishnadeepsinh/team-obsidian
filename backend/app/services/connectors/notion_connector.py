@@ -218,12 +218,93 @@ class NotionConnector(BaseConnector):
             cursor = data.get("next_cursor")
         return rows_text
 
-    def sync_pages(self, since_iso: Optional[str] = None, max_pages: int = 10) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _normalize_notion_id(raw_id: str) -> str:
+        return (raw_id or "").strip().replace("-", "").lower()
+
+    def list_accessible_resources(self, max_pages: int = 2) -> List[Dict[str, Any]]:
+        """List Notion pages and databases accessible to this token."""
+        if not self.token:
+            return []
+        resources: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+        for _ in range(max_pages):
+            body: Dict[str, Any] = {
+                "page_size": 50,
+                "sort": {"direction": "descending", "timestamp": "last_edited_time"},
+            }
+            if cursor:
+                body["start_cursor"] = cursor
+            res = self._request_with_retry("POST", f"{self.base_url}/search", headers=self.headers, json_body=body)
+            if res.status_code != 200:
+                raise ConnectorError(f"Notion failed to list accessible resources ({res.status_code}): {res.text[:200]}")
+            data = res.json()
+            for item in data.get("results", []):
+                resources.append({
+                    "id": item.get("id", ""),
+                    "object": item.get("object", "page"),
+                    "title": self._extract_page_title(item),
+                    "url": item.get("url"),
+                    "last_edited_time": item.get("last_edited_time"),
+                })
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+        return resources
+
+    def _build_record_from_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        obj_type = item.get("object", "page")
+        item_id = item.get("id", "")
+        title = self._extract_page_title(item)
+        author_id = (item.get("last_edited_by") or {}).get("id") or "Notion Author"
+        edited_dt = parse_iso_timestamp(item.get("last_edited_time"))
+
+        if obj_type == "database":
+            rows = self._fetch_database_rows(item_id)
+            body_text = "\n".join(rows) if rows else "Database schema synchronized (0 rows)."
+            source_type = "notion_database"
+        else:
+            blocks = self._fetch_children_blocks(item_id)
+            body_text = "\n".join(blocks).strip() or f"Notion Page: {title}"
+            source_type = "notion_page"
+
+        content = f"Notion {obj_type.title()}: {title}\nURL: {item.get('url')}\nLast Edited: {item.get('last_edited_time')}\n\n{body_text}"
+        return {
+            "source_type": source_type,
+            "external_id": item_id,
+            "title": f"Notion: {title}",
+            "author": author_id,
+            "url": item.get("url"),
+            "content": content,
+            "sha256": compute_sha256(content),
+            "source_timestamp": edited_dt or parse_iso_timestamp(item.get("created_time")),
+            "metadata": {"object": obj_type, "notion_id": item_id},
+            "raw_payload": item,
+        }
+
+    def _fetch_target_item(self, target_id: str) -> Optional[Dict[str, Any]]:
+        clean_id = target_id.strip()
+        if not clean_id:
+            return None
+        for endpoint in (f"{self.base_url}/databases/{clean_id}", f"{self.base_url}/pages/{clean_id}"):
+            res = self._request_with_retry("GET", endpoint, headers=self.headers)
+            if res.status_code == 200:
+                return res.json()
+        return None
+
+    def sync_pages(
+        self,
+        since_iso: Optional[str] = None,
+        max_pages: int = 10,
+        target_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Fetch authorized Notion pages & databases with full recursive block content."""
         if not self.token:
             raise ConnectorError("Missing Notion token.")
 
+        normalized_targets = {self._normalize_notion_id(t) for t in (target_ids or []) if str(t).strip()}
         records: List[Dict[str, Any]] = []
+        seen_normalized: set[str] = set()
         since_dt = parse_iso_timestamp(since_iso)
         cursor: Optional[str] = None
 
@@ -241,41 +322,33 @@ class NotionConnector(BaseConnector):
 
             data = res.json()
             for item in data.get("results", []):
+                item_norm = self._normalize_notion_id(item.get("id", ""))
+                if normalized_targets and item_norm not in normalized_targets:
+                    continue
+
                 edited_dt = parse_iso_timestamp(item.get("last_edited_time"))
                 if since_dt and edited_dt and edited_dt <= since_dt:
                     return records
 
-                obj_type = item.get("object", "page")
-                item_id = item.get("id", "")
-                title = self._extract_page_title(item)
-                author_id = (item.get("last_edited_by") or {}).get("id") or "Notion Author"
+                records.append(self._build_record_from_item(item))
+                seen_normalized.add(item_norm)
 
-                if obj_type == "database":
-                    rows = self._fetch_database_rows(item_id)
-                    body_text = "\n".join(rows) if rows else "Database schema synchronized (0 rows)."
-                    source_type = "notion_database"
-                else:
-                    blocks = self._fetch_children_blocks(item_id)
-                    body_text = "\n".join(blocks).strip() or f"Notion Page: {title}"
-                    source_type = "notion_page"
-
-                content = f"Notion {obj_type.title()}: {title}\nURL: {item.get('url')}\nLast Edited: {item.get('last_edited_time')}\n\n{body_text}"
-                records.append({
-                    "source_type": source_type,
-                    "external_id": item_id,
-                    "title": f"Notion: {title}",
-                    "author": author_id,
-                    "url": item.get("url"),
-                    "content": content,
-                    "sha256": compute_sha256(content),
-                    "source_timestamp": edited_dt or parse_iso_timestamp(item.get("created_time")),
-                    "metadata": {"object": obj_type, "notion_id": item_id},
-                    "raw_payload": item,
-                })
-
+            if normalized_targets and normalized_targets.issubset(seen_normalized):
+                break
             if not data.get("has_more"):
                 break
             cursor = data.get("next_cursor")
+
+        if normalized_targets:
+            for raw_target in target_ids or []:
+                norm = self._normalize_notion_id(raw_target)
+                if norm and norm not in seen_normalized:
+                    item = self._fetch_target_item(raw_target)
+                    if item:
+                        edited_dt = parse_iso_timestamp(item.get("last_edited_time"))
+                        if not (since_dt and edited_dt and edited_dt <= since_dt):
+                            records.append(self._build_record_from_item(item))
+                        seen_normalized.add(norm)
 
         return records
 
@@ -284,9 +357,20 @@ class NotionConnector(BaseConnector):
         config: Optional[Dict[str, Any]] = None,
         sync_cursor: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        cfg = config or {}
         cursor = dict(sync_cursor or {})
         since_iso = cursor.get("last_edited_time")
-        records = self.sync_pages(since_iso=since_iso)
+
+        target_ids: List[str] = []
+        raw_targets = cfg.get("targets")
+        if isinstance(raw_targets, list) and raw_targets:
+            target_ids = [str(t).strip() for t in raw_targets if str(t).strip()]
+        else:
+            raw_single = str(cfg.get("database_id") or cfg.get("page_id") or cfg.get("target") or "").strip()
+            if raw_single:
+                target_ids = [t.strip() for t in raw_single.split(",") if t.strip()]
+
+        records = self.sync_pages(since_iso=since_iso, target_ids=target_ids or None)
         cursor["last_edited_time"] = datetime.now(timezone.utc).isoformat()
         return records, cursor
 

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
@@ -40,6 +40,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState("Workspace")
   const [searchQuery, setSearchQuery] = useState("")
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [showProjectMenu, setShowProjectMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [activeProject, setActiveProject] = useState("My Workspace")
@@ -89,6 +90,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setMobileNavOpen(false)
   }, [pathname])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
 
   useEffect(() => {
     if (pathname === "/activity" || pathname === "/logs" || pathname === "/timeline") {
@@ -504,6 +517,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="relative hidden sm:block">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                ref={searchInputRef}
                 type="text"
                 placeholder="Search projects, decisions, tasks..."
                 value={searchQuery}

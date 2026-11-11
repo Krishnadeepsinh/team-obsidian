@@ -347,6 +347,13 @@ export const api = {
   verifyIntegration: async (id: string) =>
     fetchJson<any>(`/integrations/${id}/verify`, { method: "POST" }),
   getIntegrationEvents: async (id: string) => fetchJson<any[]>(`/integrations/${id}/events`),
+  getIntegrationResources: async (id: string) =>
+    fetchJson<{ provider: string; resources: any[]; hint?: string | null }>(`/integrations/${id}/resources`),
+  discoverIntegrationResources: async (provider: string, token: string) =>
+    fetchJson<{ provider: string; resources: any[]; hint?: string | null }>("/integrations/discover-resources", {
+      method: "POST",
+      body: JSON.stringify({ provider, token }),
+    }),
   updateIntegrationConfig: async (id: string, data: { config: any; name?: string }) =>
     fetchJson<any>(`/integrations/${id}/config`, { method: "PUT", body: JSON.stringify(data) }),
   triggerSync: async (id: string) =>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { ShieldCheck, Search, ExternalLink, Clock, User } from "lucide-react"
 
 const STATUS_FILTERS = [
@@ -42,18 +42,28 @@ export default function EvidencePage() {
   const [selectedAudit, setSelectedAudit] = useState<any>(null)
   const [auditNotes, setAuditNotes] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [auditError, setAuditError] = useState("")
 
   const loadData = useCallback(async (pid?: string, status?: string, query?: string) => {
     try {
       setLoading(true)
       const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, res] = await Promise.all([
+      const [projs, resRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getEvidence(storedPid || undefined, status === "All" ? undefined : status, query || undefined).catch(() => []),
       ])
-      setProjects(Array.isArray(projs) ? projs : [])
-      setActiveProject(storedPid)
-      setEvidences(Array.isArray(res) ? res : [])
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      setActiveProject(resolvedPid)
+
+      let finalRes = Array.isArray(resRaw) ? resRaw : []
+      if (resolvedPid && resolvedPid !== storedPid) {
+        finalRes = await api
+          .getEvidence(resolvedPid, status === "All" ? undefined : status, query || undefined)
+          .catch(() => [])
+      }
+      setEvidences(Array.isArray(finalRes) ? finalRes : [])
     } finally {
       setLoading(false)
     }
@@ -63,16 +73,25 @@ export default function EvidencePage() {
     loadData(undefined, "All", "")
   }, [loadData])
 
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadData(undefined, statusFilter, search)
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadData, statusFilter, search])
+
   const handleAuditAction = async (newStatus: string) => {
     if (!selectedAudit) return
     try {
       setSubmitting(true)
+      setAuditError("")
       await api.auditEvidence(selectedAudit.id, newStatus, auditNotes)
       setSelectedAudit(null)
       setAuditNotes("")
       await loadData(activeProject, statusFilter, search)
     } catch (err: any) {
-      alert(err.message || "Audit submission failed")
+      setAuditError(err.message || "Audit submission failed")
     } finally {
       setSubmitting(false)
     }
@@ -259,10 +278,22 @@ export default function EvidencePage() {
           <div className="apple-card max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">Verify Evidence Provenance</h3>
-              <button onClick={() => setSelectedAudit(null)} className="text-slate-400 hover:text-slate-600 text-xs">
+              <button
+                onClick={() => {
+                  setSelectedAudit(null)
+                  setAuditError("")
+                }}
+                className="text-slate-400 hover:text-slate-600 text-xs"
+              >
                 ✕ Close
               </button>
             </div>
+
+            {auditError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {auditError}
+              </div>
+            )}
 
             <div className="text-xs space-y-2.5">
               <p className="font-bold text-slate-900">{selectedAudit.source_title}</p>

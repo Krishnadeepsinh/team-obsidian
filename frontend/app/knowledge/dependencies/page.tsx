@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { useCallback, useEffect, useState } from "react"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { GitMerge, Search, ShieldAlert } from "lucide-react"
 
 export default function DependenciesPage() {
@@ -12,25 +12,40 @@ export default function DependenciesPage() {
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
 
-  const loadData = async (pid?: string) => {
+  const loadData = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
       const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, rows] = await Promise.all([
+      const [projs, rowsRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getDependencies(storedPid || undefined).catch(() => []),
       ])
-      setProjects(Array.isArray(projs) ? projs : [])
-      setActiveProject(storedPid)
-      setDeps(Array.isArray(rows) ? rows : [])
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      setActiveProject(resolvedPid)
+
+      let finalRows = Array.isArray(rowsRaw) ? rowsRaw : []
+      if (resolvedPid && resolvedPid !== storedPid) {
+        finalRows = await api.getDependencies(resolvedPid).catch(() => [])
+      }
+      setDeps(Array.isArray(finalRows) ? finalRows : [])
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadData()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadData])
 
   const filtered = deps.filter((d) => {
     const matchCrit =

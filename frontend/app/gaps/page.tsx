@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { api, getStoredProjectId } from "@/lib/api"
+import { useCallback, useEffect, useState } from "react"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { HelpCircle, Plus, CheckCircle2, AlertTriangle, RotateCcw } from "lucide-react"
 
 export default function GapsPage() {
@@ -10,6 +10,7 @@ export default function GapsPage() {
   const [activeProject, setActiveProject] = useState("")
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [errorMsg, setErrorMsg] = useState("")
 
   // Create form
   const [title, setTitle] = useState("")
@@ -18,36 +19,53 @@ export default function GapsPage() {
   const [severity, setSeverity] = useState("high")
   const [impact, setImpact] = useState("")
   const [recommendedAction, setRecommendedAction] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
-  const loadAll = async (pid?: string) => {
+  const loadAll = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
       const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, list] = await Promise.all([
+      const [projs, listRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getGaps(storedPid || undefined).catch(() => []),
       ])
-      setProjects(Array.isArray(projs) ? projs : [])
-      const resolved = storedPid || (Array.isArray(projs) && projs[0]?.id) || ""
-      if (pid === undefined) setActiveProject(resolved)
-      setGaps(Array.isArray(list) ? list : [])
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolved = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      setActiveProject(resolved)
+
+      let finalList = Array.isArray(listRaw) ? listRaw : []
+      if (resolved && resolved !== storedPid) {
+        finalList = await api.getGaps(resolved).catch(() => [])
+      }
+      setGaps(Array.isArray(finalList) ? finalList : [])
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadAll()
-  }, [])
+  }, [loadAll])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadAll()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadAll])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
     const targetPid = activeProject || projects[0]?.id || ""
     if (!targetPid) {
-      alert("Create a project first before logging a knowledge gap.")
+      setErrorMsg("Create a project first before logging a knowledge gap.")
       return
     }
     try {
+      setSubmitting(true)
+      setErrorMsg("")
       await api.createGap({
         project_id: targetPid,
         title,
@@ -64,17 +82,20 @@ export default function GapsPage() {
       setRecommendedAction("")
       await loadAll(activeProject)
     } catch (err: any) {
-      alert(err.message || "Could not log knowledge gap")
+      setErrorMsg(err.message || "Could not log knowledge gap")
+    } finally {
+      setSubmitting(false)
     }
   }
 
   const handleToggleStatus = async (gap: any) => {
     const nextStatus = gap.status === "resolved" ? "open" : "resolved"
     try {
+      setErrorMsg("")
       await api.resolveGap(gap.id, nextStatus)
       await loadAll(activeProject)
     } catch (err: any) {
-      alert(err.message || "Failed to update gap status")
+      setErrorMsg(err.message || "Failed to update gap status")
     }
   }
 
@@ -94,6 +115,7 @@ export default function GapsPage() {
             onChange={(e) => {
               const pid = e.target.value
               setActiveProject(pid)
+              setStoredProjectId(pid || undefined)
               loadAll(pid)
             }}
             className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm"
@@ -105,6 +127,7 @@ export default function GapsPage() {
           </select>
 
           <button
+            disabled={submitting}
             onClick={() => setShowModal(true)}
             className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-600/20 flex items-center gap-1.5"
           >
@@ -112,6 +135,12 @@ export default function GapsPage() {
           </button>
         </div>
       </div>
+
+      {errorMsg && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+          {errorMsg}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {gaps.map((g) => {

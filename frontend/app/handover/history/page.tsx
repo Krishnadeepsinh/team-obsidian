@@ -35,6 +35,14 @@ export default function HandoverHistoryPage() {
     loadData()
   }, [loadData])
 
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadData()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadData])
+
   const versions = handover?.versions || []
 
   return (

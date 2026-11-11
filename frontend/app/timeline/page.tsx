@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { useCallback, useEffect, useState } from "react"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { Clock, Scale, CheckSquare, GitCommit, ExternalLink } from "lucide-react"
 
 export default function TimelinePage() {
@@ -10,7 +10,7 @@ export default function TimelinePage() {
   const [events, setEvents] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
-  const loadTimeline = async (pid?: string) => {
+  const loadTimeline = useCallback(async (pid?: string) => {
     try {
       setLoading(true)
       const storedPid = pid !== undefined ? pid : getStoredProjectId()
@@ -18,7 +18,7 @@ export default function TimelinePage() {
       const list = Array.isArray(projs) ? projs : []
       setProjects(list)
 
-      const targetPid = storedPid || list[0]?.id || ""
+      const targetPid = resolveActiveProjectId(list, storedPid)
       setActiveProject(targetPid)
 
       if (targetPid) {
@@ -30,11 +30,19 @@ export default function TimelinePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadTimeline()
-  }, [])
+  }, [loadTimeline])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadTimeline()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadTimeline])
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-5">

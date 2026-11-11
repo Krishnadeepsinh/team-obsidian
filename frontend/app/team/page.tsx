@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { api, getStoredProjectId } from "@/lib/api"
 import { Users, Mail, Search, ShieldCheck } from "lucide-react"
@@ -10,19 +10,28 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
 
-  useEffect(() => {
-    const loadMembers = async () => {
-      try {
-        setLoading(true)
-        const storedPid = getStoredProjectId() || undefined
-        const list = await api.getTeamMembers(storedPid).catch(() => [])
-        setMembers(Array.isArray(list) ? list : [])
-      } finally {
-        setLoading(false)
-      }
+  const loadMembers = useCallback(async () => {
+    try {
+      setLoading(true)
+      const storedPid = getStoredProjectId() || undefined
+      const list = await api.getTeamMembers(storedPid).catch(() => [])
+      setMembers(Array.isArray(list) ? list : [])
+    } finally {
+      setLoading(false)
     }
-    loadMembers()
   }, [])
+
+  useEffect(() => {
+    loadMembers()
+  }, [loadMembers])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadMembers()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadMembers])
 
   const filtered = members.filter(
     (m) =>

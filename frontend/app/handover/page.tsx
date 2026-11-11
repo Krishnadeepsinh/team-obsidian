@@ -122,6 +122,14 @@ export default function HandoverPage() {
   }, [loadHandoverList])
 
   useEffect(() => {
+    const onProjectChange = () => {
+      loadHandoverList()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadHandoverList])
+
+  useEffect(() => {
     if (showWizard && wizardProjectId) {
       api.getIntegrations(wizardProjectId).then((res) => {
         const list = Array.isArray(res) ? res : []

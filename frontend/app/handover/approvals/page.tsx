@@ -38,6 +38,14 @@ export default function ApprovalsPage() {
     loadData()
   }, [loadData])
 
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadData()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadData])
+
   const handleDecision = async (role: string, approverName: string, decisionStatus: string) => {
     if (!handover) return
     try {

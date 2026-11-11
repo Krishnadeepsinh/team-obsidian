@@ -37,6 +37,11 @@ export default function AssistantPage() {
       setActiveProject(resolveActiveProjectId(list, getStoredProjectId()))
     }
     loadProjects()
+    const onProjectChange = () => {
+      loadProjects()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [])
 
   const handleSend = async (questionText: string) => {

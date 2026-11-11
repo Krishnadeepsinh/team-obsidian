@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { api, getStoredProjectId } from "@/lib/api"
 import { Terminal, Search, RefreshCw } from "lucide-react"
 
@@ -9,7 +9,7 @@ export default function AuditLogsPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       setLoading(true)
       const storedPid = getStoredProjectId() || undefined
@@ -18,11 +18,19 @@ export default function AuditLogsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadLogs()
-  }, [])
+  }, [loadLogs])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadLogs()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadLogs])
 
   const filtered = logs.filter((l) => {
     if (!search.trim()) return true

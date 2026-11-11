@@ -67,6 +67,38 @@ class GitHubConnector(BaseConnector):
             "token": payload["access_token"],
             "scope": payload.get("scope", ""),
             "token_type": payload.get("token_type", "bearer"),
+            **({"refresh_token": payload["refresh_token"]} if payload.get("refresh_token") else {}),
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
+        }
+
+    @classmethod
+    def refresh_oauth_token(cls, refresh_token: str) -> Dict[str, Any]:
+        if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+            raise ConnectorError("Missing GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET.")
+        connector = cls()
+        res = connector._request_with_retry(
+            "POST",
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": settings.GITHUB_CLIENT_ID,
+                "client_secret": settings.GITHUB_CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+        )
+        payload = res.json() if res.text else {}
+        if res.status_code != 200 or not payload.get("access_token"):
+            raise ConnectorError(
+                f"GitHub token refresh failed: {payload.get('error_description') or payload.get('error') or res.status_code}"
+            )
+        return {
+            "access_token": payload["access_token"],
+            "token": payload["access_token"],
+            "scope": payload.get("scope", ""),
+            "token_type": payload.get("token_type", "bearer"),
+            "refresh_token": payload.get("refresh_token") or refresh_token,
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
         }
 
     def check_connection(self) -> Dict[str, Any]:
@@ -103,27 +135,72 @@ class GitHubConnector(BaseConnector):
         if not self.token:
             return []
         repos: List[Dict[str, Any]] = []
+        seen: set[str] = set()
         for page in range(1, max_pages + 1):
             res = self._request_with_retry(
                 "GET",
                 f"{self.base_url}/user/repos",
                 headers=self.headers,
-                params={"per_page": 100, "page": page, "sort": "updated"},
+                params={
+                    "per_page": 100,
+                    "page": page,
+                    "sort": "updated",
+                    "affiliation": "owner,collaborator,organization_member",
+                },
             )
             if res.status_code != 200:
+                if page == 1 and res.status_code in (401, 403):
+                    raise ConnectorError(
+                        f"GitHub rejected credentials while listing repositories ({res.status_code}): {res.text[:200]}"
+                    )
                 break
             batch = res.json()
             if not batch:
                 break
             for r in batch:
-                repos.append({
-                    "full_name": r.get("full_name"),
-                    "private": r.get("private", False),
-                    "default_branch": r.get("default_branch", "main"),
-                    "html_url": r.get("html_url"),
-                })
+                full_name = r.get("full_name")
+                if full_name and full_name not in seen:
+                    seen.add(full_name)
+                    repos.append({
+                        "full_name": full_name,
+                        "private": r.get("private", False),
+                        "default_branch": r.get("default_branch", "main"),
+                        "html_url": r.get("html_url"),
+                    })
             if len(batch) < 100:
                 break
+
+        # Fallback for GitHub App user-to-server tokens (ghu_...) whose accessible repos live under /user/installations
+        if not repos:
+            try:
+                inst_res = self._request_with_retry(
+                    "GET", f"{self.base_url}/user/installations", headers=self.headers, params={"per_page": 20}
+                )
+                if inst_res.status_code == 200:
+                    installations = (inst_res.json() or {}).get("installations") or []
+                    for inst in installations[:10]:
+                        inst_id = inst.get("id")
+                        if not inst_id:
+                            continue
+                        ir = self._request_with_retry(
+                            "GET",
+                            f"{self.base_url}/user/installations/{inst_id}/repositories",
+                            headers=self.headers,
+                            params={"per_page": 100},
+                        )
+                        if ir.status_code == 200:
+                            for r in (ir.json() or {}).get("repositories") or []:
+                                full_name = r.get("full_name")
+                                if full_name and full_name not in seen:
+                                    seen.add(full_name)
+                                    repos.append({
+                                        "full_name": full_name,
+                                        "private": r.get("private", False),
+                                        "default_branch": r.get("default_branch", "main"),
+                                        "html_url": r.get("html_url"),
+                                    })
+            except Exception:
+                pass
         return repos
 
     def _paginated_get(
@@ -410,10 +487,10 @@ class GitHubConnector(BaseConnector):
         if cfg.get("repos") and isinstance(cfg["repos"], list):
             repos = [r.strip() for r in cfg["repos"] if isinstance(r, str) and "/" in r]
         else:
-            target = (cfg.get("repo") or cfg.get("target") or "").strip()
-            if target and "/" in target:
-                repos = [target]
-            else:
+            raw_target = str(cfg.get("repo") or cfg.get("target") or "").strip()
+            if raw_target:
+                repos = [t.strip() for t in raw_target.split(",") if "/" in t.strip()]
+            if not repos:
                 # Auto-discover up to 5 most recently updated accessible repos
                 repos = [r["full_name"] for r in self.list_repositories(max_pages=1)[:5] if r.get("full_name")]
 

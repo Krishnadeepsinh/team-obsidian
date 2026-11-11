@@ -81,6 +81,14 @@ export default function DocumentsPage() {
     loadData()
   }, [loadData])
 
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadData()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadData])
+
   const handleFileChange = (picked: File | null) => {
     setError("")
     setFile(picked)

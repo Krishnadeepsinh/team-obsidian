@@ -11,6 +11,7 @@ export default function ProfilePage() {
   const [department, setDepartment] = useState("")
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileMsg, setProfileMsg] = useState("")
+  const [profileErr, setProfileErr] = useState("")
 
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -34,6 +35,7 @@ export default function ProfilePage() {
     try {
       setSavingProfile(true)
       setProfileMsg("")
+      setProfileErr("")
       const updated = await api.updateProfile({ name, title, department })
       setUser(updated)
       if (typeof window !== "undefined") {
@@ -41,7 +43,7 @@ export default function ProfilePage() {
       }
       setProfileMsg("Profile updated successfully.")
     } catch (err: any) {
-      alert(err.message || "Could not update profile.")
+      setProfileErr(err.message || "Could not update profile.")
     } finally {
       setSavingProfile(false)
     }
@@ -87,6 +89,11 @@ export default function ProfilePage() {
           )}
         </div>
 
+        {profileErr && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+            {profileErr}
+          </div>
+        )}
         {profileMsg && (
           <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium flex items-center gap-1.5">
             <CheckCircle2 className="w-4 h-4" /> {profileMsg}

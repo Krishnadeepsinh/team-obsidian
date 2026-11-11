@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { Suspense, useCallback, useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import { Compass, Search, User, ShieldCheck } from "lucide-react"
 
 const CATEGORIES = [
@@ -24,21 +25,23 @@ const VERIFICATION_STATUSES = [
   "Unknown / Missing Evidence",
 ]
 
-export default function KnowledgeExplorerPage() {
+function KnowledgeExplorerContent() {
+  const searchParams = useSearchParams()
+  const urlSearch = searchParams.get("search") || ""
   const [items, setItems] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState("")
   const [category, setCategory] = useState("All")
   const [verificationStatus, setVerificationStatus] = useState("All")
   const [employee, setEmployee] = useState("")
-  const [search, setSearch] = useState("")
+  const [search, setSearch] = useState(urlSearch)
   const [loading, setLoading] = useState(true)
 
   const loadData = useCallback(async (pid?: string, cat?: string, q?: string, vstat?: string, emp?: string) => {
     try {
       setLoading(true)
       const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, rows] = await Promise.all([
+      const [projs, rowsRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api
           .getKnowledgeExplorer(
@@ -50,17 +53,44 @@ export default function KnowledgeExplorerPage() {
           )
           .catch(() => []),
       ])
-      setProjects(Array.isArray(projs) ? projs : [])
-      if (pid === undefined) setActiveProject(storedPid)
-      setItems(Array.isArray(rows) ? rows : [])
+      const projList = Array.isArray(projs) ? projs : []
+      setProjects(projList)
+      const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+      setActiveProject(resolvedPid)
+
+      let finalRows = Array.isArray(rowsRaw) ? rowsRaw : []
+      if (resolvedPid && resolvedPid !== storedPid) {
+        finalRows = await api
+          .getKnowledgeExplorer(
+            resolvedPid,
+            cat === "All" ? undefined : cat,
+            q || undefined,
+            vstat === "All" ? undefined : vstat,
+            emp || undefined
+          )
+          .catch(() => [])
+      }
+      setItems(Array.isArray(finalRows) ? finalRows : [])
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    loadData(undefined, "All", "", "All", "")
-  }, [loadData])
+    const timer = setTimeout(() => {
+      setSearch(urlSearch)
+      loadData(undefined, "All", urlSearch, "All", "")
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [loadData, urlSearch])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadData(undefined, category, search, verificationStatus, employee)
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
+  }, [loadData, category, search, verificationStatus, employee])
 
   const applyFilters = (nextPid = activeProject, nextCat = category, nextQ = search, nextVs = verificationStatus, nextEmp = employee) => {
     loadData(nextPid, nextCat, nextQ, nextVs, nextEmp)
@@ -198,5 +228,13 @@ export default function KnowledgeExplorerPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function KnowledgeExplorerPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-xs text-slate-400">Loading knowledge explorer...</div>}>
+      <KnowledgeExplorerContent />
+    </Suspense>
   )
 }

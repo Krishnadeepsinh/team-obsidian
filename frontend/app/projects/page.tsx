@@ -22,6 +22,8 @@ export default function ProjectsPage() {
   const [description, setDescription] = useState("")
   const [priority, setPriority] = useState("medium")
   const [tags, setTags] = useState("")
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState("")
 
   const loadProjects = async () => {
     try {
@@ -43,6 +45,8 @@ export default function ProjectsPage() {
     e.preventDefault()
     if (!name.trim()) return
     try {
+      setCreating(true)
+      setCreateError("")
       const tagList = tags.split(",").map(t => t.trim()).filter(Boolean)
       await api.createProject({
         name,
@@ -54,8 +58,11 @@ export default function ProjectsPage() {
       setShowModal(false)
       setName("")
       setDescription("")
-    } catch (err) {
-      console.error("Create project error:", err)
+      setTags("")
+    } catch (err: any) {
+      setCreateError(err.message || "Failed to create project.")
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -189,8 +196,13 @@ export default function ProjectsPage() {
           <div className="apple-card max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">Create New Project</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
+              <button onClick={() => { setShowModal(false); setCreateError("") }} className="text-slate-400 hover:text-slate-600 text-xs">✕ Close</button>
             </div>
+            {createError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {createError}
+              </div>
+            )}
             <form onSubmit={handleCreate} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Project Name *</label>
@@ -248,9 +260,10 @@ export default function ProjectsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-600/20"
+                  disabled={creating}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white shadow-md shadow-violet-600/20"
                 >
-                  Create Project
+                  {creating ? "Creating..." : "Create Project"}
                 </button>
               </div>
             </form>

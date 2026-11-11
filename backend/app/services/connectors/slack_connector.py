@@ -116,13 +116,19 @@ class SlackConnector(BaseConnector):
             return []
         channels: List[Dict[str, Any]] = []
         cursor = None
-        for _ in range(5):
+        for page_idx in range(5):
             params: Dict[str, Any] = {"types": "public_channel,private_channel", "limit": 200}
             if cursor:
                 params["cursor"] = cursor
             res = self._request_with_retry("GET", f"{self.base_url}/conversations.list", headers=self.headers, params=params)
+            if res.status_code != 200:
+                if page_idx == 0:
+                    raise ConnectorError(f"Slack rejected channel lookup ({res.status_code}): {res.text[:200]}")
+                break
             data = res.json()
             if not data.get("ok"):
+                if page_idx == 0:
+                    raise ConnectorError(f"Slack failed to list channels: {data.get('error', 'unknown_error')}")
                 break
             for ch in data.get("channels", []):
                 channels.append({"id": ch.get("id"), "name": ch.get("name"), "is_member": ch.get("is_member", False)})
@@ -249,11 +255,18 @@ class SlackConnector(BaseConnector):
         cursor = dict(sync_cursor or {})
 
         target_channels: List[Dict[str, str]] = []
-        raw_target = str(cfg.get("channel_id") or cfg.get("channel") or cfg.get("target") or "").strip()
+        raw_channels = cfg.get("channels")
+        tokens: List[str] = []
+        if isinstance(raw_channels, list) and raw_channels:
+            tokens = [str(t).strip().lstrip("#") for t in raw_channels if str(t).strip()]
+        else:
+            raw_target = str(cfg.get("channel_id") or cfg.get("channel") or cfg.get("target") or "").strip()
+            if raw_target:
+                tokens = [t.strip().lstrip("#") for t in raw_target.split(",") if t.strip()]
+
         channels_list = self.list_channels()
 
-        if raw_target:
-            tokens = [t.strip().lstrip("#") for t in raw_target.split(",") if t.strip()]
+        if tokens:
             for tok in tokens:
                 matched = [c for c in channels_list if c.get("id") == tok or c.get("name") == tok]
                 target_channels.extend(matched or [{"id": tok, "name": tok}])

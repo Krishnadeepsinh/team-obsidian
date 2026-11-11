@@ -1,6 +1,8 @@
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
@@ -8,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_user_accessible_project_ids, verify_project_access
 from app.core.security import (
     create_oauth_state_token,
@@ -37,6 +39,7 @@ from app.services.connectors import (
 from app.services.ingestion_service import upsert_source_records
 from app.services.knowledge_extractor import extract_and_persist_project_knowledge
 
+logger = logging.getLogger("team_obsidian.integrations")
 router = APIRouter(prefix="/integrations", tags=["Source Connections"])
 
 
@@ -48,6 +51,12 @@ class ReconnectRequest(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     config: Dict[str, Any]
     name: Optional[str] = None
+
+
+class DiscoverResourcesRequest(BaseModel):
+    provider: str
+    token: Optional[str] = None
+    credentials: Optional[Dict[str, Any]] = None
 
 
 def _to_response(i: Integration) -> IntegrationResponse:
@@ -71,10 +80,122 @@ def _to_response(i: Integration) -> IntegrationResponse:
     )
 
 
+def _token_from_dict(creds: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not creds:
+        return None
+    return creds.get("access_token") or creds.get("token") or creds.get("api_key") or creds.get("bot_token")
+
+
 def _extract_token(integ: Integration) -> Optional[str]:
     """Extract only the credentials bound to this integration (never fall back to host env tokens)."""
+    return _token_from_dict(decrypt_credentials(integ.credentials))
+
+
+def _refresh_github_token_if_possible(db: Session, integ: Integration) -> Optional[str]:
+    if (integ.provider or "").lower() != "github":
+        return None
     creds = decrypt_credentials(integ.credentials)
-    return creds.get("access_token") or creds.get("token") or creds.get("api_key") or creds.get("bot_token")
+    refresh_token = creds.get("refresh_token")
+    if not refresh_token:
+        return None
+    try:
+        new_bundle = GitHubConnector.refresh_oauth_token(refresh_token)
+        integ.credentials = encrypt_credentials(new_bundle)
+        integ.error_message = None
+        db.commit()
+        db.refresh(integ)
+        return new_bundle.get("access_token") or new_bundle.get("token")
+    except ConnectorError:
+        return None
+
+
+def _discover_provider_resources(provider: str, token: str) -> Dict[str, Any]:
+    prov = (provider or "").lower().strip()
+    if prov == "github":
+        repos = GitHubConnector(token=token).list_repositories(max_pages=3)
+        resources = [
+            {
+                "id": r.get("full_name"),
+                "label": r.get("full_name"),
+                "sublabel": f"{'Private' if r.get('private') else 'Public'} • branch: {r.get('default_branch') or 'main'}",
+                "value": r.get("full_name"),
+                "url": r.get("html_url"),
+                "private": bool(r.get("private", False)),
+                "default_branch": r.get("default_branch") or "main",
+            }
+            for r in repos
+            if r.get("full_name")
+        ]
+        hint = (
+            None
+            if resources
+            else "No repositories were returned for this token. If using a GitHub App OAuth login, ensure the GitHub App is installed on at least one repository under GitHub Settings -> Applications; if using a Personal Access Token, ensure the 'repo' scope is enabled."
+        )
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "slack":
+        channels = SlackConnector(token=token).list_channels()
+        channels_sorted = sorted(channels, key=lambda c: (not bool(c.get("is_member")), (c.get("name") or "").lower()))
+        resources = [
+            {
+                "id": ch.get("id"),
+                "label": f"#{ch.get('name') or ch.get('id')}",
+                "sublabel": "Bot is a member (ready to sync)" if ch.get("is_member") else "Invite bot with /invite @Team Obsidian in Slack",
+                "value": ch.get("id"),
+                "name": ch.get("name"),
+                "is_member": bool(ch.get("is_member", False)),
+            }
+            for ch in channels_sorted
+            if ch.get("id")
+        ]
+        hint = (
+            None
+            if resources
+            else "No accessible Slack channels found. Verify channels:read and groups:read scopes on your Slack app."
+        )
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "notion":
+        items = NotionConnector(token=token).list_accessible_resources(max_pages=2)
+        resources = [
+            {
+                "id": it.get("id"),
+                "label": it.get("title") or "Untitled",
+                "sublabel": str(it.get("object") or "page").title(),
+                "value": it.get("id"),
+                "object": it.get("object") or "page",
+                "url": it.get("url"),
+            }
+            for it in items
+            if it.get("id")
+        ]
+        hint = (
+            None
+            if resources
+            else "No Notion pages or databases are shared with this integration yet. Open a Notion page -> '...' -> Connections -> add Team Obsidian."
+        )
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    return {
+        "provider": prov,
+        "resources": [],
+        "hint": f"Resource discovery is not needed for provider '{prov}'.",
+    }
+
+
+def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None:
+    """Run knowledge extraction asynchronously in an isolated session after integration sync."""
+    bg_db = SessionLocal()
+    try:
+        extract_and_persist_project_knowledge(bg_db, project_id, actor_user_id=actor_user_id)
+    except Exception as exc:
+        logger.warning("Background sync knowledge extraction skipped for project %s: %s", project_id, exc)
+        try:
+            bg_db.rollback()
+        except Exception:
+            pass
+    finally:
+        bg_db.close()
 
 
 def _resolve_backend_base_url(request: Request) -> str:
@@ -130,7 +251,7 @@ def oauth_callback(
 ):
     """Handle OAuth redirect callback from GitHub, Slack, or Notion."""
     if error:
-        return RedirectResponse(f"{settings.FRONTEND_URL}/integrations?oauth_error={error}")
+        return RedirectResponse(f"{settings.FRONTEND_URL}/integrations?oauth_error={quote(str(error), safe='')}")
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing OAuth code or state parameter.")
 
@@ -159,7 +280,7 @@ def oauth_callback(
         if check.get("status") != "connected":
             raise ConnectorError(check.get("message", "Provider connection check failed."))
     except ConnectorError as exc:
-        return RedirectResponse(f"{settings.FRONTEND_URL}/integrations?oauth_error={str(exc)}")
+        return RedirectResponse(f"{settings.FRONTEND_URL}/integrations?oauth_error={quote(str(exc), safe='')}")
 
     integ = (
         db.query(Integration)
@@ -174,6 +295,7 @@ def oauth_callback(
             name=f"{provider.title()} ({check.get('connected_account') or 'OAuth'})",
         )
         db.add(integ)
+        db.flush()
 
     integ.auth_type = "oauth"
     integ.auth_status = "verified"
@@ -194,7 +316,10 @@ def oauth_callback(
         details={"message": f"Connected {provider} via OAuth ({integ.connected_account})"},
     )
     db.commit()
-    return RedirectResponse(f"{settings.FRONTEND_URL}/integrations?connected={provider.lower()}")
+    db.refresh(integ)
+    return RedirectResponse(
+        f"{settings.FRONTEND_URL}/integrations?connected={provider.lower()}&integration_id={integ.id}"
+    )
 
 
 @router.get("", response_model=List[IntegrationResponse])
@@ -225,7 +350,7 @@ def create_integration(
 
     provider = (integ_in.provider or "").lower()
     raw_creds = integ_in.credentials or {}
-    token = raw_creds.get("access_token") or raw_creds.get("token") or raw_creds.get("api_key")
+    token = _token_from_dict(raw_creds)
 
     connected_account = None
     scopes: List[str] = []
@@ -281,6 +406,54 @@ def create_integration(
     return _to_response(integ)
 
 
+@router.post("/discover-resources")
+def discover_resources_with_token(
+    req: DiscoverResourcesRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Discover selectable repositories, Slack channels, or Notion pages/databases using a candidate token before saving."""
+    token = (req.token or _token_from_dict(req.credentials) or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Please enter a valid {req.provider.title()} token first to load available resources.",
+        )
+    try:
+        return _discover_provider_resources(req.provider, token)
+    except ConnectorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/{integration_id}/resources")
+def list_integration_resources(
+    integration_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List repositories, Slack channels, or Notion pages/databases accessible to an existing integration."""
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db)
+
+    token = _extract_token(integ)
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Integration '{integ.name}' has no saved credentials. Please reconnect or enter a token.",
+        )
+    try:
+        return _discover_provider_resources(integ.provider, token)
+    except ConnectorError as exc:
+        refreshed = _refresh_github_token_if_possible(db, integ)
+        if refreshed:
+            try:
+                return _discover_provider_resources(integ.provider, refreshed)
+            except ConnectorError as exc2:
+                raise HTTPException(status_code=400, detail=str(exc2))
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/{integration_id}/verify")
 def verify_integration(
     integration_id: str,
@@ -298,6 +471,10 @@ def verify_integration(
 
     token = _extract_token(integ)
     check = connector_cls(token=token).check_connection()
+    if check.get("status") != "connected":
+        refreshed = _refresh_github_token_if_possible(db, integ)
+        if refreshed:
+            check = connector_cls(token=refreshed).check_connection()
     if check.get("status") == "connected":
         integ.auth_status = "verified"
         integ.status = "connected"
@@ -395,21 +572,32 @@ def trigger_sync(
     try:
         synced_records, new_cursor = connector.sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
     except ConnectorError as exc:
-        integ.status = "error"
-        integ.error_message = str(exc)
-        integ.last_error_at = datetime.now(timezone.utc)
-        db.add(
-            SourceEvent(
-                integration_id=integ.id,
-                event_type="sync_failed",
-                status="error",
-                records_added=0,
-                error_message=str(exc),
-                details={"provider": provider},
+        refreshed = _refresh_github_token_if_possible(db, integ)
+        if refreshed:
+            try:
+                synced_records, new_cursor = connector_cls(token=refreshed).sync(
+                    config=integ.config or {}, sync_cursor=integ.sync_cursor or {}
+                )
+            except ConnectorError as exc2:
+                exc = exc2
+            else:
+                exc = None
+        if exc is not None:
+            integ.status = "error"
+            integ.error_message = str(exc)
+            integ.last_error_at = datetime.now(timezone.utc)
+            db.add(
+                SourceEvent(
+                    integration_id=integ.id,
+                    event_type="sync_failed",
+                    status="error",
+                    records_added=0,
+                    error_message=str(exc),
+                    details={"provider": provider},
+                )
             )
-        )
-        db.commit()
-        raise HTTPException(status_code=400, detail=str(exc))
+            db.commit()
+            raise HTTPException(status_code=400, detail=str(exc))
 
     counts = upsert_source_records(
         db=db,
@@ -425,9 +613,10 @@ def trigger_sync(
     integ.last_sync = datetime.now(timezone.utc)
     db.commit()
 
-    extracted = {}
+    extracted: Dict[str, Any] = {}
     if extract_knowledge and (counts["added"] > 0 or counts["updated"] > 0):
-        extracted = extract_and_persist_project_knowledge(db, integ.project_id, actor_user_id=current_user.id)
+        background_tasks.add_task(_run_background_sync_extraction, integ.project_id, current_user.id)
+        extracted = {"status": "scheduled", "message": "Knowledge graph extraction scheduled in background."}
 
     return SyncResultResponse(
         integration_id=integ.id,
@@ -484,7 +673,7 @@ def reconnect_integration(
     verify_project_access(integ.project_id, current_user, db, require_write=True)
 
     creds_to_check = req.credentials or decrypt_credentials(integ.credentials)
-    token = creds_to_check.get("access_token") or creds_to_check.get("token") or creds_to_check.get("api_key")
+    token = _token_from_dict(creds_to_check)
     connector_cls = get_connector_class(integ.provider)
     if connector_cls:
         if not token:

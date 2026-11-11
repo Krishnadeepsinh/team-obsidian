@@ -1,8 +1,8 @@
 "use client"
 
-import { Suspense, useCallback, useEffect, useState } from "react"
+import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
 import {
   Github,
   MessageSquare,
@@ -17,8 +17,211 @@ import {
   History,
   ExternalLink,
   ShieldCheck,
+  Search,
+  Loader2,
   X,
 } from "lucide-react"
+
+function parseTargetsFromConfig(provider: string, cfg: Record<string, any> = {}): string[] {
+  const p = (provider || "").toLowerCase()
+  if (p === "github") {
+    if (Array.isArray(cfg.repos) && cfg.repos.length > 0) {
+      return cfg.repos.map((s: any) => String(s).trim()).filter(Boolean)
+    }
+    return String(cfg.repo || cfg.target || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (p === "slack") {
+    if (Array.isArray(cfg.channels) && cfg.channels.length > 0) {
+      return cfg.channels.map((s: any) => String(s).trim()).filter(Boolean)
+    }
+    return String(cfg.channel_id || cfg.channel || cfg.target || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (Array.isArray(cfg.targets) && cfg.targets.length > 0) {
+    return cfg.targets.map((s: any) => String(s).trim()).filter(Boolean)
+  }
+  return String(cfg.database_id || cfg.page_id || cfg.target || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function buildProviderConfig(provider: string, baseCfg: Record<string, any>, rawText: string): Record<string, any> {
+  const nextCfg = { ...(baseCfg || {}) }
+  const targets = rawText
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const p = (provider || "").toLowerCase()
+
+  if (p === "github") {
+    delete nextCfg.repo
+    delete nextCfg.repos
+    delete nextCfg.target
+    if (targets.length > 0) {
+      nextCfg.repos = targets
+      nextCfg.repo = targets.join(", ")
+    }
+    return nextCfg
+  }
+  if (p === "slack") {
+    delete nextCfg.channel_id
+    delete nextCfg.channels
+    delete nextCfg.target
+    if (targets.length > 0) {
+      nextCfg.channels = targets
+      nextCfg.channel_id = targets.join(", ")
+    }
+    return nextCfg
+  }
+  delete nextCfg.database_id
+  delete nextCfg.page_id
+  delete nextCfg.targets
+  delete nextCfg.target
+  if (targets.length > 0) {
+    nextCfg.targets = targets
+    nextCfg.database_id = targets.join(", ")
+  }
+  return nextCfg
+}
+
+function resourceNoun(provider?: string | null): string {
+  const p = (provider || "").toLowerCase()
+  if (p === "github") return "Repositories"
+  if (p === "slack") return "Channels"
+  if (p === "notion") return "Pages & Databases"
+  return "Targets"
+}
+
+function ResourcePickerList({
+  provider,
+  resources,
+  loading,
+  error,
+  hint,
+  search,
+  onSearchChange,
+  valueText,
+  onToggleValue,
+  onRefresh,
+  refreshLabel,
+}: {
+  provider: string
+  resources: any[]
+  loading: boolean
+  error: string
+  hint: string | null
+  search: string
+  onSearchChange: (v: string) => void
+  valueText: string
+  onToggleValue: (val: string) => void
+  onRefresh: () => void
+  refreshLabel: string
+}) {
+  const selected = new Set(
+    valueText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )
+  const filtered = resources.filter((r) => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return (
+      String(r.label || "").toLowerCase().includes(q) ||
+      String(r.sublabel || "").toLowerCase().includes(q) ||
+      String(r.value || "").toLowerCase().includes(q)
+    )
+  })
+
+  return (
+    <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-bold text-slate-700">
+          Available {resourceNoun(provider)}{" "}
+          {selected.size > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 text-[10px]">
+              {selected.size} selected
+            </span>
+          )}
+        </span>
+        <button
+          type="button"
+          disabled={loading}
+          onClick={onRefresh}
+          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-100 text-violet-700 inline-flex items-center gap-1 disabled:opacity-50"
+        >
+          {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+          {loading ? "Loading..." : refreshLabel}
+        </button>
+      </div>
+
+      {error && (
+        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] text-rose-700 font-medium">
+          {error}
+        </div>
+      )}
+
+      {hint && !error && (
+        <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
+          {hint}
+        </div>
+      )}
+
+      {resources.length > 0 && (
+        <>
+          <div className="relative">
+            <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder={`Filter ${resourceNoun(provider).toLowerCase()}...`}
+              className="w-full pl-7 pr-2.5 py-1.5 rounded-lg text-xs bg-white border border-slate-200 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <div className="max-h-44 overflow-y-auto space-y-1 pr-0.5">
+            {filtered.length === 0 ? (
+              <p className="text-[11px] text-slate-400 text-center py-3">No matches for &ldquo;{search}&rdquo;.</p>
+            ) : (
+              filtered.map((res) => {
+                const val = String(res.value || res.id || "")
+                const checked = selected.has(val)
+                return (
+                  <label
+                    key={val}
+                    className={`flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors ${
+                      checked
+                        ? "bg-violet-50 border-violet-300 text-slate-900"
+                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleValue(val)}
+                      className="mt-0.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold truncate">{res.label || val}</div>
+                      {res.sublabel && <div className="text-[10px] text-slate-500 truncate">{res.sublabel}</div>}
+                    </div>
+                  </label>
+                )
+              })
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 const PROVIDER_CARDS = [
   {
@@ -73,45 +276,117 @@ function IntegrationsContent() {
 
   // Token / Connect Modal
   const [connectProvider, setConnectProvider] = useState<string | null>(null)
+  const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null)
   const [connectName, setConnectName] = useState("")
   const [connectToken, setConnectToken] = useState("")
   const [connectConfigVal, setConnectConfigVal] = useState("")
+  const [connectResources, setConnectResources] = useState<any[]>([])
+  const [loadingConnectResources, setLoadingConnectResources] = useState(false)
+  const [connectResourceError, setConnectResourceError] = useState("")
+  const [connectResourceHint, setConnectResourceHint] = useState<string | null>(null)
+  const [connectResourceSearch, setConnectResourceSearch] = useState("")
+  const [connectModalError, setConnectModalError] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   // Config Modal
   const [configModal, setConfigModal] = useState<any>(null)
   const [editName, setEditName] = useState("")
   const [editConfigVal, setEditConfigVal] = useState("")
+  const [configResources, setConfigResources] = useState<any[]>([])
+  const [loadingConfigResources, setLoadingConfigResources] = useState(false)
+  const [configResourceError, setConfigResourceError] = useState("")
+  const [configResourceHint, setConfigResourceHint] = useState<string | null>(null)
+  const [configResourceSearch, setConfigResourceSearch] = useState("")
+  const [savingConfig, setSavingConfig] = useState(false)
 
   // Sync Events Drawer
   const [eventsModal, setEventsModal] = useState<any>(null)
   const [eventsList, setEventsList] = useState<any[]>([])
   const [loadingEvents, setLoadingEvents] = useState(false)
 
-  // Action busy tracker
+  // Action busy & inline delete confirmation trackers
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const callbackIntegIdRef = useRef<string | null>(searchParams.get("integration_id"))
 
-  const loadAll = useCallback(async (pid?: string) => {
+  const fetchConfigResources = useCallback(async (integrationId: string) => {
     try {
-      setLoading(true)
-      const storedPid = pid !== undefined ? pid : getStoredProjectId()
-      const [projs, integs, caps] = await Promise.all([
-        api.getProjects().catch(() => []),
-        api.getIntegrations(storedPid || undefined).catch(() => []),
-        api.getAuthCapabilities().catch(() => null),
-      ])
-      if (caps?.oauth_providers) setOauthProviders(caps.oauth_providers)
-      setProjects(Array.isArray(projs) ? projs : [])
-      const resolvedPid = storedPid || (Array.isArray(projs) && projs[0]?.id) || ""
-      setActiveProject(resolvedPid)
-      setIntegrations(Array.isArray(integs) ? integs : [])
+      setLoadingConfigResources(true)
+      setConfigResourceError("")
+      setConfigResourceHint(null)
+      const res = await api.getIntegrationResources(integrationId)
+      setConfigResources(Array.isArray(res?.resources) ? res.resources : [])
+      setConfigResourceHint(res?.hint || null)
+    } catch (err: any) {
+      setConfigResources([])
+      setConfigResourceError(err.message || "Could not load accessible resources.")
     } finally {
-      setLoading(false)
+      setLoadingConfigResources(false)
     }
   }, [])
 
+  const openConfigModal = useCallback(
+    (integ: any) => {
+      setConfigModal(integ)
+      setEditName(integ.name || "")
+      const targets = parseTargetsFromConfig(integ.provider, integ.config || {})
+      setEditConfigVal(targets.join(", "))
+      setConfigResources([])
+      setConfigResourceSearch("")
+      setConfigResourceError("")
+      setConfigResourceHint(null)
+      fetchConfigResources(integ.id)
+    },
+    [fetchConfigResources]
+  )
+
+  const loadAll = useCallback(
+    async (pid?: string) => {
+      try {
+        setLoading(true)
+        const storedPid = pid !== undefined ? pid : getStoredProjectId()
+        const [projs, integsRaw, caps] = await Promise.all([
+          api.getProjects().catch(() => []),
+          api.getIntegrations(storedPid || undefined).catch(() => []),
+          api.getAuthCapabilities().catch(() => null),
+        ])
+        if (caps?.oauth_providers) setOauthProviders(caps.oauth_providers)
+        const projList = Array.isArray(projs) ? projs : []
+        setProjects(projList)
+        const resolvedPid = pid === "" ? "" : resolveActiveProjectId(projList, pid)
+        setActiveProject(resolvedPid)
+
+        let finalIntegs = Array.isArray(integsRaw) ? integsRaw : []
+        if (resolvedPid && resolvedPid !== storedPid) {
+          finalIntegs = await api.getIntegrations(resolvedPid).catch(() => [])
+        }
+        setIntegrations(finalIntegs)
+
+        if (callbackIntegIdRef.current) {
+          const targetId = callbackIntegIdRef.current
+          const matched = finalIntegs.find((i: any) => i.id === targetId)
+          if (matched) {
+            callbackIntegIdRef.current = null
+            openConfigModal(matched)
+          }
+        }
+      } finally {
+        setLoading(false)
+      }
+    },
+    [openConfigModal]
+  )
+
   useEffect(() => {
     loadAll()
+  }, [loadAll])
+
+  useEffect(() => {
+    const onProjectChange = () => {
+      loadAll()
+    }
+    window.addEventListener("obsidian_project_changed", onProjectChange)
+    return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [loadAll])
 
   const targetProjectId = activeProject || projects[0]?.id || ""
@@ -135,43 +410,93 @@ function IntegrationsContent() {
     }
   }
 
-  const openTokenConnect = (provider: string) => {
+  const openTokenConnect = (provider: string, existingInteg?: any) => {
     if (!targetProjectId) {
       setError("Create a project in Projects first before connecting a source.")
       return
     }
     const meta = PROVIDER_CARDS.find((p) => p.key === provider)
     setConnectProvider(provider)
-    setConnectName(meta?.title || `${provider.toUpperCase()} Connector`)
+    setReconnectTargetId(existingInteg?.id || null)
+    setConnectName(existingInteg?.name || meta?.title || `${provider.toUpperCase()} Connector`)
     setConnectToken("")
-    setConnectConfigVal("")
+    setConnectConfigVal(
+      existingInteg ? parseTargetsFromConfig(provider, existingInteg.config || {}).join(", ") : ""
+    )
+    setConnectResources([])
+    setConnectResourceError("")
+    setConnectResourceHint(null)
+    setConnectResourceSearch("")
+    setConnectModalError("")
+  }
+
+  const handleDiscoverForConnect = async () => {
+    if (!connectProvider) return
+    if (!connectToken.trim()) {
+      setConnectResourceError("Enter your API / Bot Access Token first to fetch available targets.")
+      return
+    }
+    try {
+      setLoadingConnectResources(true)
+      setConnectResourceError("")
+      setConnectResourceHint(null)
+      const res = await api.discoverIntegrationResources(connectProvider, connectToken.trim())
+      setConnectResources(Array.isArray(res?.resources) ? res.resources : [])
+      setConnectResourceHint(res?.hint || null)
+    } catch (err: any) {
+      setConnectResources([])
+      setConnectResourceError(err.message || "Could not load available targets from provider.")
+    } finally {
+      setLoadingConnectResources(false)
+    }
+  }
+
+  const toggleTargetValue = (currentText: string, setter: (v: string) => void, targetVal: string) => {
+    const items = currentText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (items.includes(targetVal)) {
+      setter(items.filter((i) => i !== targetVal).join(", "))
+    } else {
+      setter([...items, targetVal].join(", "))
+    }
   }
 
   const handleTokenConnect = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!connectProvider) return
-    const config: Record<string, any> = {}
-    if (connectProvider === "github" && connectConfigVal.trim()) config.repo = connectConfigVal.trim()
-    if (connectProvider === "slack" && connectConfigVal.trim()) config.channel_id = connectConfigVal.trim()
-    if (connectProvider === "notion" && connectConfigVal.trim()) config.database_id = connectConfigVal.trim()
+    const config = buildProviderConfig(connectProvider, {}, connectConfigVal)
 
     try {
       setSubmitting(true)
       setError("")
       setMessage("")
-      await api.createIntegration({
-        project_id: targetProjectId,
-        provider: connectProvider,
-        name: connectName.trim() || `${connectProvider.toUpperCase()} Integration`,
-        auth_type: "token",
-        credentials: connectToken.trim() ? { access_token: connectToken.trim() } : {},
-        config,
-      })
+      setConnectModalError("")
+      if (reconnectTargetId) {
+        await api.reconnectIntegration(reconnectTargetId, {
+          credentials: connectToken.trim() ? { access_token: connectToken.trim() } : undefined,
+          config,
+        })
+        setMessage(`${connectProvider.toUpperCase()} integration reconnected and verified.`)
+      } else {
+        await api.createIntegration({
+          project_id: targetProjectId,
+          provider: connectProvider,
+          name: connectName.trim() || `${connectProvider.toUpperCase()} Integration`,
+          auth_type: "token",
+          credentials: connectToken.trim() ? { access_token: connectToken.trim() } : {},
+          config,
+        })
+        setMessage(`${connectProvider.toUpperCase()} integration saved. Click "Sync Now" to ingest live records.`)
+      }
       setConnectProvider(null)
-      setMessage(`${connectProvider.toUpperCase()} integration saved. Click "Verify Auth" or "Sync Now" to ingest live records.`)
+      setReconnectTargetId(null)
       await loadAll(activeProject)
     } catch (err: any) {
-      setError(err.message || "Failed to connect integration.")
+      const msg = err.message || "Failed to connect integration."
+      setConnectModalError(msg)
+      setError(msg)
     } finally {
       setSubmitting(false)
     }
@@ -230,28 +555,41 @@ function IntegrationsContent() {
     }
   }
 
-  const openConfigModal = (integ: any) => {
-    setConfigModal(integ)
-    setEditName(integ.name || "")
-    const cfg = integ.config || {}
-    setEditConfigVal(cfg.repo || cfg.channel_id || cfg.database_id || cfg.page_id || "")
+  const saveConfigAndOptionallySync = async (andSync: boolean) => {
+    if (!configModal) return
+    const nextCfg = buildProviderConfig(configModal.provider, configModal.config || {}, editConfigVal)
+    try {
+      setSavingConfig(true)
+      setError("")
+      setMessage("")
+      await api.updateIntegrationConfig(configModal.id, { name: editName.trim(), config: nextCfg })
+      const targetInteg = configModal
+      setConfigModal(null)
+      if (andSync) {
+        setBusyId(targetInteg.id)
+        try {
+          const syncRes = await api.triggerSync(targetInteg.id)
+          const count =
+            syncRes?.items_processed ??
+            (syncRes?.records_added ?? 0) + (syncRes?.records_updated ?? 0) + (syncRes?.records_skipped ?? 0)
+          setMessage(syncRes?.details?.message || `Configuration saved and synced ${count} records.`)
+        } finally {
+          setBusyId(null)
+        }
+      } else {
+        setMessage("Configuration updated.")
+      }
+      await loadAll(activeProject)
+    } catch (err: any) {
+      setError(err.message || "Failed to update configuration.")
+    } finally {
+      setSavingConfig(false)
+    }
   }
 
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!configModal) return
-    const nextCfg = { ...(configModal.config || {}) }
-    if (configModal.provider === "github") nextCfg.repo = editConfigVal.trim()
-    else if (configModal.provider === "slack") nextCfg.channel_id = editConfigVal.trim()
-    else nextCfg.database_id = editConfigVal.trim()
-    try {
-      await api.updateIntegrationConfig(configModal.id, { name: editName.trim(), config: nextCfg })
-      setConfigModal(null)
-      setMessage("Configuration updated.")
-      await loadAll(activeProject)
-    } catch (err: any) {
-      setError(err.message || "Failed to update configuration.")
-    }
+    await saveConfigAndOptionallySync(false)
   }
 
   const handleDisconnect = async (integ: any) => {
@@ -267,14 +605,17 @@ function IntegrationsContent() {
     }
   }
 
-  const handleDelete = async (integ: any) => {
-    if (!confirm(`Delete integration "${integ.name}"?`)) return
+  const handleDelete = async (id: string, name: string) => {
     try {
-      await api.deleteIntegration(integ.id)
-      setMessage(`Deleted ${integ.name}.`)
+      setConfirmDeleteId(null)
+      setBusyId(id)
+      await api.deleteIntegration(id)
+      setMessage(`Deleted ${name}.`)
       await loadAll(activeProject)
     } catch (err: any) {
       setError(err.message || "Delete failed.")
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -399,12 +740,21 @@ function IntegrationsContent() {
                       <strong className="text-slate-700">Account:</strong>{" "}
                       {integ.connected_account || "Not yet verified"}
                     </div>
-                    {integ.config && Object.keys(integ.config).length > 0 && (
-                      <div>
-                        <strong className="text-slate-700">Target Scope:</strong>{" "}
-                        {integ.config.repo || integ.config.channel_id || integ.config.database_id || JSON.stringify(integ.config)}
-                      </div>
-                    )}
+                    {(() => {
+                      const targetList = parseTargetsFromConfig(integ.provider, integ.config || {})
+                      return (
+                        <div>
+                          <strong className="text-slate-700">Target Scope:</strong>{" "}
+                          {targetList.length > 0 ? (
+                            targetList.join(", ")
+                          ) : (
+                            <span className="text-slate-500 italic">
+                              Auto-discover accessible {resourceNoun(integ.provider).toLowerCase()} (click Config to pin)
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })()}
                     {Array.isArray(integ.scopes) && integ.scopes.length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-0.5">
                         {integ.scopes.map((sc: string) => (
@@ -459,19 +809,37 @@ function IntegrationsContent() {
                         </button>
                       ) : (
                         <button
-                          onClick={() => openTokenConnect(integ.provider)}
+                          onClick={() => openTokenConnect(integ.provider, integ)}
                           className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200"
                         >
                           Reconnect
                         </button>
                       )}
-                      <button
-                        onClick={() => handleDelete(integ)}
-                        className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                        title="Delete Connection"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {confirmDeleteId === integ.id ? (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => handleDelete(integ.id, integ.name)}
+                            disabled={isBusy}
+                            className="px-2 py-1 rounded-lg text-[10px] font-bold bg-rose-600 text-white hover:bg-rose-700"
+                          >
+                            Confirm?
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-1.5 py-1 rounded-lg text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteId(integ.id)}
+                          className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                          title="Delete Connection"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -484,13 +852,26 @@ function IntegrationsContent() {
       {/* Token Connect Modal */}
       {connectProvider && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-          <div className="apple-card max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="apple-card max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900 uppercase">Connect {connectProvider}</h3>
-              <button onClick={() => setConnectProvider(null)} className="text-slate-400 hover:text-slate-600 text-xs">
+              <h3 className="text-base font-bold text-slate-900 uppercase">
+                {reconnectTargetId ? `Reconnect ${connectProvider}` : `Connect ${connectProvider}`}
+              </h3>
+              <button
+                onClick={() => {
+                  setConnectProvider(null)
+                  setReconnectTargetId(null)
+                }}
+                className="text-slate-400 hover:text-slate-600 text-xs"
+              >
                 ✕ Close
               </button>
             </div>
+            {connectModalError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {connectModalError}
+              </div>
+            )}
             <form onSubmit={handleTokenConnect} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Connection Label</label>
@@ -503,8 +884,44 @@ function IntegrationsContent() {
                 />
               </div>
               <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">API / Bot Access Token</label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    required={!reconnectTargetId}
+                    value={connectToken}
+                    onChange={(e) => setConnectToken(e.target.value)}
+                    placeholder={PROVIDER_CARDS.find((p) => p.key === connectProvider)?.tokenPlaceholder}
+                    className="flex-1 px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleDiscoverForConnect}
+                    disabled={loadingConnectResources || !connectToken.trim()}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 whitespace-nowrap disabled:opacity-50"
+                  >
+                    {loadingConnectResources ? "Loading..." : `Fetch ${resourceNoun(connectProvider)}`}
+                  </button>
+                </div>
+              </div>
+
+              <ResourcePickerList
+                provider={connectProvider}
+                resources={connectResources}
+                loading={loadingConnectResources}
+                error={connectResourceError}
+                hint={connectResourceHint}
+                search={connectResourceSearch}
+                onSearchChange={setConnectResourceSearch}
+                valueText={connectConfigVal}
+                onToggleValue={(val) => toggleTargetValue(connectConfigVal, setConnectConfigVal, val)}
+                onRefresh={handleDiscoverForConnect}
+                refreshLabel={connectResources.length > 0 ? "Refresh List" : `Load ${resourceNoun(connectProvider)}`}
+              />
+
+              <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  {PROVIDER_CARDS.find((p) => p.key === connectProvider)?.configLabel}
+                  {PROVIDER_CARDS.find((p) => p.key === connectProvider)?.configLabel} (optional, comma-separated)
                 </label>
                 <input
                   type="text"
@@ -514,22 +931,23 @@ function IntegrationsContent() {
                   className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                 />
               </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">API / Bot Access Token</label>
-                <input
-                  type="password"
-                  value={connectToken}
-                  onChange={(e) => setConnectToken(e.target.value)}
-                  placeholder={PROVIDER_CARDS.find((p) => p.key === connectProvider)?.tokenPlaceholder}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
-                />
-              </div>
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setConnectProvider(null)} className="px-3 py-1.5 rounded-xl text-xs text-slate-600 hover:bg-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConnectProvider(null)
+                    setReconnectTargetId(null)
+                  }}
+                  className="px-3 py-1.5 rounded-xl text-xs text-slate-600 hover:bg-slate-100"
+                >
                   Cancel
                 </button>
-                <button type="submit" disabled={submitting} className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white">
-                  {submitting ? "Connecting..." : "Save & Connect"}
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50"
+                >
+                  {submitting ? "Connecting..." : reconnectTargetId ? "Reconnect & Verify" : "Save & Connect"}
                 </button>
               </div>
             </form>
@@ -540,12 +958,19 @@ function IntegrationsContent() {
       {/* Config Modal */}
       {configModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-          <div className="apple-card max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="apple-card max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900">Configure {configModal.name}</h3>
-              <button onClick={() => setConfigModal(null)} className="text-xs text-slate-400">✕ Close</button>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Configure {configModal.name}</h3>
+                <p className="text-[11px] text-slate-500">
+                  Select which {resourceNoun(configModal.provider).toLowerCase()} to ingest for this project
+                </p>
+              </div>
+              <button onClick={() => setConfigModal(null)} className="text-xs text-slate-400 hover:text-slate-600">
+                ✕ Close
+              </button>
             </div>
-            <form onSubmit={handleSaveConfig} className="space-y-3">
+            <form onSubmit={handleSaveConfig} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Display Name</label>
                 <input
@@ -556,18 +981,56 @@ function IntegrationsContent() {
                   className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                 />
               </div>
+
+              <ResourcePickerList
+                provider={configModal.provider}
+                resources={configResources}
+                loading={loadingConfigResources}
+                error={configResourceError}
+                hint={configResourceHint}
+                search={configResourceSearch}
+                onSearchChange={setConfigResourceSearch}
+                valueText={editConfigVal}
+                onToggleValue={(val) => toggleTargetValue(editConfigVal, setEditConfigVal, val)}
+                onRefresh={() => fetchConfigResources(configModal.id)}
+                refreshLabel={configResources.length > 0 ? "Refresh List" : `Load ${resourceNoun(configModal.provider)}`}
+              />
+
               <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">Target Scope (Repo / Channel / Database ID)</label>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Target Scope (comma-separated, leave blank to auto-discover)
+                </label>
                 <input
                   type="text"
                   value={editConfigVal}
                   onChange={(e) => setEditConfigVal(e.target.value)}
+                  placeholder={PROVIDER_CARDS.find((p) => p.key === configModal.provider)?.configPlaceholder}
                   className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                 />
               </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setConfigModal(null)} className="px-3 py-1.5 rounded-xl text-xs text-slate-600">Cancel</button>
-                <button type="submit" className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 text-white">Save Config</button>
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfigModal(null)}
+                  className="px-3 py-1.5 rounded-xl text-xs text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingConfig}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 disabled:opacity-50"
+                >
+                  {savingConfig ? "Saving..." : "Save Config"}
+                </button>
+                <button
+                  type="button"
+                  disabled={savingConfig}
+                  onClick={() => saveConfigAndOptionallySync(true)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50"
+                >
+                  {savingConfig ? "Syncing..." : "Save & Sync Now"}
+                </button>
               </div>
             </form>
           </div>
