@@ -110,6 +110,8 @@ function ResourcePickerList({
   onToggleValue,
   onRefresh,
   refreshLabel,
+  refreshDisabled = false,
+  emptyNotice,
 }: {
   provider: string
   resources: any[]
@@ -122,6 +124,8 @@ function ResourcePickerList({
   onToggleValue: (val: string) => void
   onRefresh: () => void
   refreshLabel: string
+  refreshDisabled?: boolean
+  emptyNotice?: string
 }) {
   const selected = new Set(
     valueText
@@ -152,7 +156,7 @@ function ResourcePickerList({
         </span>
         <button
           type="button"
-          disabled={loading}
+          disabled={loading || refreshDisabled}
           onClick={onRefresh}
           className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-100 text-violet-700 inline-flex items-center gap-1 disabled:opacity-50"
         >
@@ -160,6 +164,12 @@ function ResourcePickerList({
           {loading ? "Loading..." : refreshLabel}
         </button>
       </div>
+
+      {emptyNotice && !error && resources.length === 0 && (
+        <div className="p-2 rounded-lg bg-slate-100 border border-slate-200 text-[11px] text-slate-600">
+          {emptyNotice}
+        </div>
+      )}
 
       {error && (
         <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] text-rose-700 font-medium">
@@ -364,7 +374,16 @@ function IntegrationsContent() {
 
         if (callbackIntegIdRef.current) {
           const targetId = callbackIntegIdRef.current
-          const matched = finalIntegs.find((i: any) => i.id === targetId)
+          let matched = finalIntegs.find((i: any) => i.id === targetId)
+          if (!matched) {
+            const allIntegs = await api.getIntegrations().catch(() => [])
+            matched = Array.isArray(allIntegs) ? allIntegs.find((i: any) => i.id === targetId) : undefined
+            if (matched?.project_id) {
+              setActiveProject(matched.project_id)
+              setStoredProjectId(matched.project_id)
+              setIntegrations(allIntegs.filter((i: any) => i.project_id === matched.project_id))
+            }
+          }
           if (matched) {
             callbackIntegIdRef.current = null
             openConfigModal(matched)
@@ -659,28 +678,61 @@ function IntegrationsContent() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {PROVIDER_CARDS.map((card) => {
           const Icon = card.icon
+          const matchingInteg = integrations.find(
+            (i) =>
+              i.provider === card.key &&
+              i.status === "connected" &&
+              (!activeProject || i.project_id === activeProject)
+          )
           return (
             <div key={card.key} className="apple-card p-5 flex flex-col justify-between gap-4">
               <div className="space-y-2">
-                <div className="w-10 h-10 rounded-xl bg-violet-50 border border-violet-100 text-violet-600 flex items-center justify-center">
-                  <Icon className="w-5 h-5" />
+                <div className="flex items-center justify-between gap-2">
+                  <div className="w-10 h-10 rounded-xl bg-violet-50 border border-violet-100 text-violet-600 flex items-center justify-center">
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  {matchingInteg && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Connected{matchingInteg.connected_account ? ` (@${matchingInteg.connected_account})` : ""}
+                    </span>
+                  )}
                 </div>
                 <h2 className="text-sm font-bold text-slate-900">{card.title}</h2>
                 <p className="text-xs text-slate-500 leading-relaxed">{card.desc}</p>
               </div>
               <div className="flex flex-wrap gap-2 pt-2">
-                <button
-                  onClick={() => handleOAuthConnect(card.key)}
-                  className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
-                >
-                  {oauthProviders[card.key] === false ? "OAuth Setup Required" : "OAuth Connect"}
-                </button>
-                <button
-                  onClick={() => openTokenConnect(card.key)}
-                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
-                >
-                  <KeyRound className="w-3.5 h-3.5" /> Connect Integration
-                </button>
+                {matchingInteg ? (
+                  <>
+                    <button
+                      onClick={() => openConfigModal(matchingInteg)}
+                      className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                    >
+                      Select {resourceNoun(card.key)}
+                    </button>
+                    <button
+                      onClick={() => openTokenConnect(card.key)}
+                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" /> Add Token
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleOAuthConnect(card.key)}
+                      className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                    >
+                      {oauthProviders[card.key] === false ? "OAuth Setup Required" : "OAuth Connect"}
+                    </button>
+                    <button
+                      onClick={() => openTokenConnect(card.key)}
+                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" /> Connect Integration
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           )
@@ -795,7 +847,7 @@ function IntegrationsContent() {
                         onClick={() => openConfigModal(integ)}
                         className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
                       >
-                        <Settings2 className="w-3 h-3" /> Config
+                        <Settings2 className="w-3 h-3" /> Select {resourceNoun(integ.provider).split(" ")[0]} / Config
                       </button>
                     </div>
 
@@ -872,6 +924,57 @@ function IntegrationsContent() {
                 {connectModalError}
               </div>
             )}
+            {(() => {
+              if (reconnectTargetId) return null
+              const existingConnected = integrations.find(
+                (i) =>
+                  i.provider === connectProvider &&
+                  i.status === "connected" &&
+                  (!activeProject || i.project_id === activeProject)
+              )
+              if (existingConnected) {
+                return (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="text-emerald-900">
+                      <strong>Already connected</strong>
+                      {existingConnected.connected_account ? ` (@${existingConnected.connected_account})` : ""}. No API key needed to pick {resourceNoun(connectProvider).toLowerCase()}.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConnectProvider(null)
+                        setReconnectTargetId(null)
+                        openConfigModal(existingConnected)
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
+                    >
+                      Load from Connected Account
+                    </button>
+                  </div>
+                )
+              }
+              if (oauthProviders[connectProvider] !== false) {
+                return (
+                  <div className="p-3 rounded-xl bg-violet-50 border border-violet-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-violet-900">
+                      Prefer not to create an API key? Connect in one click with OAuth.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const prov = connectProvider
+                        setConnectProvider(null)
+                        handleOAuthConnect(prov)
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white whitespace-nowrap"
+                    >
+                      Use OAuth Instead
+                    </button>
+                  </div>
+                )
+              }
+              return null
+            })()}
             <form onSubmit={handleTokenConnect} className="space-y-3.5">
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Connection Label</label>
@@ -917,6 +1020,12 @@ function IntegrationsContent() {
                 onToggleValue={(val) => toggleTargetValue(connectConfigVal, setConnectConfigVal, val)}
                 onRefresh={handleDiscoverForConnect}
                 refreshLabel={connectResources.length > 0 ? "Refresh List" : `Load ${resourceNoun(connectProvider)}`}
+                refreshDisabled={!connectToken.trim()}
+                emptyNotice={
+                  !connectToken.trim()
+                    ? `Paste a Personal Access Token above and click Fetch ${resourceNoun(connectProvider)}, or use your OAuth connection above (no key required).`
+                    : undefined
+                }
               />
 
               <div>
