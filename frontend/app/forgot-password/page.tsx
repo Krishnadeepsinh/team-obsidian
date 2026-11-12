@@ -17,9 +17,11 @@ function ForgotPasswordForm() {
   const [resetToken, setResetToken] = useState(tokenFromUrl)
   const [newPassword, setNewPassword] = useState("")
   const [submittedMsg, setSubmittedMsg] = useState("")
+  const [deliveryWarning, setDeliveryWarning] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
   const [emailDeliveryConfigured, setEmailDeliveryConfigured] = useState<boolean | null>(null)
+  const [emailSandboxOnly, setEmailSandboxOnly] = useState(false)
   const [appEnv, setAppEnv] = useState<string>("")
 
   useEffect(() => {
@@ -28,6 +30,7 @@ function ForgotPasswordForm() {
       .then((caps) => {
         if (caps) {
           setEmailDeliveryConfigured(Boolean(caps.email_delivery_configured))
+          setEmailSandboxOnly(Boolean(caps.email_sandbox_only))
           setAppEnv(caps.app_env || "")
         }
       })
@@ -39,12 +42,16 @@ function ForgotPasswordForm() {
     setLoading(true)
     setError("")
     setSubmittedMsg("")
+    setDeliveryWarning("")
     try {
       const res = await api.forgotPassword(email)
       setSubmittedMsg(
         res.message ||
           "If an account exists for that email, a single-use password recovery link has been dispatched."
       )
+      if (res.delivery_warning) {
+        setDeliveryWarning(res.delivery_warning)
+      }
     } catch (err: any) {
       setError(err.message || "Failed to send recovery request.")
     } finally {
@@ -103,6 +110,25 @@ function ForgotPasswordForm() {
                 <span>Recovery Notice</span>
               </div>
               <p>{submittedMsg}</p>
+            </div>
+          )}
+
+          {deliveryWarning && (
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1.5">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <span>Email Delivery Notice</span>
+              </div>
+              <p className="leading-relaxed">{deliveryWarning}</p>
+            </div>
+          )}
+
+          {mode === "request" && emailSandboxOnly && !deliveryWarning && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <span>
+                Email delivery is currently running in <strong>Resend sandbox mode</strong> (<code>onboarding@resend.dev</code>), which only delivers to the verified Resend account owner. For other recipients, configure SMTP or a verified <code>SMTP_FROM_EMAIL</code> domain{appEnv !== "production" ? " — or check backend/.dev_mail_outbox.log in dev." : "."}
+              </span>
             </div>
           )}
 

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -128,6 +129,7 @@ class AIEngine:
         self.embedding_dimensions = settings.EMBEDDING_DIMENSIONS
         self._embedder = None
         self._genai_client = None
+        self._model_cooldowns: Dict[Tuple[int, str], float] = {}
 
     @property
     def effective_embedding_model(self) -> str:
@@ -155,12 +157,17 @@ class AIEngine:
 
             self._genai_client = genai.Client(
                 api_key=settings.GEMINI_API_KEY,
-                http_options=types.HttpOptions(api_version="v1beta", timeout=12000),
+                http_options=types.HttpOptions(
+                    api_version="v1beta",
+                    timeout=8000,
+                    client_args={"timeout": 8.0},
+                    retry_options=types.HttpRetryOptions(attempts=1),
+                ),
             )
         return self._genai_client
 
     def _generate_content_with_fallback(self, client, preferred_model: str, contents: str, config: Any):
-        """Try preferred Gemini model, falling back on retired (404), overloaded (503), or rate-limited (429) tiers."""
+        """Try preferred Gemini model, falling back on retired (404), overloaded (503), or rate-limited (429) tiers with cooldown caching."""
         candidates = []
         fallback_order = (
             [preferred_model, "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"]
@@ -171,8 +178,16 @@ class AIEngine:
             if m and m not in candidates:
                 candidates.append(m)
 
+        now = time.monotonic()
+        client_key = id(client)
+        active_candidates = [
+            m for m in candidates if now >= self._model_cooldowns.get((client_key, m), 0.0)
+        ]
+        if not active_candidates:
+            raise RuntimeError("All Gemini model candidates are currently in cooldown; using extractive fallback.")
+
         last_exc: Optional[Exception] = None
-        for idx, model_name in enumerate(candidates):
+        for idx, model_name in enumerate(active_candidates):
             try:
                 resp = client.models.generate_content(
                     model=model_name,
@@ -183,24 +198,19 @@ class AIEngine:
             except Exception as exc:
                 last_exc = exc
                 err_s = str(exc)
-                is_recoverable = any(
-                    marker in err_s
-                    for marker in (
-                        "404",
-                        "NOT_FOUND",
-                        "429",
-                        "RESOURCE_EXHAUSTED",
-                        "503",
-                        "UNAVAILABLE",
-                        "500",
-                        "INTERNAL",
-                        "overloaded",
-                        "timeout",
-                        "timed out",
-                        "no longer available",
-                    )
-                )
-                if is_recoverable and idx < len(candidates) - 1:
+                if any(m in err_s for m in ("404", "NOT_FOUND", "no longer available")):
+                    self._model_cooldowns[(client_key, model_name)] = time.monotonic() + 1800.0
+                    is_recoverable = True
+                elif any(m in err_s for m in ("429", "RESOURCE_EXHAUSTED")):
+                    self._model_cooldowns[(client_key, model_name)] = time.monotonic() + 300.0
+                    is_recoverable = True
+                elif any(m in err_s for m in ("503", "504", "UNAVAILABLE", "500", "INTERNAL", "overloaded", "timeout", "timed out")):
+                    self._model_cooldowns[(client_key, model_name)] = time.monotonic() + 60.0
+                    is_recoverable = True
+                else:
+                    is_recoverable = False
+
+                if is_recoverable and idx < len(active_candidates) - 1:
                     logger.info("Gemini model %s unavailable (%s); trying fallback", model_name, err_s[:100])
                     continue
                 raise
@@ -387,6 +397,9 @@ class AIEngine:
         )
         confidence = round(max(0.0, min(0.99, raw_conf)), 2)
         breakdown = {
+            "total_citations": len(selected),
+            "verified_citations": verified_count,
+            "distinct_sources": unique_sources,
             "evidence_coverage": round(min(1.0, len(selected) / 4.0), 2),
             "avg_relevance": round(avg_rel, 2),
             "independent_sources": unique_sources,
@@ -473,8 +486,12 @@ class AIEngine:
 Rules:
 1. Answer ONLY from the CONTEXT EVIDENCE below. Never use outside knowledge, never guess, and never fabricate names, decisions, links, or ownership.
 2. If the provided CONTEXT EVIDENCE does not actually answer the QUESTION, set is_answerable=false and explain clearly what information is missing from the project records.
-3. When is_answerable=true, cite supporting evidence inline like [Evidence 1], [Evidence 2], and list those 1-based indices in cited_evidence_indices.
+3. Structure the answer cleanly in Markdown:
+   - Start with a crisp 1-2 sentence executive answer.
+   - Follow with scannable bullet points grouped under short bold headings only when relevant (e.g. **Key Findings**, **Ownership & Stakeholders**, **Decisions & Rationale**, **Risks & Open Gaps**).
+   - Cite supporting evidence inline at the claim level using `[Evidence 1]`, `[Evidence 2]`, and list those 1-based indices in cited_evidence_indices.
 4. Distinguish clearly between verified facts and draft/unverified evidence if relevant.
+5. Provide up to 3 concise, high-value suggested_followups tailored to the question and uncovered gaps.
 
 DEPARTING FOCUS: {departing_name or 'Not specified'}
 {history_block}
@@ -548,31 +565,114 @@ QUESTION:
             except Exception as exc:
                 logger.warning("Gemini live Q&A failed, falling back to extractive evidence synthesis: %s", exc)
 
-        # Strict extractive synthesis fallback when Gemini is offline or rate-limited
-        top = context_docs[0]
-        top_excerpt = (top.get("excerpt") or top.get("content") or "")[:360]
-        lines = [
-            f"Based on retrieved project evidence from **{top.get('source_title', 'Project Record')}** [Evidence 1]:",
-            f"> \"{top_excerpt}\"",
+        # Strict multi-document extractive synthesis fallback when Gemini is offline or rate-limited
+        return self._build_extractive_answer(question, context_docs, raw_citations, departing_name=departing_name)
+
+    def _build_extractive_answer(
+        self,
+        question: str,
+        context_docs: List[Dict[str, Any]],
+        raw_citations: List[Dict[str, Any]],
+        departing_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Synthesize a clean Markdown answer across top retrieved evidence without fabricating claims."""
+        stop_words = {
+            "what", "which", "who", "whom", "where", "when", "why", "how", "is", "are", "was", "were",
+            "the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with", "this", "that", "does",
+            "do", "did", "can", "could", "there", "remain", "currently", "exist", "project", "about",
+        }
+        q_tokens = {
+            t for t in re.findall(r"[a-z0-9_]{3,}", (question or "").lower())
+            if t not in stop_words
+        }
+
+        findings: List[str] = []
+        owners_seen: List[str] = []
+        cited_indices: List[int] = []
+        seen_sentences: set[str] = set()
+        top_docs = context_docs[: min(len(context_docs), 4)]
+
+        for idx, doc in enumerate(top_docs, 1):
+            raw_text = (doc.get("excerpt") or doc.get("content") or "").strip()
+            clean_text = re.sub(r"\s+", " ", raw_text)
+            candidates = [
+                s.strip(" -*\t")
+                for s in re.split(r"(?<=[.!?])\s+|\n+", raw_text)
+                if len(s.strip(" -*\t")) >= 20
+            ]
+            if not candidates and clean_text:
+                candidates = [clean_text[:280]]
+
+            def _score_sentence(sent: str) -> Tuple[int, float]:
+                low = sent.lower()
+                hits = sum(1 for tok in q_tokens if tok in low)
+                length_bonus = 1.0 if 35 <= len(sent) <= 240 else 0.3
+                return (hits, length_bonus)
+
+            ranked = sorted(candidates, key=_score_sentence, reverse=True)
+            picked = None
+            for cand in ranked:
+                norm_cand = re.sub(r"[^a-z0-9]+", " ", cand.lower()).strip()
+                if norm_cand and norm_cand not in seen_sentences:
+                    seen_sentences.add(norm_cand)
+                    picked = cand[:280] + ("..." if len(cand) > 280 else "")
+                    break
+            if not picked and clean_text:
+                picked = clean_text[:260] + ("..." if len(clean_text) > 260 else "")
+
+            source_title = doc.get("source_title") or "Project Record"
+            source_type = (doc.get("source_type") or "record").upper()
+            author = doc.get("author")
+            v_status = doc.get("verification_status")
+            meta_parts = [source_type]
+            if author:
+                meta_parts.append(f"owner/author: {author}")
+                if author not in owners_seen:
+                    owners_seen.append(str(author))
+            if v_status:
+                meta_parts.append(v_status)
+            meta_label = " · ".join(meta_parts)
+
+            if picked:
+                findings.append(f"- **{source_title}** ({meta_label}) [Evidence {idx}]: {picked}")
+                cited_indices.append(idx)
+
+        if not cited_indices and raw_citations:
+            cited_indices = [1]
+
+        conf, breakdown = self.compute_explainable_confidence(context_docs, cited_indices)
+        distinct_src = breakdown.get("independent_sources", len(cited_indices))
+        verified_cnt = breakdown.get("verified_citations", 0)
+
+        header = (
+            f"### Evidence Summary across {len(cited_indices)} matching record(s)"
+            + (f" for **{departing_name}**" if departing_name else "")
+            + "\n*Synthesized directly from retrieved project records (extractive fallback active while live LLM quota resets).*"
+        )
+        sections = [header, "\n**Key Findings**"] + findings
+
+        if owners_seen:
+            sections.append(f"\n**Attributed Contributors:** {', '.join(owners_seen[:5])}")
+
+        sections.append(
+            f"\n**Verification Coverage:** {verified_cnt}/{len(cited_indices)} cited item(s) verified across {distinct_src} distinct source(s)."
+        )
+
+        top_title = (context_docs[0].get("source_title") or "these records")[:45]
+        followups = [
+            f"What risks or dependencies affect {top_title}?",
+            "Who are the primary owners and backups for these systems?",
+            "Which knowledge gaps or unverified records remain open?",
         ]
-        if len(context_docs) > 1:
-            sec = context_docs[1]
-            lines.append(
-                f"\nAdditional supporting record in **{sec.get('source_title', 'Project Record')}** [Evidence 2]:\n"
-                f"- {(sec.get('excerpt') or sec.get('content') or '')[:220]}"
-            )
-        conf, breakdown = self.compute_explainable_confidence(context_docs, [1, 2][: len(raw_citations)])
+
         return {
-            "answer": "\n".join(lines),
-            "citations": raw_citations[:3],
+            "answer": "\n".join(sections),
+            "citations": [raw_citations[i - 1] for i in cited_indices if 1 <= i <= len(raw_citations)],
             "confidence": conf,
             "confidence_breakdown": breakdown,
             "is_grounded": True,
-            "model_used": f"{self.primary_model_name} (Extractive Fallback)",
-            "suggested_followups": [
-                "What decisions relate to these records?",
-                "What knowledge gaps remain open?",
-            ],
+            "model_used": f"{self.primary_model_name} (Extractive Synthesis)",
+            "suggested_followups": followups,
         }
 
     def extract_knowledge_from_records(

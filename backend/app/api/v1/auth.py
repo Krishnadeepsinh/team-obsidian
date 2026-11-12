@@ -319,6 +319,9 @@ def get_auth_capabilities() -> Dict[str, Any]:
     return {
         "app_env": settings.APP_ENV,
         "email_delivery_configured": email_service.is_configured(),
+        "email_delivery_mode": email_service.delivery_mode(),
+        "email_sandbox_only": email_service.is_resend_sandbox_only(),
+        "smtp_configured": email_service.is_smtp_configured(),
         "supabase_storage_configured": storage_service.is_supabase_storage_configured(),
         "oauth_providers": {
             "github": bool(settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET),
@@ -353,6 +356,7 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
             ),
         )
     user = db.query(User).filter(User.email == normalized_email).first()
+    delivery_result = None
     if user and user.is_active:
         # Invalidate any prior unused reset tokens for this user
         now = datetime.now(timezone.utc)
@@ -377,15 +381,36 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
             org_id=user.org_id,
             actor_email=user.email,
             details={"message": "Password reset link issued"},
-            ip_address=request.client.host if request.client else None,
+            ip_address=ip,
         )
         db.commit()
-        email_service.send_password_reset_email(user.email, raw_token, user_name=user.name)
+        delivery_result = email_service.send_password_reset_email(user.email, raw_token, user_name=user.name)
 
-    return {
+    response_payload: Dict[str, Any] = {
         "status": "success",
         "message": "If this email is registered, password reset instructions have been sent.",
     }
+    if settings.APP_ENV != "production" and delivery_result and not delivery_result.get("delivered"):
+        response_payload["delivery_provider"] = delivery_result.get("provider")
+        err_code = delivery_result.get("error_code")
+        if err_code == "resend_sandbox_restricted":
+            response_payload["delivery_warning"] = (
+                "Resend is using its sandbox sender (onboarding@resend.dev), which only delivers to your verified Resend account email. "
+                "Verify a domain in Resend and set SMTP_FROM_EMAIL (or configure SMTP_HOST/SMTP_USER/SMTP_PASSWORD) for general inbox delivery. "
+                "For local development, the single-use reset code was written to backend/.dev_mail_outbox.log."
+            )
+        else:
+            response_payload["delivery_warning"] = (
+                "Outbound email provider did not deliver externally in development mode; "
+                "the single-use reset code was logged to backend/.dev_mail_outbox.log."
+            )
+    elif settings.APP_ENV == "production" and email_service.is_resend_sandbox_only():
+        response_payload["delivery_warning"] = (
+            "Resend is currently configured with onboarding@resend.dev (sandbox mode), which only delivers to the Resend account owner. "
+            "Configure a verified SMTP_FROM_EMAIL domain or SMTP credentials for arbitrary recipients."
+        )
+
+    return response_payload
 
 
 @router.post("/reset-password")

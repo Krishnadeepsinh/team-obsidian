@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { api, getStoredProjectId, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
+import { FormattedMarkdown } from "@/components/formatted-markdown"
 import {
   Sparkles,
   Send,
@@ -439,9 +440,13 @@ export default function AssistantPage() {
                           )}
                         </div>
 
-                        <div className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
-                          {m.content || (m.streaming ? "Searching project evidence..." : "")}
-                        </div>
+                        {m.content ? (
+                          <FormattedMarkdown content={m.content} />
+                        ) : (
+                          <div className="text-sm text-slate-500 italic leading-relaxed">
+                            {m.streaming ? "Searching project evidence..." : ""}
+                          </div>
+                        )}
 
                         {promotedNotice && promotedNotice.msgId === msgId && (
                           <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] flex items-center justify-between gap-2">
@@ -459,13 +464,45 @@ export default function AssistantPage() {
                         )}
 
                         {m.confidence_breakdown && !m.streaming && (
-                          <div className="p-3 rounded-xl bg-white border border-slate-200 text-[11px] text-slate-600 flex flex-wrap items-center gap-4">
-                            <span className="font-semibold text-slate-700 flex items-center gap-1">
-                              <Info className="w-3.5 h-3.5 text-violet-500" /> Confidence Breakdown:
-                            </span>
-                            <span>Citations: <strong>{m.confidence_breakdown.total_citations || 0}</strong></span>
-                            <span>Verified: <strong>{m.confidence_breakdown.verified_citations || 0}</strong></span>
-                            <span>Sources: <strong>{m.confidence_breakdown.distinct_sources || 0}</strong></span>
+                          <div className="p-3 rounded-xl bg-white border border-slate-200 text-[11px] text-slate-600 space-y-1">
+                            <div className="flex flex-wrap items-center gap-4">
+                              <span className="font-semibold text-slate-700 flex items-center gap-1">
+                                <Info className="w-3.5 h-3.5 text-violet-500" /> Confidence Breakdown:
+                              </span>
+                              <span>
+                                Citations:{" "}
+                                <strong>
+                                  {m.confidence_breakdown.total_citations ?? m.citations?.length ?? 0}
+                                </strong>
+                              </span>
+                              <span>
+                                Verified:{" "}
+                                <strong>
+                                  {m.confidence_breakdown.verified_citations ??
+                                    Math.round(
+                                      (m.confidence_breakdown.verified_ratio ?? 0) *
+                                        (m.citations?.length ?? 0)
+                                    )}
+                                </strong>
+                              </span>
+                              <span>
+                                Sources:{" "}
+                                <strong>
+                                  {m.confidence_breakdown.independent_sources ??
+                                    m.confidence_breakdown.distinct_sources ??
+                                    0}
+                                </strong>
+                              </span>
+                              {typeof m.confidence_breakdown.avg_relevance === "number" && (
+                                <span>
+                                  Avg Match:{" "}
+                                  <strong>{Math.round(m.confidence_breakdown.avg_relevance * 100)}%</strong>
+                                </span>
+                              )}
+                            </div>
+                            {m.confidence_breakdown.explanation && (
+                              <p className="text-[10px] text-slate-500">{m.confidence_breakdown.explanation}</p>
+                            )}
                           </div>
                         )}
 

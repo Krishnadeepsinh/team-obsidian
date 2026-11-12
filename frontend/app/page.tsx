@@ -33,6 +33,7 @@ import {
   Cell
 } from "recharts"
 import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { FormattedMarkdown } from "@/components/formatted-markdown"
 
 export default function OverviewPage() {
   const router = useRouter()
@@ -183,7 +184,9 @@ export default function OverviewPage() {
     if (!quickQuery.trim()) return
     try {
       setQuickAsking(true)
-      const res = await api.queryAssistant(getStoredProjectId() || "default", quickQuery.trim())
+      const targetProjectId =
+        activeHandover?.project_id || data?.active_project_id || getStoredProjectId() || "default"
+      const res = await api.queryAssistant(targetProjectId, quickQuery.trim())
       setQuickAnswer(res)
     } catch (err: any) {
       setQuickAnswer({
@@ -796,7 +799,7 @@ export default function OverviewPage() {
                 </span>
               )}
             </div>
-            <p className="text-slate-800 whitespace-pre-line leading-relaxed">{quickAnswer.answer}</p>
+            <FormattedMarkdown content={quickAnswer.answer || ""} compact />
             {Array.isArray(quickAnswer.citations) && quickAnswer.citations.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {quickAnswer.citations.slice(0, 3).map((c: any, i: number) => (

@@ -3,6 +3,7 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 import requests
 
 from app.core.config import settings
@@ -16,17 +17,42 @@ class EmailService:
     def __init__(self):
         self._outbox_path = Path(__file__).resolve().parent.parent.parent / ".dev_mail_outbox.log"
 
+    def is_smtp_configured(self) -> bool:
+        return bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
+
+    def has_custom_sender_domain(self) -> bool:
+        sender = (settings.SMTP_FROM_EMAIL or "").strip().lower()
+        return bool(sender and "@" in sender and not sender.endswith(".local") and "resend.dev" not in sender)
+
+    def is_resend_sandbox_only(self) -> bool:
+        """True when only Resend is configured and sender falls back to onboarding@resend.dev sandbox."""
+        return bool(settings.RESEND_API_KEY) and not self.is_smtp_configured() and not self.has_custom_sender_domain()
+
+    def delivery_mode(self) -> str:
+        if self.is_smtp_configured():
+            return "smtp"
+        if settings.RESEND_API_KEY:
+            return "resend_verified" if self.has_custom_sender_domain() else "resend_sandbox"
+        return "dev_outbox" if settings.APP_ENV != "production" else "unconfigured"
+
     def is_configured(self) -> bool:
-        return bool(
-            settings.RESEND_API_KEY
-            or (settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
-        )
+        return bool(settings.RESEND_API_KEY or self.is_smtp_configured())
 
     def send_email(self, to_email: str, subject: str, html_body: str, text_body: str) -> dict:
         if not to_email or "@" not in to_email:
             return {"delivered": False, "provider": "invalid_recipient"}
 
+        attempted_provider: Optional[str] = None
+        error_code: Optional[str] = None
+        error_detail: Optional[str] = None
+
         if settings.RESEND_API_KEY:
+            attempted_provider = "resend"
+            sender = (
+                settings.SMTP_FROM_EMAIL.strip()
+                if self.has_custom_sender_domain()
+                else "TEAM OBSIDIAN <onboarding@resend.dev>"
+            )
             try:
                 res = requests.post(
                     "https://api.resend.com/emails",
@@ -35,11 +61,7 @@ class EmailService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "from": (
-                            settings.SMTP_FROM_EMAIL
-                            if settings.SMTP_FROM_EMAIL and not settings.SMTP_FROM_EMAIL.lower().endswith(".local")
-                            else "TEAM OBSIDIAN <onboarding@resend.dev>"
-                        ),
+                        "from": sender,
                         "to": [to_email],
                         "subject": subject,
                         "html": html_body,
@@ -49,11 +71,23 @@ class EmailService:
                 )
                 if 200 <= res.status_code < 300:
                     return {"delivered": True, "provider": "resend"}
-                logger.warning("Resend email delivery failed (%s): %s", res.status_code, res.text[:200])
+                body_snippet = (res.text or "").strip()[:300]
+                if res.status_code == 403 and (
+                    "only send testing emails" in body_snippet.lower()
+                    or "verify a domain" in body_snippet.lower()
+                ):
+                    error_code = "resend_sandbox_restricted"
+                else:
+                    error_code = f"resend_http_{res.status_code}"
+                error_detail = body_snippet
+                logger.warning("Resend email delivery failed (%s): %s", res.status_code, body_snippet)
             except Exception as exc:
+                error_code = "resend_exception"
+                error_detail = str(exc)[:300]
                 logger.warning("Resend email exception: %s", exc)
 
-        if settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD:
+        if self.is_smtp_configured():
+            attempted_provider = "smtp"
             try:
                 msg = EmailMessage()
                 msg["Subject"] = subject
@@ -61,12 +95,21 @@ class EmailService:
                 msg["To"] = to_email
                 msg.set_content(text_body)
                 msg.add_alternative(html_body, subtype="html")
-                with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                    server.starttls()
-                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                    server.send_message(msg)
+                if int(settings.SMTP_PORT) == 465:
+                    with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                        server.ehlo()
+                        server.starttls()
+                        server.ehlo()
+                        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                        server.send_message(msg)
                 return {"delivered": True, "provider": "smtp"}
             except Exception as exc:
+                error_code = "smtp_error"
+                error_detail = str(exc)[:300]
                 logger.warning("SMTP email delivery failed: %s", exc)
 
         if settings.APP_ENV != "production":
@@ -76,12 +119,25 @@ class EmailService:
             except Exception:
                 pass
             logger.info("Recorded email in dev outbox for %s (%s)", to_email, subject)
-            return {"delivered": False, "provider": "dev_outbox"}
+            return {
+                "delivered": False,
+                "provider": "dev_outbox",
+                "attempted_provider": attempted_provider,
+                "error_code": error_code,
+                "error_detail": error_detail,
+            }
 
-        return {"delivered": False, "provider": "unconfigured"}
+        return {
+            "delivered": False,
+            "provider": attempted_provider or "unconfigured",
+            "attempted_provider": attempted_provider,
+            "error_code": error_code or "unconfigured",
+            "error_detail": error_detail or "No outbound email provider configured.",
+        }
 
     def send_password_reset_email(self, to_email: str, reset_token: str, user_name: Optional[str] = None) -> dict:
-        reset_link = f"{settings.FRONTEND_URL}/forgot-password?token={reset_token}&email={to_email}"
+        query = urlencode({"token": reset_token, "email": to_email})
+        reset_link = f"{settings.FRONTEND_URL}/forgot-password?{query}"
         greeting = f"Hi {user_name}," if user_name else "Hello,"
         text_body = (
             f"{greeting}\n\n"
