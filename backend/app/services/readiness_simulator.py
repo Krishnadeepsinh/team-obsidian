@@ -18,6 +18,7 @@ from app.models.workspace import Project
 from app.services.ai_engine import ai_engine
 from app.services.audit_service import record_activity
 from app.services.graph_service import GraphService
+from app.services.retrieval_service import retrieve_hybrid_graph_context
 
 logger = logging.getLogger("team_obsidian.simulator")
 
@@ -30,10 +31,18 @@ class ScenarioSpec(BaseModel):
     prompt: str
     expected_concepts: List[str] = Field(default_factory=list)
     reference_hint: str = ""
+    follow_up_question: str = ""
 
 
 class ScenarioBundle(BaseModel):
     scenarios: List[ScenarioSpec] = Field(default_factory=list)
+
+
+class RubricBreakdown(BaseModel):
+    architecture_accuracy: float = 0.0
+    blast_radius_awareness: float = 0.0
+    mitigation_readiness: float = 0.0
+    operational_specificity: float = 0.0
 
 
 class ScenarioGrade(BaseModel):
@@ -42,6 +51,8 @@ class ScenarioGrade(BaseModel):
     strengths: List[str] = Field(default_factory=list)
     missed_concepts: List[str] = Field(default_factory=list)
     feedback: str
+    rubric_breakdown: Optional[RubricBreakdown] = None
+    follow_up_prompt: str = ""
 
 
 class SimulationEvaluationBundle(BaseModel):
@@ -96,6 +107,14 @@ def _gather_project_context(db: Session, handover: Handover) -> Dict[str, Any]:
             "affected_downstream": [ent_name_by_id.get(did, did) for did in downstream_ids[:6]],
         })
 
+    rag_snippets = retrieve_hybrid_graph_context(
+        project_id=pid,
+        question=f"{handover.departing_employee_name} {handover.departing_employee_role} SPOF architecture tradeoffs outage runbook",
+        departing_focus=handover.departing_employee_name,
+        db=db,
+        top_k=5,
+    )
+
     return {
         "project_name": proj.name if proj else "Project",
         "decisions": decisions,
@@ -103,16 +122,28 @@ def _gather_project_context(db: Session, handover: Handover) -> Dict[str, Any]:
         "dependencies": deps,
         "gaps": gaps,
         "spofs": spofs,
+        "rag_snippets": rag_snippets,
     }
 
 
 def generate_scenarios_for_handover(db: Session, handover: Handover) -> List[Dict[str, Any]]:
-    """Generate 3 project-grounded incident & architecture readiness scenarios for the incoming engineer."""
+    """Generate 3 RAG-grounded incident & architecture readiness scenarios for the incoming engineer."""
     ctx = _gather_project_context(db, handover)
     spofs = ctx["spofs"]
     decisions = ctx["decisions"]
     risks = ctx["risks"]
     deps = ctx["dependencies"]
+    rag_snippets = ctx.get("rag_snippets") or []
+
+    rag_block = (
+        "\nRetrieved Evidence Snippets:\n"
+        + "\n".join(
+            f"- [{s.get('source_title', 'Evidence')}] {str(s.get('full_context') or s.get('excerpt') or '')[:220]}"
+            for s in rag_snippets[:4]
+        )
+        if rag_snippets
+        else ""
+    )
 
     summary_lines = [
         f"Project: {ctx['project_name']}",
@@ -121,10 +152,10 @@ def generate_scenarios_for_handover(db: Session, handover: Handover) -> List[Dic
         "Key Decisions: " + ("; ".join(f"{d.title} [{d.component or 'core'}]: {d.summary[:120]}" for d in decisions[:4]) or "None"),
         "Key Risks: " + ("; ".join(f"{r.title} (mitigation: {(r.mitigation_strategy or 'open')[:90]})" for r in risks[:4]) or "None"),
         "Dependencies: " + (", ".join(f"{d.source_component} -> {d.target_component}" for d in deps[:6]) or "None"),
-    ]
+    ] + ([rag_block] if rag_block else [])
 
     client = ai_engine._get_client()
-    if client is not None and (spofs or decisions or risks or deps):
+    if client is not None and (spofs or decisions or risks or deps or rag_snippets):
         try:
             from google.genai import types
 
@@ -256,6 +287,16 @@ def generate_scenarios_for_handover(db: Session, handover: Handover) -> List[Dic
             "reference_hint": "Capture reproducible runbook steps, link SHA-256 evidence, assign backup owner, and verify claims.",
         })
 
+    for sc in scenarios:
+        if not sc.get("follow_up_question"):
+            cat = sc.get("category", "")
+            if cat == "spof_incident":
+                sc["follow_up_question"] = "What concrete telemetry signal, health check, or canary metric proves your mitigation succeeded without cascading failures?"
+            elif cat == "adr_tradeoff":
+                sc["follow_up_question"] = "Which documented constraint or rollback trigger would force you to revert this architectural change?"
+            else:
+                sc["follow_up_question"] = "Who is the secondary escalation owner or backup contact, and what handoff evidence would you record afterward?"
+
     return scenarios[:3]
 
 
@@ -266,19 +307,26 @@ def evaluate_simulation_submission(
     user_id: Optional[str],
     scenarios: List[Dict[str, Any]],
     answers: Dict[str, str],
+    follow_ups: Optional[Dict[str, str]] = None,
 ) -> ReadinessSimulation:
-    """Grade incoming successor responses quantitatively (0-100%) with AI + deterministic concept rubric."""
+    """Grade incoming successor responses quantitatively (0-100%) using 4-dimension RAG rubric & remediation."""
     eval_items = []
+    fu_map = follow_ups or {}
     for sc in scenarios:
         sc_id = str(sc.get("id"))
         ans = (answers.get(sc_id) or "").strip()
+        fu_ans = (fu_map.get(sc_id) or "").strip()
+        combined_ans = f"{ans}\nFollow-up Clarification: {fu_ans}".strip() if fu_ans else ans
         eval_items.append({
             "scenario_id": sc_id,
             "title": sc.get("title", ""),
             "prompt": sc.get("prompt", ""),
             "expected_concepts": sc.get("expected_concepts") or [],
             "reference_hint": sc.get("reference_hint", ""),
-            "candidate_answer": ans,
+            "candidate_answer": combined_ans,
+            "initial_answer": ans,
+            "follow_up_answer": fu_ans,
+            "follow_up_question": sc.get("follow_up_question") or "",
         })
 
     graded_map: Dict[str, ScenarioGrade] = {}
@@ -296,7 +344,9 @@ def evaluate_simulation_submission(
                 for it in eval_items
             )
             prompt = (
-                "You are grading an engineering handover readiness simulation. Score each scenario 0 to 100.\n"
+                "You are grading an engineering handover readiness simulation across 4 rubric dimensions (0-25 points each, totaling 0-100):\n"
+                "architecture_accuracy, blast_radius_awareness, mitigation_readiness, operational_specificity.\n"
+                "Also provide a probing follow_up_prompt if gaps remain.\n"
                 "Be strict and accurate: blank or vague one-word answers score <= 25; answers demonstrating triage steps, "
                 "affected components/blast radius, ADR constraints, and mitigation score 75-100.\n\n"
                 + prompt_body
@@ -318,9 +368,40 @@ def evaluate_simulation_submission(
         except Exception as exc:
             logger.warning("Gemini simulation grading fallback: %s", str(exc)[:140])
 
-    # Deterministic + AI blended rubric scoring
+    # Deterministic + AI blended 4-dimension rubric scoring
     responses_out: List[Dict[str, Any]] = []
     total_score = 0.0
+    dim_totals = {
+        "architecture_accuracy": 0.0,
+        "blast_radius_awareness": 0.0,
+        "mitigation_readiness": 0.0,
+        "operational_specificity": 0.0,
+    }
+
+    def _heuristic_rubric(ans_text: str, words_list: List[str], matched_list: List[str], expected_list: List[str], final_score: float) -> Dict[str, float]:
+        low = ans_text.lower()
+        c_ratio = (len(matched_list) / max(1, len(expected_list))) if expected_list else 0.5
+        arch = min(25.0, round(6.0 + c_ratio * 19.0, 1)) if ans_text else 0.0
+        blast_hits = sum(1 for kw in ("downstream", "blast", "impact", "depend", "outage", "queue", "fail", "cascade") if kw in low)
+        blast = min(25.0, round(5.0 + min(15.0, blast_hits * 4.0) + c_ratio * 5.0, 1)) if ans_text else 0.0
+        mit_hits = sum(1 for kw in ("rollback", "fallback", "failover", "mitigat", "runbook", "backup", "retry", "circuit", "alert", "verify") if kw in low)
+        mitig = min(25.0, round(5.0 + min(15.0, mit_hits * 4.0) + c_ratio * 5.0, 1)) if ans_text else 0.0
+        spec = min(25.0, round(max(0.0, final_score - (arch + blast + mitig)), 1)) if final_score >= (arch + blast + mitig) else min(25.0, round(min(25.0, len(words_list) * 0.7), 1))
+        # Scale gently so rubric sum tracks final_score cleanly
+        raw_sum = arch + blast + mitig + spec
+        if raw_sum > 0 and abs(raw_sum - final_score) > 0.5:
+            factor = final_score / raw_sum
+            arch = min(25.0, round(arch * factor, 1))
+            blast = min(25.0, round(blast * factor, 1))
+            mitig = min(25.0, round(mitig * factor, 1))
+            spec = max(0.0, min(25.0, round(final_score - (arch + blast + mitig), 1)))
+        return {
+            "architecture_accuracy": arch,
+            "blast_radius_awareness": blast,
+            "mitigation_readiness": mitig,
+            "operational_specificity": spec,
+        }
+
     for it in eval_items:
         sc_id = it["scenario_id"]
         ans = it["candidate_answer"]
@@ -335,13 +416,21 @@ def evaluate_simulation_submission(
             g = graded_map[sc_id]
             score = max(0.0, min(100.0, float(g.score)))
             if len(words) >= 20 and expected and concept_ratio >= 0.75:
-                # Anchor AI rubric so substantive answers covering expected concepts are not penalized by variance
                 score = max(score, round(min(92.0, 40.0 + concept_ratio * 42.0 + min(15.0, len(words) * 0.25)), 1))
+            score = round(score, 1)
+            rubric = g.rubric_breakdown.model_dump() if g.rubric_breakdown else _heuristic_rubric(ans, words, matched, expected, score)
+            follow_up = g.follow_up_prompt or (
+                it["follow_up_question"]
+                or (f"Clarify how you would handle missed concept(s): {', '.join(missed[:3])}." if (score < 75 and missed) else "")
+            )
             responses_out.append({
                 "scenario_id": sc_id,
                 "title": it["title"],
                 "answer": ans,
-                "score": round(score, 1),
+                "follow_up_answer": it.get("follow_up_answer") or None,
+                "score": score,
+                "rubric_breakdown": rubric,
+                "follow_up_prompt": follow_up,
                 "strengths": g.strengths,
                 "missed_concepts": g.missed_concepts,
                 "feedback": g.feedback,
@@ -357,19 +446,86 @@ def evaluate_simulation_submission(
                     f"Matched {len(matched)}/{len(expected)} expected architecture concepts."
                     + (f" Consider covering: {', '.join(missed[:3])}." if missed else " Solid operational coverage.")
                 )
+            rubric = _heuristic_rubric(ans, words, matched, expected, score)
+            follow_up = (
+                it["follow_up_question"]
+                or (f"Please specify concrete mitigation steps for {', '.join(missed[:3])}." if (score < 75 and missed) else "")
+            )
             responses_out.append({
                 "scenario_id": sc_id,
                 "title": it["title"],
                 "answer": ans,
+                "follow_up_answer": it.get("follow_up_answer") or None,
                 "score": score,
+                "rubric_breakdown": rubric,
+                "follow_up_prompt": follow_up,
                 "strengths": [f"Addressed '{m}'" for m in matched] if matched else (["Provided structured operational response"] if len(words) >= 12 else []),
                 "missed_concepts": missed,
                 "feedback": fb,
             })
-        total_score += responses_out[-1]["score"]
 
-    avg_score = round(total_score / max(1, len(responses_out)), 1)
+        total_score += responses_out[-1]["score"]
+        for d_key in dim_totals:
+            dim_totals[d_key] += float((responses_out[-1].get("rubric_breakdown") or {}).get(d_key) or 0.0)
+
+    n_resp = max(1, len(responses_out))
+    avg_score = round(total_score / n_resp, 1)
     passed = avg_score >= 70.0
+    dimension_averages = {k: round(v / n_resp, 1) for k, v in dim_totals.items()}
+
+    # Automatic Remediation: resolve cleared readiness_remediation gaps when scenario/overall passes;
+    # otherwise create open KnowledgeGaps for missed concepts on weak scenarios (< 60%).
+    remediation_gaps_created: List[Dict[str, Any]] = []
+    existing_remediation_gaps = (
+        db.query(KnowledgeGap)
+        .filter(
+            KnowledgeGap.project_id == handover.project_id,
+            KnowledgeGap.gap_type == "readiness_remediation",
+            KnowledgeGap.status.in_(["open", "identified", "in_progress"]),
+        )
+        .all()
+    )
+    resolved_titles = {
+        f"readiness gap: {(r.get('title') or r.get('scenario_id') or '').strip()}".lower()
+        for r in responses_out
+        if r["score"] >= 65.0
+    }
+    for old_gap in existing_remediation_gaps:
+        if passed or (old_gap.title or "").strip().lower() in resolved_titles:
+            old_gap.status = "resolved"
+
+    if not passed or any(r["score"] < 60.0 for r in responses_out):
+        existing_gap_titles = {
+            (g.title or "").strip().lower()
+            for g in db.query(KnowledgeGap).filter(KnowledgeGap.project_id == handover.project_id).all()
+        }
+        for r in responses_out:
+            if r["score"] >= 60.0:
+                continue
+            missed_list = [str(m).strip() for m in (r.get("missed_concepts") or []) if str(m).strip()]
+            g_title = f"Readiness Gap: {r.get('title') or r.get('scenario_id')}"[:480]
+            if g_title.lower() in existing_gap_titles:
+                continue
+            missed_str = ", ".join(missed_list) if missed_list else "operational runbook verification"
+            new_gap = KnowledgeGap(
+                project_id=handover.project_id,
+                title=g_title,
+                description=(
+                    f"Candidate '{candidate_name}' scored {r['score']}% on simulation scenario '{r.get('title')}'. "
+                    f"Missed concepts: {missed_str}."
+                ),
+                gap_type="readiness_remediation",
+                severity="high" if r["score"] < 50.0 else "medium",
+                priority="high" if r["score"] < 50.0 else "medium",
+                impact=f"Successor readiness risk for {handover.title}: unresolved understanding of {missed_str}.",
+                recommended_action=f"Schedule pairing with {handover.departing_employee_name} and document {missed_str}.",
+                status="open",
+            )
+            db.add(new_gap)
+            db.flush()
+            existing_gap_titles.add(g_title.lower())
+            remediation_gaps_created.append({"id": new_gap.id, "title": new_gap.title, "severity": new_gap.severity})
+
     if not overall_feedback:
         overall_feedback = (
             f"{candidate_name} achieved {avg_score}% readiness "
@@ -392,6 +548,8 @@ def evaluate_simulation_submission(
     stats = dict(handover.reconstruction_stats or {})
     stats["latest_readiness_score"] = avg_score
     stats["readiness_passed"] = passed
+    stats["latest_rubric_averages"] = dimension_averages
+    stats["latest_remediation_gaps"] = remediation_gaps_created
     stats["latest_simulation_at"] = sim.created_at.isoformat() if sim.created_at else None
     handover.reconstruction_stats = stats
 

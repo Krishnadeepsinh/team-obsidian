@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, Boolean, JSON, Index
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, Boolean, Integer, JSON, Index
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
@@ -181,12 +181,16 @@ class EmbeddingRecord(Base):
     __tablename__ = "embedding_records"
     __table_args__ = (
         Index("idx_embedding_project_entity", "project_id", "entity_type", "entity_id"),
+        Index("idx_embedding_project_parent", "project_id", "parent_id"),
     )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     entity_type = Column(String(50), nullable=False)
     entity_id = Column(String(36), nullable=False)
+    parent_id = Column(String(36), nullable=True, index=True)
+    chunk_index = Column(Integer, default=0)
+    task_type = Column(String(40), default="RETRIEVAL_DOCUMENT")
     text_content = Column(Text, nullable=False)
     embedding = Column(JSON, nullable=False)
     embedding_vector = Column(Vector(384).with_variant(JSON(), "sqlite"), nullable=True)

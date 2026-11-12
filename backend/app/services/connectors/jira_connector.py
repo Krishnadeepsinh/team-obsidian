@@ -206,25 +206,55 @@ class JiraConnector(BaseConnector):
             "issuetype",
             "project",
         ]
-        res = self._request_with_retry(
-            "POST",
-            f"{api_base}/search/jql",
-            headers=self.headers,
-            json_body={"jql": jql, "maxResults": 50, "fields": fields},
-            timeout=15,
-        )
-        if res.status_code in (404, 405, 410):
+        issues: List[Dict[str, Any]] = []
+        next_page_token: Optional[str] = None
+        start_at = 0
+        use_legacy_search = False
+
+        for page_no in range(5):
+            if not use_legacy_search:
+                body: Dict[str, Any] = {"jql": jql, "maxResults": 50, "fields": fields}
+                if next_page_token:
+                    body["nextPageToken"] = next_page_token
+                res = self._request_with_retry(
+                    "POST",
+                    f"{api_base}/search/jql",
+                    headers=self.headers,
+                    json_body=body,
+                    timeout=15,
+                )
+                if page_no == 0 and res.status_code in (404, 405, 410):
+                    use_legacy_search = True
+                else:
+                    if res.status_code != 200:
+                        if issues:
+                            break
+                        raise ConnectorError(f"Jira issue search failed ({res.status_code}): {res.text[:220]}")
+                    data = res.json() or {}
+                    issues.extend(data.get("issues") or [])
+                    next_page_token = data.get("nextPageToken")
+                    if not next_page_token or data.get("isLast", True) is True:
+                        break
+                    continue
+
             res = self._request_with_retry(
                 "GET",
                 f"{api_base}/search",
                 headers=self.headers,
-                params={"jql": jql, "maxResults": 50, "fields": ",".join(fields)},
+                params={"jql": jql, "startAt": start_at, "maxResults": 50, "fields": ",".join(fields)},
                 timeout=15,
             )
-        if res.status_code != 200:
-            raise ConnectorError(f"Jira issue search failed ({res.status_code}): {res.text[:220]}")
+            if res.status_code != 200:
+                if issues:
+                    break
+                raise ConnectorError(f"Jira issue search failed ({res.status_code}): {res.text[:220]}")
+            data = res.json() or {}
+            page_issues = data.get("issues") or []
+            issues.extend(page_issues)
+            start_at += len(page_issues)
+            if not page_issues or start_at >= int(data.get("total") or 0):
+                break
 
-        issues = (res.json() or {}).get("issues") or []
         records: List[Dict[str, Any]] = []
         newest_updated = last_updated or ""
 

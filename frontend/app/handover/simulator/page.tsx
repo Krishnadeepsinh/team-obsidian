@@ -21,6 +21,7 @@ export default function ReadinessSimulatorPage() {
   const [simData, setSimData] = useState<any>(null)
   const [candidateName, setCandidateName] = useState("")
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [followUps, setFollowUps] = useState<Record<string, string>>({})
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [evaluating, setEvaluating] = useState(false)
@@ -51,6 +52,7 @@ export default function ReadinessSimulatorPage() {
         setCandidateName((prev) => prev || data.incoming_employee_name)
       }
       setAnswers({})
+      setFollowUps({})
       if (!regenerate && data?.history?.length > 0) {
         setResult(data.history[0])
       } else {
@@ -92,6 +94,7 @@ export default function ReadinessSimulatorPage() {
         candidate_name: candidateName.trim() || simData.incoming_employee_name,
         scenarios: simData.scenarios,
         answers,
+        follow_ups: followUps,
       })
       setResult(res)
       const refreshed = await api.getReadinessSimulator(selectedId, false).catch(() => null)
@@ -276,6 +279,21 @@ export default function ReadinessSimulatorPage() {
                   placeholder="Describe root cause triage, affected downstream services, ADR constraints, and rollback/recovery plan..."
                   className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-white border border-slate-200 text-slate-900 focus:outline-none focus:border-violet-500"
                 />
+
+                {sc.follow_up_question && (
+                  <div className="p-3 rounded-xl bg-violet-50/50 border border-violet-100 space-y-1.5">
+                    <div className="text-[11px] font-semibold text-violet-900">
+                      Follow-Up Drill: {sc.follow_up_question}
+                    </div>
+                    <textarea
+                      rows={2}
+                      value={followUps[sc.id] || ""}
+                      onChange={(e) => setFollowUps((prev) => ({ ...prev, [sc.id]: e.target.value }))}
+                      placeholder="Optional deeper operational verification (monitoring metric, rollback threshold, owner escalation)..."
+                      className="w-full px-3 py-2 rounded-lg text-xs bg-white border border-violet-200 text-slate-900 focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                )}
               </div>
             ))}
 
@@ -315,6 +333,33 @@ export default function ReadinessSimulatorPage() {
                 </span>
               </div>
 
+              {result.dimension_averages && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {[
+                    { key: "architecture_accuracy", label: "Architecture" },
+                    { key: "blast_radius_awareness", label: "Blast Radius" },
+                    { key: "mitigation_readiness", label: "Mitigation" },
+                    { key: "operational_specificity", label: "Ops Specificity" },
+                  ].map((dim) => {
+                    const val = Math.round(Number(result.dimension_averages?.[dim.key] ?? 0))
+                    return (
+                      <div key={dim.key} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase text-slate-500">
+                          <span>{dim.label}</span>
+                          <span className="text-slate-900">{val}%</span>
+                        </div>
+                        <div className="mt-1.5 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${val >= 70 ? "bg-emerald-500" : val >= 50 ? "bg-amber-500" : "bg-rose-500"}`}
+                            style={{ width: `${Math.min(100, Math.max(0, val))}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {(result.responses || []).map((r: any, idx: number) => (
                   <div key={r.scenario_id || idx} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
@@ -329,6 +374,14 @@ export default function ReadinessSimulatorPage() {
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-600 leading-relaxed">{r.feedback}</p>
+                    {r.rubric_breakdown && (
+                      <div className="grid grid-cols-2 gap-1 text-[9px] text-slate-500 pt-1">
+                        <span>Arch: <strong>{Math.round(r.rubric_breakdown.architecture_accuracy ?? 0)}%</strong></span>
+                        <span>Blast: <strong>{Math.round(r.rubric_breakdown.blast_radius_awareness ?? 0)}%</strong></span>
+                        <span>Mitig: <strong>{Math.round(r.rubric_breakdown.mitigation_readiness ?? 0)}%</strong></span>
+                        <span>Ops: <strong>{Math.round(r.rubric_breakdown.operational_specificity ?? 0)}%</strong></span>
+                      </div>
+                    )}
                     {Array.isArray(r.strengths) && r.strengths.length > 0 && (
                       <div className="text-[10px] text-emerald-700 flex items-start gap-1">
                         <CheckCircle2 className="w-3 h-3 mt-0.5 flex-shrink-0" />
@@ -341,9 +394,25 @@ export default function ReadinessSimulatorPage() {
                         <span>Missed: {r.missed_concepts.join(", ")}</span>
                       </div>
                     )}
+                    {r.follow_up_prompt && (
+                      <div className="text-[10px] text-violet-700 bg-violet-50 border border-violet-100 rounded-lg p-1.5">
+                        Next drill: {r.follow_up_prompt}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
+
+              {Array.isArray(result.remediation_gaps_created) && result.remediation_gaps_created.length > 0 && (
+                <div className="px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    Opened <strong>{result.remediation_gaps_created.length}</strong> readiness remediation gap(s) for weak scenarios (&lt;60%). Retrying cleanly will auto-resolve them.
+                  </span>
+                  <Link href="/gaps" className="font-bold underline hover:text-amber-950">
+                    Review Knowledge Gaps &rarr;
+                  </Link>
+                </div>
+              )}
 
               {(result.responses || []).some(
                 (r: any) => (Array.isArray(r.missed_concepts) && r.missed_concepts.length > 0) || (r.score ?? 100) < 75

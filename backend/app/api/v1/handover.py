@@ -1,3 +1,4 @@
+import hashlib
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,7 @@ from app.core.security import get_current_user
 from app.models.evidence import Evidence
 from app.models.handover import (
     HANDOVER_STATES,
+    ExitInterviewQuestion,
     Handover,
     HandoverApproval,
     HandoverClaim,
@@ -26,14 +28,26 @@ from app.models.handover import (
     HandoverVersion,
     ReadinessSimulation,
 )
-from app.models.knowledge import KnowledgeDriftEvent, KnowledgeGap, TaskItem
+from app.models.knowledge import (
+    EmbeddingRecord,
+    KnowledgeDriftEvent,
+    KnowledgeEntity,
+    KnowledgeGap,
+    KnowledgeRelationship,
+    TaskItem,
+)
 from app.models.workspace import Project, ProjectMember, User
+from app.services.ai_engine import ai_engine
 from app.services.email_service import email_service
+from app.services.graph_service import graph_service
 from app.services.readiness_simulator import evaluate_simulation_submission, generate_scenarios_for_handover
 from app.schemas.handover import (
     ClaimVerifyRequest,
+    ExitInterviewAnswerRequest,
+    ExitInterviewQuestionResponse,
     HandoverApprovalRequest,
     HandoverClaimResponse,
+    HandoverDeltaSyncResponse,
     HandoverReconstructRequest,
     HandoverResponse,
     HandoverSectionResponse,
@@ -109,6 +123,275 @@ def run_reconstruction(
     )
     _notify_stakeholders_of_handover(db, h, role_label="Stakeholder / Reviewer")
     return h
+
+
+@router.post("/{handover_id}/delta-sync", response_model=HandoverDeltaSyncResponse)
+def sync_handover_delta(
+    handover_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Incrementally sync unverified/drifted dossier sections while preserving reviewer-verified sections."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db, require_write=True)
+
+    result = handover_engine.delta_sync_handover(db=db, handover=h, actor_user_id=current_user.id)
+    record_activity(
+        db,
+        user_id=current_user.id,
+        action="handover.delta_sync",
+        entity_type="handover",
+        entity_id=h.id,
+        project_id=h.project_id,
+        details={
+            "version_number": result.get("version_number"),
+            "updated_sections": result.get("updated_sections"),
+            "preserved_sections": result.get("preserved_sections"),
+        },
+    )
+    return result
+
+
+def _ensure_exit_interview_questions(
+    db: Session,
+    h: Handover,
+    actor_user_id: Optional[str] = None,
+) -> List[ExitInterviewQuestion]:
+    existing = (
+        db.query(ExitInterviewQuestion)
+        .filter(ExitInterviewQuestion.handover_id == h.id)
+        .all()
+    )
+    existing_gap_ids = {q.knowledge_gap_id for q in existing if q.knowledge_gap_id}
+    existing_sections = {q.section_number for q in existing if q.section_number is not None}
+
+    created_any = False
+    open_gaps = (
+        db.query(KnowledgeGap)
+        .filter(
+            KnowledgeGap.project_id == h.project_id,
+            KnowledgeGap.status.in_(["identified", "open", "in_progress"]),
+        )
+        .all()
+    )
+    for gap in open_gaps[:6]:
+        if gap.id in existing_gap_ids:
+            continue
+        q_text = (
+            f"[{gap.severity.upper()}] {gap.title}: {gap.description[:220]} — "
+            f"What undocumented runbook steps, owners, or safeguards should {h.incoming_employee_name} know?"
+        )
+        db.add(
+            ExitInterviewQuestion(
+                handover_id=h.id,
+                project_id=h.project_id,
+                section_number=12,
+                knowledge_gap_id=gap.id,
+                question_text=q_text,
+                status="pending",
+                priority="critical" if str(gap.severity).lower() == "critical" else "high",
+                created_by_user_id=actor_user_id,
+            )
+        )
+        created_any = True
+
+    sections = (
+        db.query(HandoverSection)
+        .filter(HandoverSection.handover_id == h.id)
+        .order_by(HandoverSection.section_number.asc())
+        .all()
+    )
+    for sec in sections:
+        if sec.section_number in existing_sections:
+            continue
+        needs_q = (not sec.evidence_ids) or (sec.confidence is not None and sec.confidence < 0.65)
+        if not needs_q:
+            continue
+        db.add(
+            ExitInterviewQuestion(
+                handover_id=h.id,
+                project_id=h.project_id,
+                section_number=sec.section_number,
+                question_text=(
+                    f"Section {sec.section_number} ({sec.title}) currently has limited primary evidence. "
+                    f"For {h.departing_employee_name}: what are the undocumented deployment gotchas, credentials rotation procedures, or failure modes here?"
+                ),
+                status="pending",
+                priority="high" if sec.section_number in (2, 7, 8, 9, 10, 11) else "medium",
+                created_by_user_id=actor_user_id,
+            )
+        )
+        created_any = True
+
+    if created_any:
+        db.commit()
+
+    return (
+        db.query(ExitInterviewQuestion)
+        .filter(ExitInterviewQuestion.handover_id == h.id)
+        .order_by(ExitInterviewQuestion.status.desc(), ExitInterviewQuestion.created_at.asc())
+        .all()
+    )
+
+
+@router.get("/{handover_id}/exit-interview", response_model=List[ExitInterviewQuestionResponse])
+def get_exit_interview_questions(
+    handover_id: str,
+    generate: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve or auto-generate targeted exit-interview questions from open gaps and low-evidence sections."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db)
+
+    existing = (
+        db.query(ExitInterviewQuestion)
+        .filter(ExitInterviewQuestion.handover_id == handover_id)
+        .order_by(ExitInterviewQuestion.status.desc(), ExitInterviewQuestion.created_at.asc())
+        .all()
+    )
+    if existing and not generate:
+        return existing
+    return _ensure_exit_interview_questions(db, h, actor_user_id=current_user.id)
+
+
+@router.post("/{handover_id}/exit-interview/{question_id}/answer", response_model=ExitInterviewQuestionResponse)
+def answer_exit_interview_question(
+    handover_id: str,
+    question_id: str,
+    req: ExitInterviewAnswerRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Record departing engineer exit-interview answer as first-class verified Evidence + EmbeddingRecord."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db, require_write=True)
+
+    q = (
+        db.query(ExitInterviewQuestion)
+        .filter(
+            ExitInterviewQuestion.id == question_id,
+            ExitInterviewQuestion.handover_id == handover_id,
+        )
+        .first()
+    )
+    if not q:
+        raise HTTPException(status_code=404, detail="Exit interview question not found")
+
+    answer_clean = (req.answer_text or "").strip()
+    if not answer_clean:
+        raise HTTPException(status_code=400, detail="Answer text cannot be empty.")
+
+    now = datetime.now(timezone.utc)
+    full_text = f"Question: {q.question_text}\nExit Interview Answer ({h.departing_employee_name}): {answer_clean}"
+    content_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+
+    ev = Evidence(
+        project_id=h.project_id,
+        source_type="exit_interview",
+        source_id=f"exit_q_{q.id}",
+        source_title=f"Exit Interview: {h.departing_employee_name} (Section {q.section_number or 12})",
+        source_author=h.departing_employee_name,
+        source_timestamp=now,
+        claim_type="exit_interview_answer",
+        excerpt=answer_clean[:500],
+        full_text=full_text,
+        ai_interpretation=f"Direct exit-interview knowledge capture from {h.departing_employee_name}.",
+        confidence=0.95,
+        verification_status="Verified by Reviewer",
+        content_hash=content_hash,
+        reviewer_id=current_user.id,
+        reviewed_at=now,
+        metadata_json={
+            "handover_id": h.id,
+            "question_id": q.id,
+            "section_number": q.section_number,
+            "knowledge_gap_id": q.knowledge_gap_id,
+        },
+    )
+    db.add(ev)
+    db.flush()
+
+    vec = ai_engine.generate_embedding(full_text, task_type="RETRIEVAL_DOCUMENT")
+    db.add(
+        EmbeddingRecord(
+            project_id=h.project_id,
+            entity_type="evidence",
+            entity_id=ev.id,
+            task_type="RETRIEVAL_DOCUMENT",
+            text_content=full_text,
+            embedding=vec,
+            embedding_vector=vec,
+        )
+    )
+
+    q.answer_text = answer_clean
+    q.status = "answered"
+    q.evidence_id = ev.id
+    q.answered_by_user_id = current_user.id
+    q.answered_at = now
+
+    if req.resolve_linked_gap and q.knowledge_gap_id:
+        gap = db.query(KnowledgeGap).filter(KnowledgeGap.id == q.knowledge_gap_id).first()
+        if gap:
+            gap.status = "resolved"
+            gap_ev_ids = list(gap.evidence_ids or [])
+            if ev.id not in gap_ev_ids:
+                gap_ev_ids.append(ev.id)
+                gap.evidence_ids = gap_ev_ids
+
+    target_sec_num = q.section_number or 12
+    sec = (
+        db.query(HandoverSection)
+        .filter(
+            HandoverSection.handover_id == handover_id,
+            HandoverSection.section_number == target_sec_num,
+        )
+        .first()
+    )
+    if sec:
+        ev_ids = list(sec.evidence_ids or [])
+        if ev.id not in ev_ids:
+            ev_ids.append(ev.id)
+            sec.evidence_ids = ev_ids
+        addition = f"\n\n### Exit Interview Response ({h.departing_employee_name})\n- **Q:** {q.question_text}\n- **A:** {answer_clean}"
+        if addition not in (sec.content or ""):
+            sec.content = (sec.content or "") + addition
+        sec.confidence = round(max(float(sec.confidence or 0.0), 0.85), 2)
+        sec.updated_at = now
+        db.add(
+            HandoverClaim(
+                handover_id=handover_id,
+                section_id=sec.id,
+                claim_text=answer_clean[:500],
+                verification_status="Verified by Reviewer",
+                confidence=0.95,
+                evidence_ids=[ev.id],
+                reviewer_id=current_user.id,
+                reviewed_at=now,
+                review_notes=f"Captured via Exit Interview Q#{q.id[:8]}",
+            )
+        )
+
+    record_activity(
+        db,
+        user_id=current_user.id,
+        action="handover.exit_interview_answered",
+        entity_type="exit_interview_question",
+        entity_id=q.id,
+        project_id=h.project_id,
+        details={"handover_id": h.id, "evidence_id": ev.id, "resolved_gap_id": q.knowledge_gap_id},
+    )
+    db.commit()
+    db.refresh(q)
+    return q
 
 
 @router.put("/{handover_id}/sections/{section_id}", response_model=HandoverSectionResponse)
@@ -493,7 +776,9 @@ def evaluate_readiness_simulator(
         user_id=current_user.id,
         scenarios=scenarios,
         answers=answers,
+        follow_ups=payload.follow_ups,
     )
+    refreshed_stats = dict(h.reconstruction_stats or {})
     return {
         "id": sim.id,
         "handover_id": sim.handover_id,
@@ -502,6 +787,8 @@ def evaluate_readiness_simulator(
         "passed": sim.passed,
         "responses": sim.responses_json or [],
         "summary_feedback": sim.summary_feedback,
+        "dimension_averages": refreshed_stats.get("latest_rubric_averages"),
+        "remediation_gaps_created": refreshed_stats.get("latest_remediation_gaps") or [],
         "created_at": sim.created_at.isoformat() if sim.created_at else "",
     }
 
@@ -562,6 +849,44 @@ def export_handover_pdf(
     approvals = db.query(HandoverApproval).filter(HandoverApproval.handover_id == handover_id).all()
     evidences = db.query(Evidence).filter(Evidence.project_id == h.project_id).all()
     ev_by_id = {e.id: e for e in evidences}
+    claims = db.query(HandoverClaim).filter(HandoverClaim.handover_id == handover_id).all()
+    claims_by_section: Dict[str, List[Dict[str, Any]]] = {}
+    for c in claims:
+        claims_by_section.setdefault(c.section_id, []).append(
+            {
+                "claim_text": c.claim_text,
+                "verification_status": c.verification_status,
+                "confidence": c.confidence,
+                "evidence_ids": c.evidence_ids or [],
+                "evidence_count": len(c.evidence_ids or []),
+            }
+        )
+
+    ke_rows = db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id == h.project_id).all()
+    kr_rows = db.query(KnowledgeRelationship).filter(KnowledgeRelationship.project_id == h.project_id).all()
+    spofs = graph_service.detect_single_points_of_failure(
+        entities=[
+            {
+                "id": e.id,
+                "name": e.name,
+                "entity_type": e.entity_type,
+                "confidence": e.confidence,
+                "properties": e.properties or {},
+            }
+            for e in ke_rows
+        ],
+        relationships=[
+            {
+                "id": r.id,
+                "source_entity_id": r.source_entity_id,
+                "target_entity_id": r.target_entity_id,
+                "relation_type": r.relation_type,
+                "context": r.context or "",
+                "confidence": r.confidence,
+            }
+            for r in kr_rows
+        ],
+    )
 
     handover_data = {
         "title": h.title,
@@ -573,6 +898,7 @@ def export_handover_pdf(
         "overall_confidence": h.overall_confidence,
         "status": h.status,
         "created_at": h.created_at.strftime("%B %d, %Y"),
+        "spofs": spofs,
         "approvals": [
             {
                 "role": a.role,
@@ -589,6 +915,7 @@ def export_handover_pdf(
                 "content": s.content,
                 "is_verified": s.is_verified,
                 "verification_status": getattr(s, "verification_status", "Needs Human Verification"),
+                "claims": claims_by_section.get(s.id, []),
                 "evidence_refs": [
                     f"{ev_by_id[eid].source_title} ({ev_by_id[eid].content_hash[:12]})"
                     for eid in (s.evidence_ids or [])
@@ -606,7 +933,13 @@ def export_handover_pdf(
     output_path = os.path.join(out_dir, pdf_filename)
 
     pdf_generator.generate_handover_pdf(handover_data, output_path)
-    return FileResponse(output_path, media_type="application/pdf", filename=pdf_filename)
+    document_digest = handover_data.get("document_sha256") or pdf_generator.compute_document_digest(handover_data)
+    return FileResponse(
+        output_path,
+        media_type="application/pdf",
+        filename=pdf_filename,
+        headers={"X-Document-SHA256": document_digest},
+    )
 
 
 @router.get("/{handover_id}/readiness-gate")

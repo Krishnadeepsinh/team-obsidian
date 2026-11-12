@@ -576,6 +576,14 @@ export const api = {
     fetchJson<any>(`/integrations/${id}/reconnect`, { method: "POST", body: JSON.stringify(data) }),
   deleteIntegration: async (id: string) =>
     fetchJson<any>(`/integrations/${id}`, { method: "DELETE" }),
+  getIntegrationJobs: async (projectId?: string, limit: number = 20) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set("project_id", projectId)
+    if (limit) params.set("limit", String(limit))
+    return fetchJson<any[]>(`/integrations/jobs?${params.toString()}`)
+  },
+  getIntegrationJobsById: async (integrationId: string, limit: number = 15) =>
+    fetchJson<any[]>(`/integrations/${integrationId}/jobs?limit=${limit}`),
 
   // Documents
   getDocuments: async (projectId?: string) => {
@@ -622,6 +630,28 @@ export const api = {
   getHandover: async (id: string) => fetchJson<any>(`/handovers/${id}`),
   reconstructHandover: async (data: any) =>
     fetchJson<any>("/handovers/reconstruct", { method: "POST", body: JSON.stringify(data) }),
+  deltaSyncHandover: async (handoverId: string) =>
+    fetchJson<{
+      handover_id: string
+      version_number: number
+      preserved_sections: number[]
+      updated_sections: number[]
+      previous_confidence: number
+      new_confidence: number
+      drift_warnings_cleared: number
+      summary: string
+    }>(`/handovers/${handoverId}/delta-sync`, { method: "POST" }),
+  getExitInterview: async (handoverId: string, generate: boolean = false) =>
+    fetchJson<any[]>(`/handovers/${handoverId}/exit-interview?generate=${generate ? "true" : "false"}`),
+  answerExitInterviewQuestion: async (
+    handoverId: string,
+    questionId: string,
+    payload: { answer_text: string; resolve_linked_gap?: boolean }
+  ) =>
+    fetchJson<any>(`/handovers/${handoverId}/exit-interview/${questionId}/answer`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   editSection: async (handoverId: string, sectionId: string, content: string, isVerified?: boolean, reason?: string) =>
     fetchJson<any>(`/handovers/${handoverId}/sections/${sectionId}`, {
       method: "PUT",
@@ -670,7 +700,7 @@ export const api = {
     fetchJson<any>(`/handovers/${handoverId}/simulator?regenerate=${regenerate ? "true" : "false"}`),
   evaluateReadinessSimulator: async (
     handoverId: string,
-    payload: { candidate_name?: string; scenarios: any[]; answers: Record<string, string> }
+    payload: { candidate_name?: string; scenarios: any[]; answers: Record<string, string>; follow_ups?: Record<string, string> }
   ) =>
     fetchJson<any>(`/handovers/${handoverId}/simulator/evaluate`, {
       method: "POST",

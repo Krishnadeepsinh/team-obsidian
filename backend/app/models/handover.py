@@ -162,3 +162,25 @@ class ReadinessSimulation(Base):
     created_at = Column(DateTime, default=utc_now, index=True)
 
     handover = relationship("Handover")
+
+
+class ExitInterviewQuestion(Base):
+    __tablename__ = "exit_interview_questions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    handover_id = Column(String(36), ForeignKey("handovers.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    section_number = Column(Integer, nullable=True)
+    knowledge_gap_id = Column(String(36), ForeignKey("knowledge_gaps.id", ondelete="SET NULL"), nullable=True)
+    question_text = Column(Text, nullable=False)
+    answer_text = Column(Text, nullable=True)
+    status = Column(String(30), nullable=False, default="pending")  # pending, answered, dismissed
+    priority = Column(String(20), nullable=False, default="high")  # critical, high, medium
+    evidence_id = Column(String(36), nullable=True)
+    created_by_user_id = Column(String(36), nullable=True)
+    answered_by_user_id = Column(String(36), nullable=True)
+    answered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utc_now, index=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+
+    handover = relationship("Handover")

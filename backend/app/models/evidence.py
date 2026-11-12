@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, JSON, Index
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, Integer, JSON, Index
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -27,6 +27,7 @@ class Evidence(Base):
     __tablename__ = "evidences"
     __table_args__ = (
         Index("idx_evidence_project_status", "project_id", "verification_status"),
+        Index("idx_evidence_project_parent", "project_id", "parent_evidence_id"),
     )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
@@ -34,6 +35,9 @@ class Evidence(Base):
     source_record_id = Column(String(36), ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True, index=True)
     document_id = Column(String(36), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
     chunk_id = Column(String(36), ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_evidence_id = Column(String(36), ForeignKey("evidences.id", ondelete="SET NULL"), nullable=True, index=True)
+    chunk_index = Column(Integer, default=0)
+    total_chunks = Column(Integer, default=1)
     source_type = Column(String(50), nullable=False)
     source_id = Column(String(255), nullable=False)
     source_title = Column(String(500), nullable=False)
@@ -42,6 +46,7 @@ class Evidence(Base):
     source_timestamp = Column(DateTime, nullable=True)
     claim_type = Column(String(50), default="source_excerpt")
     excerpt = Column(Text, nullable=False)
+    full_text = Column(Text, nullable=True)
     ai_interpretation = Column(Text, nullable=False)
     confidence = Column(Float, default=0.0)
     verification_status = Column(String(50), default="Needs Human Verification")

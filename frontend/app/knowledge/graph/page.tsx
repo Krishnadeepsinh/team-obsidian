@@ -118,9 +118,19 @@ function CustomKnowledgeNode({ data, selected }: { data: any; selected?: boolean
             AT RISK
           </span>
         ) : isSpof ? (
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-[9px] font-bold">
-            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
-            SPOF
+          <span
+            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border text-[9px] font-bold uppercase ${
+              data?.spofSeverity === "critical"
+                ? "bg-rose-50 border-rose-300 text-rose-800"
+                : "bg-amber-50 border-amber-300 text-amber-800"
+            }`}
+          >
+            <AlertTriangle className={`w-2.5 h-2.5 ${data?.spofSeverity === "critical" ? "text-rose-600" : "text-amber-600"}`} />
+            {data?.spofSeverity ? `${data.spofSeverity} SPOF` : "SPOF"}
+          </span>
+        ) : data?.effectiveBusFactor !== undefined && data?.effectiveBusFactor !== null ? (
+          <span className="text-[9px] font-semibold text-slate-500" title="Effective Herfindahl Bus Factor">
+            BF {Number(data.effectiveBusFactor).toFixed(1)}
           </span>
         ) : (
           <span className="text-[9px] font-semibold text-slate-400">{confidencePct}%</span>
@@ -139,8 +149,12 @@ function CustomKnowledgeNode({ data, selected }: { data: any; selected?: boolean
 
       <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-[9px] text-slate-400">
         <span>{data?.degree ?? 0} {(data?.degree ?? 0) === 1 ? "link" : "links"}</span>
-        <span className="truncate max-w-[130px]">
-          {data?.soleOwner ? `Owner: ${data.soleOwner}` : `${confidencePct}% conf`}
+        <span className="truncate max-w-[140px]">
+          {data?.soleOwner
+            ? `Owner: ${data.soleOwner}${data?.ownershipShare ? ` (${Math.round(data.ownershipShare * 100)}%)` : ""}`
+            : data?.ownershipShare
+            ? `Top share: ${Math.round(data.ownershipShare * 100)}%`
+            : `${confidencePct}% conf`}
         </span>
       </div>
 
@@ -770,6 +784,27 @@ export default function KnowledgeGraphPage() {
                     {selectedNode.data?.verificationStatus || "Needs Review"}
                   </span>
                 </div>
+                {(selectedNode.data?.effectiveBusFactor !== undefined && selectedNode.data?.effectiveBusFactor !== null) ||
+                (selectedNode.data?.ownershipShare !== undefined && selectedNode.data?.ownershipShare !== null) ? (
+                  <>
+                    <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Effective Bus Factor</span>
+                      <span className="font-bold text-slate-900">
+                        {selectedNode.data?.effectiveBusFactor !== undefined && selectedNode.data?.effectiveBusFactor !== null
+                          ? Number(selectedNode.data.effectiveBusFactor).toFixed(2)
+                          : "N/A"}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Top Owner Share</span>
+                      <span className="font-bold text-slate-900">
+                        {selectedNode.data?.ownershipShare !== undefined && selectedNode.data?.ownershipShare !== null
+                          ? `${Math.round(Number(selectedNode.data.ownershipShare) * 100)}%`
+                          : "N/A"}
+                      </span>
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               {loadingBlast ? (

@@ -19,6 +19,9 @@ import {
   ShieldCheck,
   ExternalLink,
   Trash2,
+  RefreshCw,
+  HelpCircle,
+  Eye,
 } from "lucide-react"
 
 const SOURCE_CATEGORIES = ["Architecture", "Decisions", "Tasks", "Risks", "Gaps", "Dependencies"]
@@ -146,6 +149,13 @@ export default function HandoverPage() {
   const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [downloadingMd, setDownloadingMd] = useState(false)
   const [readinessGate, setReadinessGate] = useState<any>(null)
+  const [deltaSyncing, setDeltaSyncing] = useState(false)
+  const [deltaResult, setDeltaResult] = useState<any>(null)
+  const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null)
+  const [exitQuestions, setExitQuestions] = useState<any[]>([])
+  const [loadingExitQuestions, setLoadingExitQuestions] = useState(false)
+  const [exitDrafts, setExitDrafts] = useState<Record<string, string>>({})
+  const [submittingQuestionId, setSubmittingQuestionId] = useState<string | null>(null)
 
   // Editing section
   const [editing, setEditing] = useState(false)
@@ -198,8 +208,14 @@ export default function HandoverPage() {
       if (targetId) {
         const full = await api.getHandover(targetId).catch(() => null)
         setCurrentHandover(full)
-        const gate = full?.id ? await api.getHandoverReadinessGate(full.id).catch(() => null) : null
+        const [gate, exitQs] = full?.id
+          ? await Promise.all([
+              api.getHandoverReadinessGate(full.id).catch(() => null),
+              api.getExitInterview(full.id, false).catch(() => []),
+            ])
+          : [null, []]
         setReadinessGate(gate)
+        setExitQuestions(Array.isArray(exitQs) ? exitQs : [])
         if (full?.project_id) {
           const evList = await api.getEvidence(full.project_id).catch(() => [])
           const map: Record<string, any> = {}
@@ -382,6 +398,58 @@ export default function HandoverPage() {
     }
   }
 
+  const handleDeltaSync = async () => {
+    if (!currentHandover || deltaSyncing) return
+    try {
+      setDeltaSyncing(true)
+      setError("")
+      const res = await api.deltaSyncHandover(currentHandover.id)
+      setDeltaResult(res)
+      setStatusMsg(res?.summary || "Living delta sync completed.")
+      await refreshCurrent()
+    } catch (err: any) {
+      setError(err.message || "Delta sync failed.")
+    } finally {
+      setDeltaSyncing(false)
+    }
+  }
+
+  const handleGenerateExitInterview = async () => {
+    if (!currentHandover || loadingExitQuestions) return
+    try {
+      setLoadingExitQuestions(true)
+      setError("")
+      const qs = await api.getExitInterview(currentHandover.id, true)
+      setExitQuestions(Array.isArray(qs) ? qs : [])
+    } catch (err: any) {
+      setError(err.message || "Could not generate exit interview questions.")
+    } finally {
+      setLoadingExitQuestions(false)
+    }
+  }
+
+  const handleAnswerExitQuestion = async (questionId: string) => {
+    if (!currentHandover || submittingQuestionId) return
+    const answerText = (exitDrafts[questionId] || "").trim()
+    if (!answerText) return
+    try {
+      setSubmittingQuestionId(questionId)
+      setError("")
+      const updated = await api.answerExitInterviewQuestion(currentHandover.id, questionId, {
+        answer_text: answerText,
+        resolve_linked_gap: true,
+      })
+      setExitQuestions((prev) => prev.map((q) => (q.id === questionId ? updated : q)))
+      setExitDrafts((prev) => ({ ...prev, [questionId]: "" }))
+      setStatusMsg("Recorded exit-interview answer as verified Evidence and linked it to the dossier.")
+      await refreshCurrent()
+    } catch (err: any) {
+      setError(err.message || "Failed to record exit-interview answer.")
+    } finally {
+      setSubmittingQuestionId(null)
+    }
+  }
+
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!currentHandover || !activeSection || !commentText.trim()) return
@@ -496,6 +564,16 @@ export default function HandoverPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={handleDeltaSync}
+                disabled={deltaSyncing}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-violet-50 border border-violet-200 hover:bg-violet-100 disabled:opacity-50 text-violet-700 flex items-center gap-1.5"
+                title="Refresh unverified sections with latest evidence while preserving reviewer-verified sections"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${deltaSyncing ? "animate-spin" : ""}`} />
+                <span>{deltaSyncing ? "Syncing..." : "Delta Sync"}</span>
+              </button>
               <Link
                 href="/handover/approvals"
                 className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1.5"
@@ -526,6 +604,33 @@ export default function HandoverPage() {
               </button>
             </div>
           </div>
+
+          {deltaResult && (
+            <div className="apple-card p-3.5 border border-violet-200 bg-violet-50/70 text-xs text-violet-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="space-y-0.5">
+                <div className="font-bold flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5 text-violet-600" />
+                  <span>
+                    Living Delta Sync (v{deltaResult.version_number}) — Preserved {deltaResult.preserved_sections?.length ?? 0} verified sections, refreshed {deltaResult.updated_sections?.length ?? 0} sections
+                  </span>
+                </div>
+                <p className="text-[11px] text-violet-800">
+                  Confidence: {Math.round((deltaResult.previous_confidence ?? 0) * 100)}% &rarr;{" "}
+                  <strong>{Math.round((deltaResult.new_confidence ?? 0) * 100)}%</strong>
+                  {deltaResult.drift_warnings_cleared > 0
+                    ? ` • Cleared ${deltaResult.drift_warnings_cleared} drift alert(s)`
+                    : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeltaResult(null)}
+                className="text-[11px] font-semibold text-violet-700 hover:underline self-start sm:self-center"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {readinessGate && (
             <div
@@ -690,36 +795,96 @@ export default function HandoverPage() {
                         <span>Claim-Level Evidence Verification ({activeSection.claims.length})</span>
                       </h4>
                       <div className="space-y-2">
-                        {activeSection.claims.map((cl: any) => (
-                          <div key={cl.id} className="p-3 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                            <div className="space-y-1 min-w-0">
-                              <div className="text-slate-800 font-medium break-words">
-                                {renderInlineMarkdown(cl.claim_text || "")}
+                        {activeSection.claims.map((cl: any) => {
+                          const isExpanded = expandedClaimId === cl.id
+                          const linkedIds: string[] = Array.isArray(cl.evidence_ids) ? cl.evidence_ids : []
+                          return (
+                            <div key={cl.id} className="p-3 rounded-xl bg-white border border-slate-200 space-y-2 text-xs">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div className="space-y-1 min-w-0">
+                                  <div className="text-slate-800 font-medium break-words">
+                                    {renderInlineMarkdown(cl.claim_text || "")}
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                    <span className={`px-2 py-0.5 rounded-full border font-semibold ${VERIF_BADGE(cl.verification_status)}`}>
+                                      {cl.verification_status}
+                                    </span>
+                                    <span>Conf: {Math.round((cl.confidence ?? 0) * 100)}%</span>
+                                    <span>Evidence refs: {linkedIds.length}</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedClaimId(isExpanded ? null : cl.id)}
+                                    className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100 inline-flex items-center gap-1"
+                                  >
+                                    <Eye className="w-3 h-3" /> {isExpanded ? "Hide Proof" : "Inspect Proof"}
+                                  </button>
+                                  <button
+                                    onClick={() => handleVerifyClaim(cl.id, "Verified by Reviewer")}
+                                    className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                                  >
+                                    Verify
+                                  </button>
+                                  <button
+                                    onClick={() => handleVerifyClaim(cl.id, "Contradicted")}
+                                    className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                                  >
+                                    Contradicted
+                                  </button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                                <span className={`px-2 py-0.5 rounded-full border font-semibold ${VERIF_BADGE(cl.verification_status)}`}>
-                                  {cl.verification_status}
-                                </span>
-                                <span>Conf: {Math.round((cl.confidence ?? 0) * 100)}%</span>
-                                <span>Evidence refs: {cl.evidence_ids?.length || 0}</span>
-                              </div>
+                              {isExpanded && (
+                                <div className="pt-2 border-t border-slate-100 space-y-1.5 text-[11px]">
+                                  {cl.review_notes && (
+                                    <div className="p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
+                                      <strong>Reviewer Notes:</strong> {cl.review_notes}
+                                    </div>
+                                  )}
+                                  {linkedIds.length === 0 ? (
+                                    <div className="text-slate-400 italic">No direct evidence IDs linked to this claim yet.</div>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                      {linkedIds.map((eid: string) => {
+                                        const ev = evidenceMap[eid]
+                                        if (!ev) {
+                                          return (
+                                            <div key={eid} className="p-2 rounded-lg bg-slate-50 border border-slate-200 font-mono text-[10px] text-slate-500">
+                                              Evidence #{eid.slice(0, 8)}
+                                            </div>
+                                          )
+                                        }
+                                        const safeEvUrl = safeHref(ev.source_url, { allowRelative: true })
+                                        return (
+                                          <div key={eid} className="p-2 rounded-lg bg-slate-50 border border-slate-200 space-y-0.5">
+                                            <div className="flex items-center justify-between gap-1">
+                                              <span className="font-semibold text-slate-800 truncate">{ev.source_title}</span>
+                                              <span className="text-[9px] px-1 py-0.5 rounded bg-white border border-slate-200 uppercase text-violet-700">
+                                                {ev.source_type}
+                                              </span>
+                                            </div>
+                                            <p className="text-slate-600 line-clamp-2 italic">&ldquo;{ev.excerpt}&rdquo;</p>
+                                            {safeEvUrl && (
+                                              <a
+                                                href={safeEvUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-[10px] text-violet-600 hover:underline inline-flex items-center gap-0.5"
+                                              >
+                                                Open Source <ExternalLink className="w-2.5 h-2.5" />
+                                              </a>
+                                            )}
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              <button
-                                onClick={() => handleVerifyClaim(cl.id, "Verified by Reviewer")}
-                                className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
-                              >
-                                Verify
-                              </button>
-                              <button
-                                onClick={() => handleVerifyClaim(cl.id, "Contradicted")}
-                                className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
-                              >
-                                Contradicted
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   )}
@@ -804,6 +969,112 @@ export default function HandoverPage() {
                   </div>
                 </div>
               )}
+
+              {/* Structured Exit Interview Q&A Panel */}
+              <div className="apple-card p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                      <HelpCircle className="w-4 h-4 text-violet-600" />
+                      <span>Structured Exit Interview Q&amp;A ({exitQuestions.length})</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Capture unwritten tribal knowledge directly as verified Evidence and close open Knowledge Gaps.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGenerateExitInterview}
+                    disabled={loadingExitQuestions}
+                    className="px-3 py-1.5 rounded-xl text-[11px] font-semibold bg-violet-50 hover:bg-violet-100 disabled:opacity-50 text-violet-700 border border-violet-200 flex items-center gap-1 self-start"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>{loadingExitQuestions ? "Generating..." : "Generate Exit Questions"}</span>
+                  </button>
+                </div>
+
+                {exitQuestions.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    No exit interview prompts queued yet. Click &ldquo;Generate Exit Questions&rdquo; to extract targeted prompts from unresolved gaps and SPOFs.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {exitQuestions.map((q: any) => {
+                      const isAnswered = q.status === "answered" || Boolean(q.answer_text)
+                      const isSubmitting = submittingQuestionId === q.id
+                      return (
+                        <div key={q.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white border border-slate-200 font-bold text-violet-700">
+                                Section #{q.section_number}
+                              </span>
+                              <span
+                                className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${
+                                  q.priority === "high" || q.priority === "critical"
+                                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                                    : "bg-amber-50 text-amber-700 border-amber-200"
+                                }`}
+                              >
+                                {q.priority || "medium"}
+                              </span>
+                              {q.knowledge_gap_id && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+                                  Linked Gap {isAnswered ? "Resolved" : "Open"}
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
+                                isAnswered
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : "bg-amber-50 text-amber-700 border-amber-200"
+                              }`}
+                            >
+                              {isAnswered ? "Verified Evidence Recorded" : "Awaiting Answer"}
+                            </span>
+                          </div>
+
+                          <p className="font-semibold text-slate-900">{q.question_text}</p>
+
+                          {isAnswered ? (
+                            <div className="p-2.5 rounded-lg bg-white border border-emerald-200 space-y-1">
+                              <p className="text-slate-800 whitespace-pre-wrap">{q.answer_text}</p>
+                              <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                <span>
+                                  {q.evidence_id ? `Evidence #${String(q.evidence_id).slice(0, 8)}` : "Stored in dossier"}
+                                </span>
+                                <span>{q.answered_at ? new Date(q.answered_at).toLocaleString() : ""}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <textarea
+                                rows={2}
+                                value={exitDrafts[q.id] || ""}
+                                onChange={(e) => setExitDrafts((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                                placeholder="Capture outgoing engineer explanation, runbook steps, credentials location, or edge-case warnings..."
+                                className="w-full p-2.5 rounded-xl text-xs bg-white border border-slate-200 focus:outline-none focus:border-violet-500"
+                              />
+                              <div className="flex justify-end">
+                                <button
+                                  type="button"
+                                  disabled={isSubmitting || !(exitDrafts[q.id] || "").trim()}
+                                  onClick={() => handleAnswerExitQuestion(q.id)}
+                                  className="px-3 py-1.5 rounded-xl text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white flex items-center gap-1"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>{isSubmitting ? "Recording..." : "Save as Verified Evidence"}</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </>

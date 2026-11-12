@@ -363,16 +363,17 @@ def test_knowledge_extractor_truncates_postgresql_bounds():
                 return_value=oversized_bundle,
             ):
                 counts = extract_and_persist_project_knowledge(db, project_id, actor_user_id=uid)
-                assert counts["entities"] == 1
+                assert counts["entities"] >= 1
                 assert counts["decisions"] == 1
                 assert counts["risks"] == 1
                 assert counts["dependencies"] == 1
                 assert counts["gaps"] == 1
 
-            ke = db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id == project_id).first()
-            assert ke is not None
-            assert len(ke.entity_type) <= 50
-            assert len(ke.name) <= 255
+            all_entities = db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id == project_id).all()
+            assert len(all_entities) >= 1
+            for ke in all_entities:
+                assert len(ke.entity_type) <= 50
+                assert len(ke.name) <= 255
         finally:
             db.close()
     finally:

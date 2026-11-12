@@ -75,6 +75,7 @@ class SourceRecord(Base):
     source_timestamp = Column(DateTime, nullable=True)
     ingested_at = Column(DateTime, default=utc_now, index=True)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+    extraction_processed_at = Column(DateTime, nullable=True, index=True)
 
     integration = relationship("Integration", back_populates="source_records")
     evidences = relationship("Evidence", back_populates="source_record", cascade="all, delete-orphan")
@@ -146,3 +147,25 @@ class DocumentChunk(Base):
     created_at = Column(DateTime, default=utc_now)
 
     document = relationship("Document", back_populates="chunks")
+
+
+class PipelineJob(Base):
+    __tablename__ = "pipeline_jobs"
+    __table_args__ = (
+        Index("idx_pipeline_job_proj_updated", "project_id", "updated_at"),
+        Index("idx_pipeline_job_integ_updated", "integration_id", "updated_at"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_id = Column(String(36), ForeignKey("integrations.id", ondelete="SET NULL"), nullable=True, index=True)
+    job_type = Column(String(80), nullable=False, default="knowledge_extraction")
+    stage = Column(String(60), nullable=False, default="queued")
+    status = Column(String(30), nullable=False, default="running")  # queued, running, completed, failed
+    progress = Column(Integer, nullable=False, default=0)
+    message = Column(Text, nullable=True)
+    details = Column(JSON, default=dict)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=utc_now)
+    completed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, index=True)

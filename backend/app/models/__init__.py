@@ -13,6 +13,7 @@ from app.models.workspace import (
 )
 from app.models.integration import (
     Integration,
+    PipelineJob,
     SourceRecord,
     SourceEvent,
     Document,
@@ -40,6 +41,7 @@ from app.models.handover import (
     HandoverApproval,
     HandoverVersion,
     ReadinessSimulation,
+    ExitInterviewQuestion,
 )
 
 __all__ = [
@@ -55,6 +57,7 @@ __all__ = [
     "RevokedToken",
     "RateLimitEvent",
     "Integration",
+    "PipelineJob",
     "SourceRecord",
     "SourceEvent",
     "Document",
@@ -79,4 +82,5 @@ __all__ = [
     "HandoverApproval",
     "HandoverVersion",
     "ReadinessSimulation",
+    "ExitInterviewQuestion",
 ]

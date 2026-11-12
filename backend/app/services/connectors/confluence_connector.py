@@ -205,54 +205,78 @@ class ConfluenceConnector(BaseConnector):
             if params["space-id"] is None:
                 params.pop("space-id")
 
-        res = self._request_with_retry("GET", f"{wiki_base}/api/v2/pages", headers=self.headers, params=params, timeout=15)
-        if res.status_code != 200:
-            raise ConnectorError(f"Confluence page fetch failed ({res.status_code}): {res.text[:220]}")
-
-        pages = (res.json() or {}).get("results") or []
         last_modified = cursor.get("last_page_updated") or ""
         newest_modified = last_modified
         records: List[Dict[str, Any]] = []
+        next_url: Optional[str] = f"{wiki_base}/api/v2/pages"
+        next_params: Optional[Dict[str, Any]] = params
 
-        for page in pages:
-            page_id = str(page.get("id") or "")
-            if not page_id:
-                continue
-            version_info = page.get("version") or {}
-            modified_at = version_info.get("createdAt") or page.get("createdAt") or ""
-            if last_modified and modified_at and modified_at <= last_modified:
-                continue
-            if modified_at and modified_at > newest_modified:
-                newest_modified = modified_at
+        for _ in range(5):
+            if not next_url:
+                break
+            res = self._request_with_retry("GET", next_url, headers=self.headers, params=next_params, timeout=15)
+            if res.status_code != 200:
+                if records:
+                    break
+                raise ConnectorError(f"Confluence page fetch failed ({res.status_code}): {res.text[:220]}")
 
-            title = page.get("title") or f"Confluence Page {page_id}"
-            space_id = str(page.get("spaceId") or "")
-            storage_val = ((page.get("body") or {}).get("storage") or {}).get("value") or ""
-            clean_body = html_to_clean_text(storage_val)
-            web_link = ((page.get("_links") or {}).get("webui")) or ""
-            full_url = f"{site_url}/wiki{web_link}" if site_url and web_link else None
-            author = version_info.get("authorId") or "Confluence Author"
-            content = (
-                f"Confluence Document: {title}\n"
-                f"Space ID: {space_id} | Version: {version_info.get('number', 1)}\n\n"
-                f"{clean_body or '(Empty Confluence page)'}"
-            )
-            records.append({
-                "source_type": "confluence_page",
-                "external_id": f"confluence#{page_id}",
-                "title": title[:500],
-                "author": str(author),
-                "url": full_url,
-                "content": content,
-                "sha256": compute_sha256(content),
-                "source_timestamp": parse_iso_timestamp(modified_at) or datetime.now(timezone.utc),
-                "metadata": {
-                    "page_id": page_id,
-                    "space_id": space_id,
-                    "version": version_info.get("number", 1),
-                },
-                "raw_payload": {"id": page_id, "spaceId": space_id, "updated": modified_at},
-            })
+            payload = res.json() or {}
+            pages = payload.get("results") or []
+            reached_watermark = False
+            for page in pages:
+                page_id = str(page.get("id") or "")
+                if not page_id:
+                    continue
+                version_info = page.get("version") or {}
+                modified_at = version_info.get("createdAt") or page.get("createdAt") or ""
+                if last_modified and modified_at and modified_at <= last_modified:
+                    reached_watermark = True
+                    continue
+                if modified_at and modified_at > newest_modified:
+                    newest_modified = modified_at
+
+                title = page.get("title") or f"Confluence Page {page_id}"
+                space_id = str(page.get("spaceId") or "")
+                storage_val = ((page.get("body") or {}).get("storage") or {}).get("value") or ""
+                clean_body = html_to_clean_text(storage_val)
+                web_link = ((page.get("_links") or {}).get("webui")) or ""
+                full_url = f"{site_url}/wiki{web_link}" if site_url and web_link else None
+                author = version_info.get("authorId") or "Confluence Author"
+                content = (
+                    f"Confluence Document: {title}\n"
+                    f"Space ID: {space_id} | Version: {version_info.get('number', 1)}\n\n"
+                    f"{clean_body or '(Empty Confluence page)'}"
+                )
+                records.append({
+                    "source_type": "confluence_page",
+                    "external_id": f"confluence#{page_id}",
+                    "title": title[:500],
+                    "author": str(author),
+                    "url": full_url,
+                    "content": content,
+                    "sha256": compute_sha256(content),
+                    "source_timestamp": parse_iso_timestamp(modified_at) or datetime.now(timezone.utc),
+                    "metadata": {
+                        "page_id": page_id,
+                        "space_id": space_id,
+                        "version": version_info.get("number", 1),
+                    },
+                    "raw_payload": {"id": page_id, "spaceId": space_id, "updated": modified_at},
+                })
+
+            if reached_watermark:
+                break
+            rel_next = ((payload.get("_links") or {}).get("next") or "").strip()
+            if not rel_next:
+                break
+            if rel_next.startswith("http"):
+                next_url = rel_next
+            elif rel_next.startswith("/wiki"):
+                origin = wiki_base.split("/wiki")[0]
+                next_url = f"{origin}{rel_next}"
+            else:
+                next_url = f"{wiki_base}{rel_next}"
+            next_params = None
 
         if newest_modified:
             cursor["last_page_updated"] = newest_modified

@@ -61,7 +61,41 @@ class HandoverStatusRequest(BaseModel):
 class SimulatorEvaluateRequest(BaseModel):
     candidate_name: Optional[str] = None
     answers: Dict[str, str] = {}
+    follow_ups: Optional[Dict[str, str]] = None
     scenarios: Optional[List[Dict[str, Any]]] = None
+
+
+class ExitInterviewAnswerRequest(BaseModel):
+    answer_text: str
+    resolve_linked_gap: bool = True
+
+
+class ExitInterviewQuestionResponse(BaseModel):
+    id: str
+    handover_id: str
+    project_id: str
+    section_number: Optional[int] = None
+    knowledge_gap_id: Optional[str] = None
+    question_text: str
+    answer_text: Optional[str] = None
+    status: str
+    priority: str
+    evidence_id: Optional[str] = None
+    answered_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HandoverDeltaSyncResponse(BaseModel):
+    handover_id: str
+    version_number: int
+    preserved_sections: List[int]
+    updated_sections: List[int]
+    previous_confidence: float
+    new_confidence: float
+    drift_warnings_cleared: int
+    summary: str
 
 
 class HandoverClaimResponse(BaseModel):

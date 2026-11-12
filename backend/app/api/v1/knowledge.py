@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -34,6 +35,8 @@ def explore_knowledge(
     employee: Optional[str] = None,
     verification_status: Optional[str] = None,
     min_confidence: Optional[float] = 0.0,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
@@ -49,8 +52,11 @@ def explore_knowledge(
         return []
 
     s_lower = search.strip().lower() if search and search.strip() else None
+    s_pat = f"%{s_lower}%" if s_lower else None
     emp_lower = employee.strip().lower() if employee and employee.strip() else None
+    emp_pat = f"%{emp_lower}%" if emp_lower else None
     vs_lower = verification_status.strip().lower() if verification_status and verification_status.strip().lower() != "all" else None
+    per_table_cap = offset + limit
 
     def _status_matches(raw_vstat: Optional[str]) -> bool:
         if not vs_lower:
@@ -60,17 +66,24 @@ def explore_knowledge(
             return actual in ("verified", "verified by reviewer")
         return actual == vs_lower
 
+    def _apply_sql_status_filter(q, col):
+        if not vs_lower:
+            return q
+        if vs_lower in ("verified", "verified by reviewer"):
+            return q.filter(func.lower(col).in_(["verified", "verified by reviewer"]))
+        return q.filter(func.lower(col) == vs_lower)
+
     if not category or category.lower() in ["all", "decisions"]:
-        for d in db.query(Decision).filter(Decision.project_id.in_(p_ids)).all():
-            if min_confidence and d.confidence < min_confidence:
-                continue
-            if emp_lower and emp_lower not in (d.decision_maker or "").lower():
-                continue
+        dq = db.query(Decision).filter(Decision.project_id.in_(p_ids))
+        if min_confidence:
+            dq = dq.filter(Decision.confidence >= min_confidence)
+        if emp_pat:
+            dq = dq.filter(Decision.decision_maker.ilike(emp_pat))
+        dq = _apply_sql_status_filter(dq, Decision.verification_status)
+        if s_pat:
+            dq = dq.filter(or_(Decision.title.ilike(s_pat), Decision.summary.ilike(s_pat), Decision.reasoning.ilike(s_pat)))
+        for d in dq.order_by(Decision.created_at.desc()).limit(per_table_cap).all():
             vstat = getattr(d, "verification_status", "Needs Human Verification")
-            if not _status_matches(vstat):
-                continue
-            if s_lower and s_lower not in d.title.lower() and s_lower not in d.summary.lower():
-                continue
             items.append({
                 "id": d.id,
                 "project_id": d.project_id,
@@ -91,16 +104,16 @@ def explore_knowledge(
             })
 
     if not category or category.lower() in ["all", "tasks", "responsibilities"]:
-        for t in db.query(TaskItem).filter(TaskItem.project_id.in_(p_ids)).all():
-            if min_confidence and t.confidence < min_confidence:
-                continue
-            if emp_lower and emp_lower not in (t.owner or "").lower():
-                continue
+        tq = db.query(TaskItem).filter(TaskItem.project_id.in_(p_ids))
+        if min_confidence:
+            tq = tq.filter(TaskItem.confidence >= min_confidence)
+        if emp_pat:
+            tq = tq.filter(TaskItem.owner.ilike(emp_pat))
+        tq = _apply_sql_status_filter(tq, TaskItem.verification_status)
+        if s_pat:
+            tq = tq.filter(or_(TaskItem.title.ilike(s_pat), TaskItem.description.ilike(s_pat)))
+        for t in tq.order_by(TaskItem.created_at.desc()).limit(per_table_cap).all():
             vstat = getattr(t, "verification_status", "Needs Human Verification")
-            if not _status_matches(vstat):
-                continue
-            if s_lower and s_lower not in t.title.lower() and not (t.description and s_lower in t.description.lower()):
-                continue
             items.append({
                 "id": t.id,
                 "project_id": t.project_id,
@@ -121,17 +134,17 @@ def explore_knowledge(
             })
 
     if not category or category.lower() in ["all", "responsibilities"]:
-        for resp in db.query(Responsibility).filter(Responsibility.project_id.in_(p_ids)).all():
+        rq = db.query(Responsibility).filter(Responsibility.project_id.in_(p_ids))
+        if emp_pat:
+            rq = rq.filter(Responsibility.owner.ilike(emp_pat))
+        rq = _apply_sql_status_filter(rq, Responsibility.verification_status)
+        if s_pat:
+            rq = rq.filter(or_(Responsibility.domain.ilike(s_pat), Responsibility.scope.ilike(s_pat)))
+        for resp in rq.order_by(Responsibility.created_at.desc()).limit(per_table_cap).all():
             conf = 0.85 if resp.evidence_ids else 0.5
             if min_confidence and conf < min_confidence:
                 continue
-            if emp_lower and emp_lower not in (resp.owner or "").lower():
-                continue
             vstat = getattr(resp, "verification_status", "Needs Human Verification")
-            if not _status_matches(vstat):
-                continue
-            if s_lower and s_lower not in resp.domain.lower() and s_lower not in resp.scope.lower():
-                continue
             items.append({
                 "id": resp.id,
                 "project_id": resp.project_id,
@@ -150,17 +163,17 @@ def explore_knowledge(
             })
 
     if not category or category.lower() in ["all", "dependencies"]:
-        for dep in db.query(Dependency).filter(Dependency.project_id.in_(p_ids)).all():
+        dpq = db.query(Dependency).filter(Dependency.project_id.in_(p_ids))
+        if emp_pat:
+            dpq = dpq.filter(Dependency.owner.ilike(emp_pat))
+        dpq = _apply_sql_status_filter(dpq, Dependency.verification_status)
+        if s_pat:
+            dpq = dpq.filter(or_(Dependency.source_component.ilike(s_pat), Dependency.target_component.ilike(s_pat)))
+        for dep in dpq.order_by(Dependency.created_at.desc()).limit(per_table_cap).all():
             conf = 0.9 if dep.evidence_ids else 0.6
             if min_confidence and conf < min_confidence:
                 continue
-            if emp_lower and emp_lower not in (dep.owner or "").lower():
-                continue
             vstat = getattr(dep, "verification_status", "Needs Human Verification")
-            if not _status_matches(vstat):
-                continue
-            if s_lower and s_lower not in dep.source_component.lower() and s_lower not in dep.target_component.lower():
-                continue
             items.append({
                 "id": dep.id,
                 "project_id": dep.project_id,
@@ -179,17 +192,17 @@ def explore_knowledge(
             })
 
     if not category or category.lower() in ["all", "risks"]:
-        for r in db.query(RiskItem).filter(RiskItem.project_id.in_(p_ids)).all():
+        rkq = db.query(RiskItem).filter(RiskItem.project_id.in_(p_ids))
+        if emp_pat:
+            rkq = rkq.filter(RiskItem.owner.ilike(emp_pat))
+        rkq = _apply_sql_status_filter(rkq, RiskItem.verification_status)
+        if s_pat:
+            rkq = rkq.filter(or_(RiskItem.title.ilike(s_pat), RiskItem.description.ilike(s_pat)))
+        for r in rkq.order_by(RiskItem.created_at.desc()).limit(per_table_cap).all():
             conf = 0.88 if r.evidence_ids else 0.55
             if min_confidence and conf < min_confidence:
                 continue
-            if emp_lower and emp_lower not in (getattr(r, "owner", None) or "").lower():
-                continue
             vstat = getattr(r, "verification_status", "Needs Human Verification")
-            if not _status_matches(vstat):
-                continue
-            if s_lower and s_lower not in r.title.lower() and s_lower not in r.description.lower():
-                continue
             items.append({
                 "id": r.id,
                 "project_id": r.project_id,
@@ -209,46 +222,43 @@ def explore_knowledge(
             })
 
     if not category or category.lower() in ["all", "gaps", "knowledge gaps", "questions"]:
-        for g in db.query(KnowledgeGap).filter(KnowledgeGap.project_id.in_(p_ids)).all():
-            gap_owner = getattr(g, "assigned_reviewer", None) or "Unassigned"
-            gap_vstat = "Unknown / Missing Evidence"
-            if min_confidence and 0.85 < min_confidence:
-                continue
-            if emp_lower and emp_lower not in gap_owner.lower():
-                continue
-            if not _status_matches(gap_vstat):
-                continue
-            if s_lower and s_lower not in g.title.lower() and s_lower not in g.description.lower():
-                continue
-            items.append({
-                "id": g.id,
-                "project_id": g.project_id,
-                "category": "Knowledge Gaps",
-                "title": g.title,
-                "subtitle": f"Type: {g.gap_type.replace('_', ' ').capitalize()} | Severity: {g.severity.upper()}",
-                "content": g.description,
-                "summary": g.description,
-                "impact": g.impact,
-                "recommended_action": g.recommended_action,
-                "owner": gap_owner,
-                "date": g.created_at.strftime("%Y-%m-%d") if g.created_at else "",
-                "status": g.status,
-                "verification_status": gap_vstat,
-                "confidence": 0.85,
-                "tags": ["Gap", g.gap_type],
-            })
+        gq = db.query(KnowledgeGap).filter(KnowledgeGap.project_id.in_(p_ids))
+        if emp_pat:
+            gq = gq.filter(KnowledgeGap.assigned_reviewer.ilike(emp_pat))
+        if s_pat:
+            gq = gq.filter(or_(KnowledgeGap.title.ilike(s_pat), KnowledgeGap.description.ilike(s_pat)))
+        if (not min_confidence or 0.85 >= min_confidence) and _status_matches("Unknown / Missing Evidence"):
+            for g in gq.order_by(KnowledgeGap.created_at.desc()).limit(per_table_cap).all():
+                gap_owner = getattr(g, "assigned_reviewer", None) or "Unassigned"
+                items.append({
+                    "id": g.id,
+                    "project_id": g.project_id,
+                    "category": "Knowledge Gaps",
+                    "title": g.title,
+                    "subtitle": f"Type: {g.gap_type.replace('_', ' ').capitalize()} | Severity: {g.severity.upper()}",
+                    "content": g.description,
+                    "summary": g.description,
+                    "impact": g.impact,
+                    "recommended_action": g.recommended_action,
+                    "owner": gap_owner,
+                    "date": g.created_at.strftime("%Y-%m-%d") if g.created_at else "",
+                    "status": g.status,
+                    "verification_status": "Unknown / Missing Evidence",
+                    "confidence": 0.85,
+                    "tags": ["Gap", g.gap_type],
+                })
 
     if not category or category.lower() in ["all", "entities", "technical"]:
-        for e in db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id.in_(p_ids)).all():
+        eq = db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id.in_(p_ids))
+        if min_confidence:
+            eq = eq.filter(KnowledgeEntity.confidence >= min_confidence)
+        eq = _apply_sql_status_filter(eq, KnowledgeEntity.verification_status)
+        if s_pat:
+            eq = eq.filter(or_(KnowledgeEntity.name.ilike(s_pat), KnowledgeEntity.description.ilike(s_pat)))
+        for e in eq.order_by(KnowledgeEntity.created_at.desc()).limit(per_table_cap).all():
             ent_owner = (e.properties or {}).get("owner", "System")
             ent_vstat = getattr(e, "verification_status", "Needs Human Verification")
-            if min_confidence and (e.confidence or 0.0) < min_confidence:
-                continue
             if emp_lower and emp_lower not in str(ent_owner).lower():
-                continue
-            if not _status_matches(ent_vstat):
-                continue
-            if s_lower and s_lower not in e.name.lower() and not (e.description and s_lower in e.description.lower()):
                 continue
             items.append({
                 "id": e.id,
@@ -268,7 +278,7 @@ def explore_knowledge(
                 "tags": [e.entity_type],
             })
 
-    return items
+    return items[offset : offset + limit]
 
 
 @router.get("/entities")

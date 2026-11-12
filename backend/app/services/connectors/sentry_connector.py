@@ -168,6 +168,8 @@ class SentryConnector(BaseConnector):
             default_org = orgs[0].get("slug") if orgs else None
 
         records: List[Dict[str, Any]] = []
+        last_seen_map: Dict[str, str] = dict(cursor.get("last_seen_by_project") or {})
+
         for item in targets[:8]:
             if "/" in item:
                 org_slug, proj_slug = item.split("/", 1)
@@ -176,55 +178,79 @@ class SentryConnector(BaseConnector):
             if not org_slug or not proj_slug:
                 continue
 
-            res = self._request_with_retry(
-                "GET",
-                f"{self.base_url}/projects/{org_slug}/{proj_slug}/issues/",
-                headers=self.headers,
-                params={"query": "is:unresolved", "statsPeriod": "14d", "limit": 25},
-                timeout=12,
-            )
-            if res.status_code != 200:
-                continue
+            proj_key = f"{org_slug}/{proj_slug}"
+            prev_seen = last_seen_map.get(proj_key) or ""
+            newest_seen = prev_seen
+            next_url: Optional[str] = f"{self.base_url}/projects/{org_slug}/{proj_slug}/issues/"
+            next_params: Optional[Dict[str, Any]] = {"query": "is:unresolved", "statsPeriod": "14d", "limit": 25}
 
-            for iss in res.json() or []:
-                iss_id = str(iss.get("id") or "")
-                short_id = iss.get("shortId") or iss_id
-                title = iss.get("title") or f"Sentry Issue {short_id}"
-                culprit = iss.get("culprit") or "unknown"
-                level = iss.get("level") or "error"
-                count = iss.get("count") or 0
-                user_count = iss.get("userCount") or 0
-                assignee = ((iss.get("assignedTo") or {}).get("name")) or "Unassigned"
-                last_seen = iss.get("lastSeen") or iss.get("firstSeen") or ""
+            for _ in range(4):
+                if not next_url:
+                    break
+                res = self._request_with_retry("GET", next_url, headers=self.headers, params=next_params, timeout=12)
+                if res.status_code != 200:
+                    break
 
-                content = "\n".join([
-                    f"Sentry Error [{short_id}] ({level.upper()} · {iss.get('status', 'unresolved')})",
-                    f"Title: {title}",
-                    f"Project: {org_slug}/{proj_slug} | Culprit: {culprit}",
-                    f"Events: {count} | Users Impacted: {user_count} | Assignee: {assignee}",
-                    f"Metadata: {iss.get('metadata') or {}}",
-                ])
-                records.append({
-                    "source_type": "sentry_issue",
-                    "external_id": f"sentry#{org_slug}/{proj_slug}#{iss_id}",
-                    "title": f"[{short_id}] {title[:400]}",
-                    "author": assignee if assignee != "Unassigned" else "Sentry Monitor",
-                    "url": iss.get("permalink"),
-                    "content": content,
-                    "sha256": compute_sha256(content),
-                    "source_timestamp": parse_iso_timestamp(last_seen) or datetime.now(timezone.utc),
-                    "metadata": {
-                        "org_slug": org_slug,
-                        "project": proj_slug,
-                        "short_id": short_id,
-                        "level": level,
-                        "culprit": culprit,
-                        "event_count": count,
-                        "user_count": user_count,
-                    },
-                    "raw_payload": {"id": iss_id, "shortId": short_id, "lastSeen": last_seen},
-                })
+                page_issues = res.json() or []
+                reached_watermark = False
+                for iss in page_issues:
+                    iss_id = str(iss.get("id") or "")
+                    short_id = iss.get("shortId") or iss_id
+                    title = iss.get("title") or f"Sentry Issue {short_id}"
+                    culprit = iss.get("culprit") or "unknown"
+                    level = iss.get("level") or "error"
+                    count = iss.get("count") or 0
+                    user_count = iss.get("userCount") or 0
+                    assignee = ((iss.get("assignedTo") or {}).get("name")) or "Unassigned"
+                    last_seen = iss.get("lastSeen") or iss.get("firstSeen") or ""
+                    if prev_seen and last_seen and last_seen <= prev_seen:
+                        reached_watermark = True
+                        continue
+                    if last_seen and last_seen > newest_seen:
+                        newest_seen = last_seen
 
+                    content = "\n".join([
+                        f"Sentry Error [{short_id}] ({level.upper()} · {iss.get('status', 'unresolved')})",
+                        f"Title: {title}",
+                        f"Project: {org_slug}/{proj_slug} | Culprit: {culprit}",
+                        f"Events: {count} | Users Impacted: {user_count} | Assignee: {assignee}",
+                        f"Metadata: {iss.get('metadata') or {}}",
+                    ])
+                    records.append({
+                        "source_type": "sentry_issue",
+                        "external_id": f"sentry#{org_slug}/{proj_slug}#{iss_id}",
+                        "title": f"[{short_id}] {title[:400]}",
+                        "author": assignee if assignee != "Unassigned" else "Sentry Monitor",
+                        "url": iss.get("permalink"),
+                        "content": content,
+                        "sha256": compute_sha256(content),
+                        "source_timestamp": parse_iso_timestamp(last_seen) or datetime.now(timezone.utc),
+                        "metadata": {
+                            "org_slug": org_slug,
+                            "project": proj_slug,
+                            "short_id": short_id,
+                            "level": level,
+                            "culprit": culprit,
+                            "event_count": count,
+                            "user_count": user_count,
+                        },
+                        "raw_payload": {"id": iss_id, "shortId": short_id, "lastSeen": last_seen},
+                    })
+
+                if reached_watermark or not page_issues:
+                    break
+                next_url = None
+                next_params = None
+                link_hdr = res.headers.get("Link") or ""
+                for part in link_hdr.split(","):
+                    if 'rel="next"' in part and 'results="true"' in part and "<" in part and ">" in part:
+                        next_url = part.split("<", 1)[1].split(">", 1)[0].strip()
+                        break
+
+            if newest_seen:
+                last_seen_map[proj_key] = newest_seen
+
+        cursor["last_seen_by_project"] = last_seen_map
         cursor["last_sync_at"] = datetime.now(timezone.utc).isoformat()
         return records, cursor
 

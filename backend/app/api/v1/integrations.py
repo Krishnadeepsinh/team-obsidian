@@ -302,7 +302,11 @@ def _discover_provider_resources(
     }
 
 
-def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None:
+def _run_background_sync_extraction(
+    project_id: str,
+    actor_user_id: str,
+    integration_id: Optional[str] = None,
+) -> None:
     """Run knowledge extraction asynchronously in an isolated session after integration sync."""
     pipeline_tracker.update(
         project_id,
@@ -311,6 +315,7 @@ def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None
         progress=70,
         active=True,
         job_type="integration_sync_extraction",
+        integration_id=integration_id,
     )
     bg_db = SessionLocal()
     try:
@@ -322,6 +327,7 @@ def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None
             progress=100,
             active=False,
             job_type="integration_sync_extraction",
+            integration_id=integration_id,
             details=summary or {},
         )
     except Exception as exc:
@@ -333,6 +339,8 @@ def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None
             progress=100,
             active=False,
             job_type="integration_sync_extraction",
+            integration_id=integration_id,
+            error_message=str(exc)[:500],
         )
         try:
             bg_db.rollback()
@@ -513,6 +521,38 @@ def list_integrations(
         query = db.query(Integration).filter(Integration.project_id.in_(accessible_ids))
 
     return [_to_response(i) for i in query.order_by(Integration.created_at.desc()).all()]
+
+
+@router.get("/jobs")
+def list_pipeline_jobs(
+    project_id: Optional[str] = None,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List durable background sync & extraction jobs across accessible projects."""
+    if project_id:
+        verify_project_access(project_id, current_user, db)
+        return pipeline_tracker.list_jobs(project_id=project_id, limit=limit)
+    accessible_ids = get_user_accessible_project_ids(current_user, db)
+    if not accessible_ids:
+        return []
+    return pipeline_tracker.list_jobs(project_ids=accessible_ids, limit=limit)
+
+
+@router.get("/{integration_id}/jobs")
+def list_integration_jobs(
+    integration_id: str,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List durable sync & extraction jobs for a specific integration."""
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db)
+    return pipeline_tracker.list_jobs(project_id=integ.project_id, integration_id=integ.id, limit=limit)
 
 
 @router.post("", response_model=IntegrationResponse)
@@ -840,9 +880,10 @@ def trigger_sync(
             progress=40,
             active=True,
             job_type="integration_sync_extraction",
+            integration_id=integ.id,
             details={"integration_id": integ.id, "added": counts["added"], "updated": counts["updated"]},
         )
-        background_tasks.add_task(_run_background_sync_extraction, integ.project_id, current_user.id)
+        background_tasks.add_task(_run_background_sync_extraction, integ.project_id, current_user.id, integ.id)
         extracted = {"status": "scheduled", "message": "Knowledge graph extraction scheduled in background."}
 
     return SyncResultResponse(

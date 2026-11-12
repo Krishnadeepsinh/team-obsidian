@@ -290,6 +290,7 @@ const PROVIDER_CARDS = [
 function IntegrationsContent() {
   const searchParams = useSearchParams()
   const [integrations, setIntegrations] = useState<any[]>([])
+  const [pipelineJobs, setPipelineJobs] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState<string>("")
   const [loading, setLoading] = useState(true)
@@ -462,6 +463,8 @@ function IntegrationsContent() {
           finalIntegs = await api.getIntegrations(resolvedPid).catch(() => [])
         }
         setIntegrations(finalIntegs)
+        const jobs = await api.getIntegrationJobs(resolvedPid || undefined, 12).catch(() => [])
+        setPipelineJobs(Array.isArray(jobs) ? jobs : [])
 
         if (callbackIntegIdRef.current) {
           const targetId = callbackIntegIdRef.current
@@ -498,6 +501,19 @@ function IntegrationsContent() {
     window.addEventListener("obsidian_project_changed", onProjectChange)
     return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [loadAll])
+
+  useEffect(() => {
+    const hasRunning = pipelineJobs.some((j) => j.status === "running")
+    if (!hasRunning) return
+    const timer = setInterval(() => {
+      api.getIntegrationJobs(activeProject || undefined, 12)
+        .then((jobs) => {
+          if (Array.isArray(jobs)) setPipelineJobs(jobs)
+        })
+        .catch(() => {})
+    }, 4000)
+    return () => clearInterval(timer)
+  }, [pipelineJobs, activeProject])
 
   const targetProjectId = activeProject || projects[0]?.id || ""
 
@@ -1048,6 +1064,66 @@ function IntegrationsContent() {
           </div>
         )}
       </div>
+
+      {/* Durable Pipeline & Sync Jobs */}
+      {pipelineJobs.length > 0 && (
+        <div className="apple-card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Recent Ingestion &amp; Pipeline Jobs ({pipelineJobs.length})</h2>
+              <p className="text-[11px] text-slate-500">Durable sync telemetry persisted across workers and server restarts.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                api.getIntegrationJobs(activeProject || undefined, 12)
+                  .then((jobs) => { if (Array.isArray(jobs)) setPipelineJobs(jobs) })
+                  .catch(() => {})
+              }
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+            >
+              <RefreshCw className="w-3 h-3" /> Refresh Jobs
+            </button>
+          </div>
+          <div className="space-y-2">
+            {pipelineJobs.slice(0, 6).map((job: any) => (
+              <div key={job.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                        job.status === "completed"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : job.status === "failed"
+                          ? "bg-rose-50 text-rose-700 border-rose-200"
+                          : "bg-violet-50 text-violet-700 border-violet-200"
+                      }`}
+                    >
+                      {job.status}
+                    </span>
+                    <span className="font-semibold text-slate-800 truncate">{job.stage || job.job_type}</span>
+                    {job.message && <span className="text-[11px] text-slate-500 truncate">{job.message}</span>}
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {Math.round(Number(job.progress ?? 0))}% • {job.updated_at ? new Date(job.updated_at).toLocaleString() : ""}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      job.status === "failed" ? "bg-rose-500" : job.status === "completed" ? "bg-emerald-500" : "bg-violet-600"
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, Number(job.progress ?? 0)))}%` }}
+                  />
+                </div>
+                {job.error_message && (
+                  <p className="text-[11px] text-rose-600 font-medium">{job.error_message}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Token Connect Modal */}
       {connectProvider && (

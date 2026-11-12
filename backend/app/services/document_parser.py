@@ -472,8 +472,8 @@ class DocumentParser:
         self,
         sections: List[Dict[str, Any]],
         fallback_text: str = "",
-        chunk_size: int = 1000,
-        overlap: int = 150,
+        chunk_size: int = 1600,
+        overlap: int = 240,
     ) -> List[Dict[str, Any]]:
         """Chunk parsed sections into overlapping segments while preserving page, sheet, heading, and paragraph refs."""
         if not sections and fallback_text:
@@ -512,7 +512,9 @@ class DocumentParser:
             text_len = len(text)
             while start < text_len:
                 end = min(start + chunk_size, text_len)
-                content = text[start:end].strip()
+                raw_slice = text[start:end].strip()
+                heading_prefix = f"[{sec['heading']}]\n" if (start > 0 and sec.get("heading") and sec["heading"] not in raw_slice[:120]) else ""
+                content = f"{heading_prefix}{raw_slice}".strip()
                 if content:
                     chunks.append({
                         "chunk_index": chunk_idx,
@@ -533,7 +535,7 @@ class DocumentParser:
 
         return chunks
 
-    def chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 150) -> List[Dict[str, Any]]:
+    def chunk_text(self, text: str, chunk_size: int = 1600, overlap: int = 240) -> List[Dict[str, Any]]:
         return self.chunk_sections([], fallback_text=text, chunk_size=chunk_size, overlap=overlap)
 
 

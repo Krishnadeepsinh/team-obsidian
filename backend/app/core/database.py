@@ -50,8 +50,57 @@ def set_rls_user_context(db: Session, user_id: Optional[str]) -> None:
         pass
 
 
+def _ensure_runtime_columns() -> None:
+    """Safely add additive columns on existing SQLite/Postgres tables when migrating without downtime."""
+    from sqlalchemy import inspect
+
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    # Keep SQL DDL portable across SQLite and PostgreSQL
+    migrations = [
+        ("evidences", "parent_evidence_id", "VARCHAR(36)"),
+        ("evidences", "chunk_index", "INTEGER DEFAULT 0"),
+        ("evidences", "total_chunks", "INTEGER DEFAULT 1"),
+        ("evidences", "full_text", "TEXT"),
+        ("embedding_records", "parent_id", "VARCHAR(36)"),
+        ("embedding_records", "chunk_index", "INTEGER DEFAULT 0"),
+        ("embedding_records", "task_type", "VARCHAR(40) DEFAULT 'RETRIEVAL_DOCUMENT'"),
+        ("source_records", "extraction_processed_at", "TIMESTAMP"),
+    ]
+    index_statements = [
+        ("source_records", "idx_source_record_project_proc", "project_id, extraction_processed_at"),
+        ("embedding_records", "idx_embedding_project_task", "project_id, task_type"),
+        ("task_items", "idx_task_project_owner", "project_id, owner"),
+        ("exit_interview_questions", "idx_exit_q_handover_status", "handover_id, status"),
+        ("pipeline_jobs", "idx_pipeline_job_proj_updated", "project_id, updated_at"),
+    ]
+    with engine.begin() as conn:
+        for table, col, col_type in migrations:
+            if table not in existing_tables:
+                continue
+            cols = {c["name"] for c in insp.get_columns(table)}
+            if col not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
+        for table, idx_name, idx_cols in index_statements:
+            if table in existing_tables:
+                try:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({idx_cols})"))
+                except Exception:
+                    pass
+        if not IS_SQLITE and "embedding_records" in existing_tables:
+            try:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS idx_embedding_vector_hnsw "
+                        "ON embedding_records USING hnsw (embedding_vector vector_cosine_ops)"
+                    )
+                )
+            except Exception:
+                pass
+
+
 def init_db() -> None:
-    """Initialize schema safely; create missing tables if needed."""
+    """Initialize schema safely; create missing tables and additive columns if needed."""
     import app.models  # noqa: F401 - Ensure all SQLAlchemy models are registered
     if IS_SQLITE:
         Base.metadata.create_all(bind=engine)
@@ -63,3 +112,8 @@ def init_db() -> None:
         except Exception as exc:
             import logging
             logging.getLogger("team_obsidian").warning("Non-fatal Postgres create_all check skipped: %s", exc)
+    try:
+        _ensure_runtime_columns()
+    except Exception as exc:
+        import logging
+        logging.getLogger("team_obsidian").warning("Non-fatal additive column sync skipped: %s", exc)

@@ -55,37 +55,138 @@ class GraphService:
         except Exception:
             return []
 
+    RELATION_WEIGHTS: Dict[str, float] = {
+        "owns": 1.0,
+        "maintains": 0.85,
+        "decided": 0.65,
+        "reviews": 0.45,
+        "backup_for": 0.5,
+        "contributes": 0.35,
+    }
+
+    def _compute_weighted_ownership(
+        self,
+        entities: List[Dict[str, Any]],
+        relationships: List[Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Compute per-target weighted contributor scores, shares, and primary flags."""
+        ent_by_id = {e["id"]: e for e in entities}
+        raw_by_target: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        for r in relationships:
+            rel = (r.get("relation_type") or "").lower()
+            base_w = self.RELATION_WEIGHTS.get(rel)
+            if base_w is None:
+                continue
+            src_id = r.get("source_entity_id")
+            dst_id = r.get("target_entity_id")
+            src_ent = ent_by_id.get(src_id)
+            dst_ent = ent_by_id.get(dst_id)
+            if not src_ent or not dst_ent:
+                continue
+            if (src_ent.get("entity_type") or "").lower() != "person":
+                continue
+
+            conf = float(r.get("confidence") if r.get("confidence") is not None else 1.0)
+            conf = max(0.35, min(1.0, conf))
+            explicit_w = 1.0
+            if isinstance(r.get("properties"), dict) and r["properties"].get("weight") is not None:
+                try:
+                    explicit_w = max(0.1, float(r["properties"]["weight"]))
+                except (TypeError, ValueError):
+                    explicit_w = 1.0
+            edge_w = base_w * conf * explicit_w
+
+            target_map = raw_by_target.setdefault(dst_id, {})
+            entry = target_map.setdefault(
+                src_id,
+                {
+                    "person_id": src_id,
+                    "name": src_ent.get("name", "Owner"),
+                    "weights": [],
+                    "is_primary": False,
+                },
+            )
+            entry["weights"].append(edge_w)
+            if rel in ("owns", "maintains", "decided", "backup_for"):
+                entry["is_primary"] = True
+
+        # Aggregate per-person score cleanly (max weight + diminishing 0.25 bonus for additional signals)
+        result: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for dst_id, pmap in raw_by_target.items():
+            scored: Dict[str, Dict[str, Any]] = {}
+            total_w = 0.0
+            for pid, info in pmap.items():
+                ws = sorted(info["weights"], reverse=True)
+                agg = ws[0] + sum(0.25 * w for w in ws[1:])
+                scored[pid] = {
+                    "person_id": pid,
+                    "name": info["name"],
+                    "weight": round(agg, 4),
+                    "is_primary": info["is_primary"],
+                }
+                total_w += agg
+            if total_w > 0:
+                for pid in scored:
+                    scored[pid]["share"] = round(scored[pid]["weight"] / total_w, 4)
+            else:
+                for pid in scored:
+                    scored[pid]["share"] = 0.0
+            result[dst_id] = scored
+        return result
+
     def detect_single_points_of_failure(
         self,
         entities: List[Dict[str, Any]],
         relationships: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """Identify components/services owned or maintained by a single person."""
+        """Identify components/services with single-owner or >=80% weighted BusFactor concentration."""
         ent_by_id = {e["id"]: e for e in entities}
-        owners_by_target: Dict[str, List[str]] = {}
         G = self.build_graph(entities, relationships)
-
-        for r in relationships:
-            rel = (r.get("relation_type") or "").lower()
-            src_ent = ent_by_id.get(r["source_entity_id"])
-            dst_ent = ent_by_id.get(r["target_entity_id"])
-            if not src_ent or not dst_ent:
-                continue
-            if rel in ("owns", "maintains", "decided") and (src_ent.get("entity_type") or "").lower() == "person":
-                owners_by_target.setdefault(dst_ent["id"], []).append(src_ent["name"])
+        ownership = self._compute_weighted_ownership(entities, relationships)
 
         spofs: List[Dict[str, Any]] = []
-        for target_id, owners in owners_by_target.items():
-            unique_owners = sorted(set(owners))
-            if len(unique_owners) == 1:
-                comp = ent_by_id[target_id]
+        for target_id, owners_map in ownership.items():
+            if not owners_map:
+                continue
+            comp = ent_by_id.get(target_id)
+            if not comp:
+                continue
+            primary_owners = [info for info in owners_map.values() if info["is_primary"]]
+            if not primary_owners:
+                continue
+
+            ranked = sorted(owners_map.values(), key=lambda x: x["weight"], reverse=True)
+            top = ranked[0]
+            shares = [info["share"] for info in ranked if info["share"] > 0]
+            hhi = sum(s * s for s in shares) if shares else 1.0
+            effective_bus_factor = round(1.0 / max(hhi, 1e-6), 2)
+
+            is_single_primary = len(primary_owners) == 1 and len(owners_map) == 1
+            is_dominant_concentration = top["share"] >= 0.80
+
+            if is_single_primary or is_dominant_concentration:
                 downstream = self.calculate_blast_radius(G, target_id)
+                if top["share"] >= 0.99 and len(downstream) >= 2:
+                    severity = "critical"
+                elif is_single_primary or top["share"] >= 0.88:
+                    severity = "high"
+                else:
+                    severity = "medium"
+
                 spofs.append({
                     "component_id": target_id,
                     "component_name": comp.get("name"),
                     "component_type": comp.get("entity_type"),
-                    "sole_owner": unique_owners[0],
+                    "sole_owner": top["name"],
                     "downstream_impact_count": len(downstream),
+                    "ownership_share": top["share"],
+                    "effective_bus_factor": effective_bus_factor,
+                    "spof_severity": severity,
+                    "owner_breakdown": [
+                        {"name": o["name"], "share": o["share"], "weight": o["weight"]}
+                        for o in ranked
+                    ],
                 })
         return spofs
 
@@ -212,7 +313,7 @@ class GraphService:
         relationships: List[Dict[str, Any]],
         person_id: str,
     ) -> Dict[str, Any]:
-        """Simulate what becomes orphaned and downstream-impacted if a given person leaves."""
+        """Simulate weighted ownership disruption, orphaned SPOFs, and downstream blast radius on departure."""
         ent_by_id = {e["id"]: e for e in entities}
         person = ent_by_id.get(person_id)
         if not person:
@@ -227,21 +328,13 @@ class GraphService:
             }
 
         G = self.build_graph(entities, relationships)
-        owners_by_target: Dict[str, Dict[str, str]] = {}
-        person_owned_ids: List[str] = []
+        ownership = self._compute_weighted_ownership(entities, relationships)
 
-        for r in relationships:
-            rel = (r.get("relation_type") or "").lower()
-            src_id = r.get("source_entity_id")
-            dst_id = r.get("target_entity_id")
-            src_ent = ent_by_id.get(src_id)
-            dst_ent = ent_by_id.get(dst_id)
-            if not src_ent or not dst_ent:
-                continue
-            if rel in ("owns", "maintains", "decided") and (src_ent.get("entity_type") or "").lower() == "person":
-                owners_by_target.setdefault(dst_id, {})[src_id] = src_ent.get("name", "Owner")
-                if src_id == person_id and dst_id not in person_owned_ids:
-                    person_owned_ids.append(dst_id)
+        person_owned_ids: List[str] = []
+        for dst_id, pmap in ownership.items():
+            pinfo = pmap.get(person_id)
+            if pinfo and (pinfo["is_primary"] or pinfo["share"] >= 0.25):
+                person_owned_ids.append(dst_id)
 
         orphaned_spofs: List[Dict[str, Any]] = []
         backed_up_components: List[Dict[str, Any]] = []
@@ -251,8 +344,10 @@ class GraphService:
             comp = ent_by_id.get(comp_id)
             if not comp:
                 continue
-            owner_map = owners_by_target.get(comp_id, {})
-            other_owners = [name for oid, name in owner_map.items() if oid != person_id]
+            pmap = ownership.get(comp_id, {})
+            person_share = pmap.get(person_id, {}).get("share", 1.0)
+            other_entries = [info for oid, info in pmap.items() if oid != person_id]
+            other_owners = [info["name"] for info in other_entries]
             downstream_ids = self.calculate_blast_radius(G, comp_id)
             entry = {
                 "id": comp_id,
@@ -260,8 +355,10 @@ class GraphService:
                 "entity_type": comp.get("entity_type"),
                 "downstream_count": len(downstream_ids),
                 "other_owners": other_owners,
+                "departing_share": person_share,
             }
-            if not other_owners:
+            # Component becomes orphaned if no other primary/meaningful owner remains OR departing held >=80%
+            if not other_owners or person_share >= 0.80:
                 orphaned_spofs.append(entry)
                 affected_ids_set.add(comp_id)
                 affected_ids_set.update(downstream_ids)
@@ -271,7 +368,7 @@ class GraphService:
         total_non_person = max(
             1, sum(1 for e in entities if (e.get("entity_type") or "").lower() != "person")
         )
-        orphan_ratio = len(orphaned_spofs) / total_non_person
+        orphan_ratio = sum(o.get("departing_share", 1.0) for o in orphaned_spofs) / total_non_person
         blast_ratio = len(affected_ids_set) / max(1, len(entities))
         risk_score = min(100, round((orphan_ratio * 65 + blast_ratio * 35) * 100)) if orphaned_spofs else 0
 
@@ -414,6 +511,9 @@ class GraphService:
                     "isSpof": spof_info is not None,
                     "soleOwner": spof_info["sole_owner"] if spof_info else None,
                     "downstreamImpactCount": spof_info["downstream_impact_count"] if spof_info else 0,
+                    "ownershipShare": spof_info.get("ownership_share") if spof_info else None,
+                    "effectiveBusFactor": spof_info.get("effective_bus_factor") if spof_info else None,
+                    "spofSeverity": spof_info.get("spof_severity") if spof_info else None,
                     "layout": clean_layout,
                     "color": theme["border"],
                     "bg": theme["bg"],

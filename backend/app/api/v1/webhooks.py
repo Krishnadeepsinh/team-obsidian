@@ -589,3 +589,73 @@ async def sentry_webhook(
     }
     return _record_and_queue_webhook(db, integ, background_tasks, [rec], {"provider": "sentry", "short_id": short_id})
 
+
+@router.post("/confluence/{integration_id}")
+async def confluence_webhook(
+    integration_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Receive signed Confluence Cloud webhook events (X-Hub-Signature / X-Confluence-Signature HMAC-SHA256)."""
+    integ = db.query(Integration).filter(Integration.id == integration_id, Integration.provider == "confluence").first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Confluence integration not found")
+
+    raw_body = await request.body()
+    secret = _get_webhook_secret(integ)
+    if not secret:
+        raise HTTPException(status_code=403, detail="Confluence webhook secret is not configured.")
+    sig = (
+        request.headers.get("X-Hub-Signature-256")
+        or request.headers.get("X-Hub-Signature")
+        or request.headers.get("X-Confluence-Signature")
+    )
+    if not _verify_sha256_signature(secret, raw_body, sig, prefix="sha256="):
+        raise HTTPException(status_code=401, detail="Invalid Confluence webhook signature.")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Confluence webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Confluence webhook payload must be a JSON object.")
+
+    page = payload.get("page") or payload.get("content") or payload
+    page_id = str(page.get("id") or compute_sha256(raw_body.decode("utf-8", errors="replace"))[:12])
+    title = str(page.get("title") or f"Confluence Page {page_id}")
+    space_key = str((page.get("space") or {}).get("key") or page.get("spaceKey") or page.get("spaceId") or "WIKI")
+    event_name = str(payload.get("event") or payload.get("webhookEvent") or "page_updated")
+    author = str(
+        (payload.get("user") or {}).get("displayName")
+        or (payload.get("userAccountId"))
+        or (page.get("version") or {}).get("authorId")
+        or "Confluence User"
+    )
+    body_text = str(
+        ((page.get("body") or {}).get("storage") or {}).get("value")
+        or page.get("summary")
+        or payload.get("comment")
+        or ""
+    ).strip()
+    content = (
+        f"Confluence Document: {title}\n"
+        f"Space: {space_key} | Event: {event_name} | Page ID: {page_id}\n\n"
+        f"{body_text or '(Updated via Confluence webhook)'}"
+    )
+    links = page.get("_links") or {}
+    rec = {
+        "source_type": "confluence_page",
+        "external_id": f"confluence#{page_id}",
+        "title": title[:500],
+        "author": author,
+        "url": links.get("self") or page.get("self") or links.get("webui"),
+        "content": content,
+        "sha256": compute_sha256(content),
+        "source_timestamp": datetime.now(timezone.utc),
+        "metadata": {"page_id": page_id, "space_key": space_key, "webhook_event": event_name},
+        "raw_payload": payload,
+    }
+    return _record_and_queue_webhook(db, integ, background_tasks, [rec], {"provider": "confluence", "page_id": page_id, "event": event_name})
+
+

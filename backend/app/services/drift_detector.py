@@ -6,12 +6,53 @@ from typing import Any, Dict, List, Optional, Set
 from sqlalchemy.orm import Session
 
 from app.models.evidence import Evidence
-from app.models.handover import HandoverClaim
+from app.models.handover import Handover, HandoverClaim
 from app.models.integration import SourceRecord
 from app.models.knowledge import Decision, Dependency, KnowledgeDriftEvent, RiskItem
 from app.models.workspace import Notification, Project, ProjectMember, User, Workspace
+from app.services.ai_engine import ai_engine
 from app.services.audit_service import record_activity
 from app.services.email_service import email_service
+
+
+def _coerce_utc_naive(dt: Any) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    if isinstance(dt, str):
+        try:
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
+        except ValueError:
+            return None
+    return None
+
+
+def _is_source_newer_than_target(src: SourceRecord, target_ts: Any) -> bool:
+    """Return True when source event occurred at/after target baseline (or dates unavailable)."""
+    src_dt = _coerce_utc_naive(src.source_timestamp or src.updated_at or src.ingested_at)
+    tgt_dt = _coerce_utc_naive(target_ts)
+    if not src_dt or not tgt_dt:
+        return True
+    return src_dt >= tgt_dt
+
+
+def _semantic_similarity(text_a: str, text_b: str, vec_cache: Dict[str, List[float]]) -> float:
+    """Compute cached SEMANTIC_SIMILARITY cosine score between source snippet and claim/decision."""
+    a_key = (text_a or "")[:600].strip()
+    b_key = (text_b or "")[:600].strip()
+    if not a_key or not b_key:
+        return 0.0
+    if a_key not in vec_cache:
+        vec_cache[a_key] = ai_engine.generate_embedding(a_key, task_type="SEMANTIC_SIMILARITY")
+    if b_key not in vec_cache:
+        vec_cache[b_key] = ai_engine.generate_embedding(b_key, task_type="SEMANTIC_SIMILARITY")
+    return float(ai_engine.cosine_similarity(vec_cache[a_key], vec_cache[b_key]))
 
 logger = logging.getLogger("team_obsidian.drift")
 
@@ -168,11 +209,25 @@ def scan_project_for_drift(
                     f"Source '{src.title}' notes ownership transition involving '{rsk.owner}' on risk '{rsk.title}'.",
                 )
 
-        # 4. Check Handover Claims & flag Contradicted if verified/supported
+        # 4. Check Handover Claims (semantic + lexical + temporal guard) & flag Contradicted
+        _vec_cache: Dict[str, List[float]] = {}
+        invalidated_handovers: Set[str] = set()
         for cl in claims:
+            if not _is_source_newer_than_target(src, getattr(cl, "updated_at", None) or getattr(cl, "created_at", None)):
+                continue
             cl_kw = _keywords(cl.claim_text)
             overlap = src_kw & cl_kw
-            if len(overlap) >= 3 and has_change:
+            sem_sim = 0.0
+            if len(overlap) < 3 and has_change and len(overlap) >= 1:
+                sem_sim = _semantic_similarity(src_text[:600], cl.claim_text, _vec_cache)
+            elif len(overlap) == 0 and has_change and len(cl.claim_text or "") >= 25:
+                sem_sim = _semantic_similarity(src_text[:600], cl.claim_text, _vec_cache)
+
+            is_semantic_hit = sem_sim >= 0.66
+            if (len(overlap) >= 3 or is_semantic_hit) and has_change:
+                signal_desc = (
+                    f"semantic={sem_sim:.2f}" if is_semantic_hit else ", ".join(sorted(overlap)[:4])
+                )
                 _add_drift(
                     src,
                     "doc_stale",
@@ -180,13 +235,31 @@ def scan_project_for_drift(
                     "handover_claim",
                     cl.id,
                     cl.claim_text[:180],
-                    f"New update '{src.title}' may contradict handover claim on ({', '.join(sorted(overlap)[:4])}).",
+                    f"New update '{src.title}' contradicts handover claim ({signal_desc}).",
                 )
-                if cl.verification_status in ("Supported by Evidence", "Verified by Reviewer", "Draft / AI Suggested"):
+                if cl.verification_status not in ("Contradicted", "Rejected"):
                     cl.verification_status = "Contradicted"
                     cl.review_notes = (
-                        f"Auto-flagged by Knowledge Drift Detector from '{src.title}'."
+                        f"Auto-flagged by Semantic+Temporal Drift Detector from '{src.title}' ({signal_desc})."
                     )
+                    if cl.handover_id:
+                        invalidated_handovers.add(cl.handover_id)
+
+        if invalidated_handovers:
+            db.flush()
+            for ho in db.query(Handover).filter(Handover.id.in_(list(invalidated_handovers))).all():
+                stats = dict(ho.reconstruction_stats or {})
+                contradicted_cnt = (
+                    db.query(HandoverClaim)
+                    .filter(
+                        HandoverClaim.handover_id == ho.id,
+                        HandoverClaim.verification_status == "Contradicted",
+                    )
+                    .count()
+                )
+                stats["has_drift_warning"] = True
+                stats["drift_invalidated_claims"] = contradicted_cnt
+                ho.reconstruction_stats = stats
 
         # Flag source's linked evidence if critical change was detected
         if has_change:

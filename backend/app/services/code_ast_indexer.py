@@ -18,6 +18,9 @@ _PRIORITY_MANIFESTS = {
     "package.json",
     "requirements.txt",
     "pyproject.toml",
+    "go.mod",
+    "cargo.toml",
+    "pom.xml",
     "dockerfile",
     "docker-compose.yml",
     "docker-compose.yaml",
@@ -25,14 +28,33 @@ _PRIORITY_MANIFESTS = {
 }
 
 
+def build_repo_web_url(
+    provider: str,
+    base_url: Optional[str],
+    owner_repo: str,
+    branch: str,
+    file_path: str = "",
+) -> str:
+    """Construct provider-accurate tree/blob web URLs for GitHub and GitLab (including self-hosted origins)."""
+    prov = (provider or "").lower()
+    default_host = "https://gitlab.com" if "gitlab" in prov else "https://github.com"
+    host = (base_url or default_host).rstrip("/")
+    clean_file = (file_path or "").lstrip("/")
+    if "gitlab" in prov:
+        suffix = f"/-/blob/{branch}/{clean_file}" if clean_file else f"/-/tree/{branch}"
+    else:
+        suffix = f"/blob/{branch}/{clean_file}" if clean_file else f"/tree/{branch}"
+    return f"{host}/{owner_repo}{suffix}"
+
+
 def _file_priority(path: str) -> Tuple[int, int]:
     lower = path.lower()
     base = lower.rsplit("/", 1)[-1]
     if base in _PRIORITY_MANIFESTS:
         return (0, len(path))
-    if any(seg in lower for seg in ("main.", "app.", "server.", "router", "api/", "auth", "database", "config")):
+    if any(seg in lower for seg in ("main.", "app.", "server.", "router", "api/", "auth", "database", "config", "service")):
         return (1, len(path))
-    if lower.endswith((".py", ".ts", ".tsx", ".js")):
+    if lower.endswith((".py", ".ts", ".tsx", ".js", ".go", ".rs", ".java")):
         return (2, len(path))
     return (3, len(path))
 
@@ -47,6 +69,9 @@ def _is_candidate_code_file(path: str) -> bool:
             "__pycache__/",
             ".venv/",
             "venv/",
+            "target/debug/",
+            "target/release/",
+            "vendor/",
             "dist/",
             "build/",
             ".git/",
@@ -54,13 +79,15 @@ def _is_candidate_code_file(path: str) -> bool:
             "package-lock.json",
             "yarn.lock",
             "pnpm-lock.yaml",
+            "go.sum",
+            "cargo.lock",
         )
     ):
         return False
     base = lower.rsplit("/", 1)[-1]
     if base in _PRIORITY_MANIFESTS:
         return True
-    return lower.endswith((".py", ".ts", ".tsx", ".js", ".jsx"))
+    return lower.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java"))
 
 
 def parse_python_source(path: str, code: str) -> Dict[str, Any]:
@@ -99,10 +126,10 @@ def parse_python_source(path: str, code: str) -> Dict[str, Any]:
     return {
         "path": path,
         "language": "python",
-        "imports": sorted(set(imports))[:30],
-        "classes": sorted(set(classes))[:20],
-        "functions": sorted(set(functions))[:25],
-        "routes": routes[:20],
+        "imports": sorted(set(imports))[:60],
+        "classes": sorted(set(classes))[:50],
+        "functions": sorted(set(functions))[:60],
+        "routes": routes[:50],
     }
 
 
@@ -118,8 +145,62 @@ def parse_ts_js_source(path: str, code: str) -> Dict[str, Any]:
     return {
         "path": path,
         "language": "typescript" if path.lower().endswith((".ts", ".tsx")) else "javascript",
-        "imports": sorted(imports)[:30],
-        "exports": sorted(exports)[:25],
+        "imports": sorted(imports)[:60],
+        "exports": sorted(exports)[:50],
+    }
+
+
+def parse_go_source(path: str, code: str) -> Dict[str, Any]:
+    """Extract Go package imports, structs/interfaces, functions, and HTTP routes."""
+    imports = set(re.findall(r'^\s*(?:import\s+)?"([^"\n]+)"', code or "", flags=re.M))
+    structs = set(re.findall(r"type\s+([A-Za-z0-9_]+)\s+(?:struct|interface)\b", code or ""))
+    funcs = set(re.findall(r"func\s+(?:\([^)]+\)\s+)?([A-Za-z0-9_]+)\s*\(", code or ""))
+    routes = re.findall(r'\.(?:GET|POST|PUT|PATCH|DELETE|HandleFunc?)\(\s*"([^"]+)"', code or "")
+    return {
+        "path": path,
+        "language": "go",
+        "imports": sorted(imports)[:60],
+        "classes": sorted(structs)[:40],
+        "functions": sorted(funcs)[:50],
+        "routes": [f"HTTP {r}" for r in routes[:40]],
+    }
+
+
+def parse_rust_source(path: str, code: str) -> Dict[str, Any]:
+    """Extract Rust crates, structs/enums/traits, functions, and web routes."""
+    uses = set(re.findall(r"^\s*use\s+([A-Za-z0-9_]+)(?:::|\s*;)", code or "", flags=re.M))
+    structs = set(re.findall(r"\b(?:pub\s+)?(?:struct|enum|trait)\s+([A-Za-z0-9_]+)", code or ""))
+    funcs = set(re.findall(r"\b(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)", code or ""))
+    routes = re.findall(r'#\[(?:get|post|put|patch|delete)\(\s*"([^"]+)"', code or "")
+    return {
+        "path": path,
+        "language": "rust",
+        "imports": sorted(uses)[:60],
+        "classes": sorted(structs)[:40],
+        "functions": sorted(funcs)[:50],
+        "routes": [f"HTTP {r}" for r in routes[:40]],
+    }
+
+
+def parse_java_source(path: str, code: str) -> Dict[str, Any]:
+    """Extract Java imports, classes/interfaces, methods, and Spring mappings."""
+    imports = set(re.findall(r"^\s*import\s+([A-Za-z0-9_.]+);", code or "", flags=re.M))
+    classes = set(re.findall(r"\b(?:public|private|protected)?\s*(?:class|interface|record|enum)\s+([A-Za-z0-9_]+)", code or ""))
+    methods = set(
+        re.findall(
+            r"^\s*(?:public|private|protected)\s+(?:static\s+|final\s+|synchronized\s+)?[A-Za-z0-9_<>\[\]]+\s+([A-Za-z0-9_]+)\s*\(",
+            code or "",
+            flags=re.M,
+        )
+    )
+    routes = re.findall(r'@(?:Get|Post|Put|Patch|Delete|Request)Mapping\([^"\)]*"([^"]+)"', code or "")
+    return {
+        "path": path,
+        "language": "java",
+        "imports": sorted({i.split(".")[0] for i in imports})[:60],
+        "classes": sorted(classes)[:40],
+        "functions": sorted(methods - classes)[:60],
+        "routes": [f"HTTP {r}" for r in routes[:40]],
     }
 
 
@@ -135,7 +216,7 @@ def parse_manifest_file(path: str, content: str) -> Dict[str, Any]:
             for section in ("dependencies", "devDependencies"):
                 pkg_map = data.get(section)
                 if isinstance(pkg_map, dict):
-                    deps.extend(list(pkg_map.keys())[:40])
+                    deps.extend(list(pkg_map.keys())[:60])
         except Exception:
             pass
     elif lower == "requirements.txt":
@@ -146,6 +227,36 @@ def parse_manifest_file(path: str, content: str) -> Dict[str, Any]:
             pkg = re.split(r"[=<>!~\[]", clean, maxsplit=1)[0].strip()
             if pkg:
                 deps.append(pkg)
+    elif lower == "pyproject.toml":
+        in_deps = False
+        for line in (content or "").splitlines():
+            s = line.strip()
+            if s.startswith("dependencies") and "[" in s:
+                in_deps = True
+            elif in_deps and "]" in s:
+                in_deps = False
+            if in_deps or ("==" in s or ">=" in s):
+                m = re.search(r'"([A-Za-z0-9_.\-]+)', s)
+                if m:
+                    deps.append(m.group(1))
+    elif lower == "go.mod":
+        for m in re.findall(r"^\s*([a-zA-Z0-9.\-_/]+)\s+v[0-9]+\.[0-9]+", content or "", flags=re.M):
+            if not m.startswith("module"):
+                deps.append(m.split("/")[-1])
+    elif lower == "cargo.toml":
+        in_deps = False
+        for line in (content or "").splitlines():
+            s = line.strip()
+            if s.startswith("[dependencies") or s.startswith("[dev-dependencies"):
+                in_deps = True
+                continue
+            if s.startswith("[") and not s.startswith("[dependencies"):
+                in_deps = False
+            elif in_deps and "=" in s and not s.startswith("#"):
+                deps.append(s.split("=", 1)[0].strip())
+    elif lower == "pom.xml":
+        for m in re.findall(r"<artifactId>([^<]+)</artifactId>", content or ""):
+            deps.append(m.strip())
     elif lower == "dockerfile":
         for m in re.findall(r"^\s*FROM\s+([^\s]+)", content or "", flags=re.M | re.I):
             services.append(f"container:{m}")
@@ -159,8 +270,8 @@ def parse_manifest_file(path: str, content: str) -> Dict[str, Any]:
     return {
         "path": path,
         "manifest_type": lower,
-        "dependencies": sorted(set(deps))[:50],
-        "services": sorted(set(services))[:20],
+        "dependencies": sorted(set(deps))[:80],
+        "services": sorted(set(services))[:30],
     }
 
 
@@ -171,33 +282,40 @@ def summarize_repository_ast(
     tree_paths: Optional[List[str]] = None,
     source_type: str = "github_ast",
     tree_url: Optional[str] = None,
+    repo_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Analyze fetched repo source & manifests into normalized SourceRecords and structural graph items."""
+    """Analyze fetched repo source & manifests into parent + per-module SourceRecords and structural graph items."""
+    from app.models.integration import SourceRecord  # local import check avoided at module top
+
     py_modules: List[Dict[str, Any]] = []
     ts_modules: List[Dict[str, Any]] = []
+    polyglot_modules: List[Dict[str, Any]] = []
     manifests: List[Dict[str, Any]] = []
     all_routes: List[str] = []
     external_pkgs: set = set()
     internal_edges: List[Tuple[str, str]] = []
 
+    stdlib_skip = {"os", "sys", "re", "json", "typing", "datetime", "uuid", "logging", "io", "math", "time", "pathlib", "fmt", "strings", "context"}
+
     for item in files:
         path = item.get("path") or ""
         content = item.get("content") or ""
         base = path.lower().rsplit("/", 1)[-1]
+        lower_p = path.lower()
         if base in _PRIORITY_MANIFESTS:
             mf = parse_manifest_file(path, content)
             manifests.append(mf)
             external_pkgs.update(mf["dependencies"])
-        elif path.lower().endswith(".py"):
+        elif lower_p.endswith(".py"):
             parsed = parse_python_source(path, content)
             py_modules.append(parsed)
             all_routes.extend(f"{path}: {r}" for r in parsed["routes"])
             for imp in parsed["imports"]:
                 if imp in ("app", "services", "models", "core", "api"):
                     internal_edges.append((path, imp))
-                elif not imp.startswith("_") and imp not in ("os", "sys", "re", "json", "typing", "datetime", "uuid", "logging", "io"):
+                elif not imp.startswith("_") and imp not in stdlib_skip:
                     external_pkgs.add(imp)
-        elif path.lower().endswith((".ts", ".tsx", ".js", ".jsx")):
+        elif lower_p.endswith((".ts", ".tsx", ".js", ".jsx")):
             parsed = parse_ts_js_source(path, content)
             ts_modules.append(parsed)
             for imp in parsed["imports"]:
@@ -206,45 +324,78 @@ def summarize_repository_ast(
                 else:
                     pkg_root = imp.split("/")[0] if not imp.startswith("@") else "/".join(imp.split("/")[:2])
                     external_pkgs.add(pkg_root)
+        elif lower_p.endswith(".go"):
+            parsed = parse_go_source(path, content)
+            polyglot_modules.append(parsed)
+            all_routes.extend(f"{path}: {r}" for r in parsed["routes"])
+            for imp in parsed["imports"]:
+                pkg_tail = imp.split("/")[-1]
+                if pkg_tail and pkg_tail not in stdlib_skip:
+                    external_pkgs.add(pkg_tail)
+        elif lower_p.endswith(".rs"):
+            parsed = parse_rust_source(path, content)
+            polyglot_modules.append(parsed)
+            all_routes.extend(f"{path}: {r}" for r in parsed["routes"])
+            for imp in parsed["imports"]:
+                if imp not in ("std", "core", "alloc", "crate", "self", "super"):
+                    external_pkgs.add(imp)
+        elif lower_p.endswith(".java"):
+            parsed = parse_java_source(path, content)
+            polyglot_modules.append(parsed)
+            all_routes.extend(f"{path}: {r}" for r in parsed["routes"])
+            for imp in parsed["imports"]:
+                if imp not in ("java", "javax"):
+                    external_pkgs.add(imp)
 
-    # Top-level directories from tree
-    top_dirs = sorted({p.split("/")[0] for p in (tree_paths or []) if "/" in p})[:20]
+    top_dirs = sorted({p.split("/")[0] for p in (tree_paths or []) if "/" in p})[:30]
+    all_mods = py_modules + ts_modules + polyglot_modules
 
     lines = [
         f"Codebase Architecture & AST Summary for {owner_repo} (branch: {branch})",
         f"Top-Level Modules/Directories: {', '.join(top_dirs) if top_dirs else 'root'}",
-        f"Indexed Files: {len(files)} ({len(py_modules)} Python, {len(ts_modules)} TS/JS, {len(manifests)} Manifests)",
+        (
+            f"Indexed Files: {len(files)} ({len(py_modules)} Python, {len(ts_modules)} TS/JS, "
+            f"{len(polyglot_modules)} Go/Rust/Java, {len(manifests)} Manifests)"
+        ),
     ]
     if all_routes:
-        lines.append("\nDiscovered API Routes:\n" + "\n".join(f"- {r}" for r in all_routes[:30]))
+        lines.append("\nDiscovered API Routes:\n" + "\n".join(f"- {r}" for r in all_routes[:50]))
     if manifests:
         lines.append("\nManifests & Runtime Dependencies:")
         for mf in manifests:
             lines.append(
-                f"- {mf['path']}: {len(mf['dependencies'])} packages ({', '.join(mf['dependencies'][:12])})"
+                f"- {mf['path']}: {len(mf['dependencies'])} packages ({', '.join(mf['dependencies'][:20])})"
             )
     if py_modules:
-        lines.append("\nKey Python Modules & Symbols:")
-        for mod in py_modules[:15]:
+        lines.append("\nPython Modules & Symbols:")
+        for mod in py_modules[:35]:
             lines.append(
-                f"- {mod['path']}: classes={mod['classes'][:5]}, funcs={mod['functions'][:6]}, imports={mod['imports'][:8]}"
+                f"- {mod['path']}: classes={mod['classes'][:10]}, funcs={mod['functions'][:12]}, imports={mod['imports'][:12]}"
             )
     if ts_modules:
-        lines.append("\nKey TypeScript/JS Modules:")
-        for mod in ts_modules[:15]:
+        lines.append("\nTypeScript/JS Modules:")
+        for mod in ts_modules[:35]:
             lines.append(
-                f"- {mod['path']}: exports={mod['exports'][:6]}, imports={mod['imports'][:8]}"
+                f"- {mod['path']}: exports={mod['exports'][:10]}, imports={mod['imports'][:12]}"
+            )
+    if polyglot_modules:
+        lines.append("\nGo/Rust/Java Modules:")
+        for mod in polyglot_modules[:35]:
+            lines.append(
+                f"- {mod['path']} ({mod['language']}): classes={mod.get('classes', [])[:10]}, funcs={mod.get('functions', [])[:12]}"
             )
 
     summary_text = "\n".join(lines)
-    prefix = "gitlab#" if source_type == "gitlab_ast" else ""
-    records = [
+    prefix = "gitlab#" if "gitlab" in source_type else ""
+    resolved_tree_url = tree_url or build_repo_web_url(source_type, repo_base_url, owner_repo, branch)
+
+    records: List[Dict[str, Any]] = [
         {
             "source_type": source_type,
             "external_id": f"{prefix}{owner_repo}#ast-architecture",
             "title": f"Code-Tree AST & Dependency Map ({owner_repo})",
             "author": "Code AST Indexer",
-            "url": tree_url or f"https://github.com/{owner_repo}/tree/{branch}",
+            "url": resolved_tree_url,
             "content": summary_text,
             "sha256": compute_sha256(summary_text),
             "source_timestamp": datetime.now(timezone.utc),
@@ -253,23 +404,68 @@ def summarize_repository_ast(
                 "branch": branch,
                 "indexed_file_count": len(files),
                 "routes_count": len(all_routes),
-                "external_packages": sorted(external_pkgs)[:40],
+                "external_packages": sorted(external_pkgs)[:60],
                 "top_directories": top_dirs,
             },
             "raw_payload": {
-                "python_modules": py_modules[:20],
-                "ts_modules": ts_modules[:20],
+                "python_modules": py_modules[:40],
+                "ts_modules": ts_modules[:40],
+                "polyglot_modules": polyglot_modules[:40],
                 "manifests": manifests,
             },
         }
     ]
 
+    # Emit per-module AST records so RAG can pinpoint exact files, classes, functions, and endpoints
+    mod_source_type = f"{source_type}_module"
+    for mod in all_mods[:25]:
+        mod_path = mod.get("path") or ""
+        classes = mod.get("classes") or mod.get("exports") or []
+        funcs = mod.get("functions") or []
+        routes = mod.get("routes") or []
+        imports = mod.get("imports") or []
+        if not (classes or funcs or routes):
+            continue
+        mod_lines = [
+            f"Module AST Profile: {mod_path} ({owner_repo} @ {branch})",
+            f"Language: {mod.get('language')}",
+        ]
+        if routes:
+            mod_lines.append("Routes:\n" + "\n".join(f"  - {r}" for r in routes))
+        if classes:
+            mod_lines.append(f"Classes/Exports: {', '.join(classes)}")
+        if funcs:
+            mod_lines.append(f"Functions: {', '.join(funcs)}")
+        if imports:
+            mod_lines.append(f"Imports: {', '.join(imports)}")
+        mod_text = "\n".join(mod_lines)
+        mod_hash = compute_sha256(mod_path)[:12]
+        records.append({
+            "source_type": mod_source_type,
+            "external_id": f"{prefix}{owner_repo}#ast-mod:{mod_hash}",
+            "title": f"AST Module: {mod_path} ({owner_repo})",
+            "author": "Code AST Indexer",
+            "url": build_repo_web_url(source_type, repo_base_url, owner_repo, branch, mod_path),
+            "content": mod_text,
+            "sha256": compute_sha256(mod_text),
+            "source_timestamp": datetime.now(timezone.utc),
+            "metadata": {
+                "repository": owner_repo,
+                "branch": branch,
+                "file_path": mod_path,
+                "language": mod.get("language"),
+                "routes": routes,
+            },
+            "raw_payload": mod,
+        })
+
     return {
         "records": records,
-        "external_packages": sorted(external_pkgs)[:40],
-        "internal_edges": internal_edges[:40],
+        "external_packages": sorted(external_pkgs)[:60],
+        "internal_edges": internal_edges[:60],
         "top_directories": top_dirs,
         "manifests": manifests,
+        "modules": all_mods,
     }
 
 
@@ -279,7 +475,9 @@ def persist_ast_graph_facts(
     owner_repo: str,
     ast_summary: Dict[str, Any],
 ) -> int:
-    """Create structural KnowledgeEntity & Dependency rows directly from AST manifests/imports."""
+    """Create structural KnowledgeEntity, Dependency, and commit/Sentry provenance edges from AST analysis."""
+    from app.models.integration import SourceRecord
+
     added = 0
     existing_entities = {
         e.name.strip().lower(): e
@@ -308,21 +506,18 @@ def persist_ast_graph_facts(
 
     repo_ent = _ensure_entity(owner_repo, "Service", f"Indexed repository {owner_repo}")
 
-    # Persist critical external runtime frameworks/services as dependencies
-    key_pkg_markers = {
-        "fastapi", "sqlalchemy", "psycopg", "pgvector", "next", "react", "pydantic",
-        "pymupdf", "networkx", "google-genai", "httpx", "redis", "celery", "prisma", "tailwindcss",
-    }
     existing_deps = {
         (d.source_component.strip().lower(), d.target_component.strip().lower())
         for d in db.query(Dependency).filter(Dependency.project_id == project_id).all()
     }
+    existing_rels = {
+        (r.source_entity_id, r.target_entity_id, r.relation_type)
+        for r in db.query(KnowledgeRelationship).filter(KnowledgeRelationship.project_id == project_id).all()
+    }
 
-    for pkg in ast_summary.get("external_packages") or []:
+    for pkg in (ast_summary.get("external_packages") or [])[:45]:
         pkg_clean = pkg.strip()
         if not pkg_clean:
-            continue
-        if pkg_clean.lower() not in key_pkg_markers and len(existing_deps) >= 12:
             continue
         pkg_ent = _ensure_entity(pkg_clean, "Component", f"Runtime package/dependency used by {owner_repo}")
         dep_pair = (owner_repo.lower(), pkg_clean.lower())
@@ -339,6 +534,9 @@ def persist_ast_graph_facts(
                 )
             )
             existing_deps.add(dep_pair)
+            added += 1
+        rel_key = (repo_ent.id, pkg_ent.id, "uses")
+        if rel_key not in existing_rels:
             db.add(
                 KnowledgeRelationship(
                     project_id=project_id,
@@ -350,7 +548,65 @@ def persist_ast_graph_facts(
                     verification_status="Supported by Evidence",
                 )
             )
+            existing_rels.add(rel_key)
             added += 1
+
+    # Cross-link existing commits / Sentry issues in the project to AST modules & services
+    indexed_files = {
+        (m.get("path") or "").rsplit("/", 1)[-1].lower(): m.get("path")
+        for m in (ast_summary.get("modules") or [])
+        if m.get("path")
+    }
+    if indexed_files:
+        recent_sources = (
+            db.query(SourceRecord)
+            .filter(
+                SourceRecord.project_id == project_id,
+                SourceRecord.source_type.in_(["github_commit", "gitlab_commit", "github_pr", "gitlab_mr", "sentry_issue"]),
+            )
+            .order_by(SourceRecord.ingested_at.desc())
+            .limit(40)
+            .all()
+        )
+        for src in recent_sources:
+            hay = f"{src.title or ''} {src.content or ''}".lower()
+            matched_file = next((fpath for fname, fpath in indexed_files.items() if len(fname) > 4 and fname in hay), None)
+            if src.source_type == "sentry_issue" and (matched_file or owner_repo.split("/")[-1].lower() in hay):
+                err_ent = _ensure_entity(src.title[:120], "Risk", f"Sentry error linked to {matched_file or owner_repo}")
+                rel_key = (err_ent.id, repo_ent.id, "affects")
+                if rel_key not in existing_rels:
+                    db.add(
+                        KnowledgeRelationship(
+                            project_id=project_id,
+                            source_entity_id=err_ent.id,
+                            target_entity_id=repo_ent.id,
+                            relation_type="affects",
+                            context=f"Sentry stacktrace references {matched_file or owner_repo}",
+                            confidence=0.85,
+                            verification_status="Supported by Evidence",
+                            source_record_id=src.id,
+                        )
+                    )
+                    existing_rels.add(rel_key)
+                    added += 1
+            elif src.author and matched_file:
+                person_ent = _ensure_entity(src.author, "Person", f"Contributor to {owner_repo}")
+                rel_key = (person_ent.id, repo_ent.id, "maintains")
+                if rel_key not in existing_rels:
+                    db.add(
+                        KnowledgeRelationship(
+                            project_id=project_id,
+                            source_entity_id=person_ent.id,
+                            target_entity_id=repo_ent.id,
+                            relation_type="maintains",
+                            context=f"Modified/authored {matched_file}",
+                            confidence=0.82,
+                            verification_status="Supported by Evidence",
+                            source_record_id=src.id,
+                        )
+                    )
+                    existing_rels.add(rel_key)
+                    added += 1
 
     return added
 

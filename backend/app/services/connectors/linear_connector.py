@@ -148,8 +148,12 @@ class LinearConnector(BaseConnector):
             issue_filter["updatedAt"] = {"gte": last_updated}
 
         query = """
-        query SyncLinear($filter: IssueFilter) {
-          issues(first: 50, orderBy: updatedAt, filter: $filter) {
+        query SyncLinear($filter: IssueFilter, $after: String, $includeProjects: Boolean!) {
+          issues(first: 50, after: $after, orderBy: updatedAt, filter: $filter) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
             nodes {
               id
               identifier
@@ -168,7 +172,7 @@ class LinearConnector(BaseConnector):
               comments(first: 5) { nodes { body user { name } } }
             }
           }
-          projects(first: 20) {
+          projects(first: 20) @include(if: $includeProjects) {
             nodes {
               id
               name
@@ -181,9 +185,26 @@ class LinearConnector(BaseConnector):
           }
         }
         """
-        data = self._graphql(query, {"filter": issue_filter or None})
-        issues = (data.get("issues") or {}).get("nodes") or []
-        projects = (data.get("projects") or {}).get("nodes") or []
+        issues: List[Dict[str, Any]] = []
+        projects: List[Dict[str, Any]] = []
+        after_cursor: Optional[str] = None
+        for page_idx in range(5):
+            data = self._graphql(
+                query,
+                {
+                    "filter": issue_filter or None,
+                    "after": after_cursor,
+                    "includeProjects": page_idx == 0,
+                },
+            )
+            issues_block = data.get("issues") or {}
+            issues.extend(issues_block.get("nodes") or [])
+            if page_idx == 0:
+                projects = (data.get("projects") or {}).get("nodes") or []
+            page_info = issues_block.get("pageInfo") or {}
+            if not page_info.get("hasNextPage") or not page_info.get("endCursor"):
+                break
+            after_cursor = page_info.get("endCursor")
 
         records: List[Dict[str, Any]] = []
         newest_updated = last_updated or ""

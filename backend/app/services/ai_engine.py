@@ -206,7 +206,12 @@ class AIEngine:
                 raise
         raise last_exc or RuntimeError("No Gemini model candidates succeeded")
 
-    def _embed_via_gemini_api(self, cleaned_texts: List[str]) -> List[List[float]]:
+    def _embed_via_gemini_api(
+        self,
+        cleaned_texts: List[str],
+        task_type: str = "RETRIEVAL_DOCUMENT",
+        title: Optional[str] = None,
+    ) -> List[List[float]]:
         from google.genai import types
 
         client = self._get_client()
@@ -215,12 +220,23 @@ class AIEngine:
 
         vectors: List[List[float]] = []
         batch_size = 64
+        norm_task = task_type if task_type in ("RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY", "SEMANTIC_SIMILARITY") else "RETRIEVAL_DOCUMENT"
         for start in range(0, len(cleaned_texts), batch_size):
             batch = cleaned_texts[start : start + batch_size]
+            cfg_kwargs: Dict[str, Any] = {
+                "output_dimensionality": self.embedding_dimensions,
+                "task_type": norm_task,
+            }
+            if title and norm_task == "RETRIEVAL_DOCUMENT" and len(batch) == 1:
+                cfg_kwargs["title"] = title[:200]
+            try:
+                cfg = types.EmbedContentConfig(**cfg_kwargs)
+            except Exception:
+                cfg = types.EmbedContentConfig(output_dimensionality=self.embedding_dimensions)
             res = client.models.embed_content(
                 model="gemini-embedding-001",
                 contents=batch,
-                config=types.EmbedContentConfig(output_dimensionality=self.embedding_dimensions),
+                config=cfg,
             )
             for emb in res.embeddings or []:
                 arr = np.asarray(emb.values, dtype=np.float32)
@@ -230,14 +246,19 @@ class AIEngine:
                 vectors.append(arr.tolist())
         return vectors
 
-    def generate_embedding(self, text: str) -> List[float]:
-        """Generate a 384-dim normalized semantic embedding (low-RAM Gemini API in prod, BAAI/bge-small-en-v1.5 locally)."""
+    def generate_embedding(
+        self,
+        text: str,
+        task_type: str = "RETRIEVAL_DOCUMENT",
+        title: Optional[str] = None,
+    ) -> List[float]:
+        """Generate normalized semantic embedding supporting asymmetric Gemini task_type (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY)."""
         cleaned = (text or "").strip()
         if not cleaned:
             return [0.0] * self.embedding_dimensions
         if self._should_use_api_embeddings():
             try:
-                vecs = self._embed_via_gemini_api([cleaned[:4000]])
+                vecs = self._embed_via_gemini_api([cleaned[:4000]], task_type=task_type, title=title)
                 if vecs:
                     return vecs[0]
             except Exception as exc:
@@ -252,7 +273,11 @@ class AIEngine:
             arr = arr / norm
         return arr.tolist()
 
-    def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings_batch(
+        self,
+        texts: List[str],
+        task_type: str = "RETRIEVAL_DOCUMENT",
+    ) -> List[List[float]]:
         if not texts:
             return []
         non_empty_positions = [(idx, (t or "").strip()[:4000]) for idx, t in enumerate(texts) if (t or "").strip()]
@@ -261,7 +286,10 @@ class AIEngine:
 
         if self._should_use_api_embeddings():
             try:
-                api_vecs = self._embed_via_gemini_api([txt for _, txt in non_empty_positions])
+                api_vecs = self._embed_via_gemini_api(
+                    [txt for _, txt in non_empty_positions],
+                    task_type=task_type,
+                )
                 if len(api_vecs) == len(non_empty_positions):
                     out = [[0.0] * self.embedding_dimensions for _ in texts]
                     for (orig_idx, _), vec in zip(non_empty_positions, api_vecs):
@@ -398,25 +426,28 @@ class AIEngine:
 
         evidence_block = []
         raw_citations = []
-        for idx, doc in enumerate(context_docs[:6], 1):
-            excerpt = (doc.get("excerpt") or doc.get("content") or "")[:650]
+        for idx, doc in enumerate(context_docs[:8], 1):
+            full_excerpt = (doc.get("full_context") or doc.get("excerpt") or doc.get("content") or "")[:1400]
+            display_excerpt = (doc.get("excerpt") or doc.get("content") or "")[:500]
             ts = doc.get("source_timestamp")
             ts_str = ts.isoformat() if isinstance(ts, datetime) else (str(ts) if ts else "Unknown date")
             author = doc.get("source_author") or "Unknown author"
+            entity_kind = doc.get("entity_type", "evidence")
             evidence_block.append(
                 f"[Evidence {idx}] Source: {doc.get('source_title', 'Project Record')} "
-                f"| Type: {doc.get('source_type', 'document')} | Author: {author} | Date: {ts_str} "
-                f"| Status: {doc.get('verification_status', 'Needs Human Verification')}\n{excerpt}"
+                f"| Kind: {entity_kind} | Type: {doc.get('source_type', 'document')} | Author: {author} | Date: {ts_str} "
+                f"| Status: {doc.get('verification_status', 'Needs Human Verification')}\n{full_excerpt}"
             )
             raw_citations.append({
                 "evidence_id": doc.get("id", f"ev-{idx}"),
+                "entity_type": entity_kind,
                 "source_type": doc.get("source_type", "document"),
                 "source_title": doc.get("source_title", "Project Record"),
                 "source_url": doc.get("source_url"),
                 "source_author": author,
                 "source_timestamp": ts_str,
                 "verification_status": doc.get("verification_status", "Needs Human Verification"),
-                "excerpt": excerpt[:400],
+                "excerpt": display_excerpt,
                 "confidence": round(float(doc.get("retrieval_score", doc.get("confidence", 0.5))), 2),
             })
 
@@ -478,13 +509,32 @@ QUESTION:
                         ],
                     }
 
-                cited = [i for i in parsed.cited_evidence_indices if 1 <= i <= len(raw_citations)]
+                # Post-generation citation integrity check: verify every inline [Evidence X] reference exists in raw_citations
+                max_idx = len(raw_citations)
+                answer_txt = parsed.answer.strip()
+                invalid_tags: List[int] = []
+
+                def _sanitize_cite(match: re.Match) -> str:
+                    idx_num = int(match.group(1))
+                    if 1 <= idx_num <= max_idx:
+                        return match.group(0)
+                    invalid_tags.append(idx_num)
+                    return ""
+
+                answer_txt = re.sub(r"\[Evidence\s+(\d+)\]", _sanitize_cite, answer_txt)
+                inline_cited = [int(m) for m in re.findall(r"\[Evidence\s+(\d+)\]", answer_txt)]
+                cited = sorted(
+                    {i for i in (list(parsed.cited_evidence_indices) + inline_cited) if 1 <= i <= max_idx}
+                )
                 if not cited:
                     cited = list(range(1, min(len(raw_citations), 3) + 1))
                 final_citations = [raw_citations[i - 1] for i in cited]
                 conf, breakdown = self.compute_explainable_confidence(context_docs, cited)
+                if invalid_tags:
+                    conf = round(max(0.0, conf - 0.1), 2)
+                    breakdown["ungrounded_citations_stripped"] = sorted(set(invalid_tags))
                 return {
-                    "answer": parsed.answer.strip(),
+                    "answer": answer_txt,
                     "citations": final_citations,
                     "confidence": conf,
                     "confidence_breakdown": breakdown,

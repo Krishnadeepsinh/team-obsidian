@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import threading
 import time
@@ -7,6 +8,7 @@ from typing import Deque, Dict, Optional
 from fastapi import HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 
 logger = logging.getLogger("obsidian.ratelimit")
@@ -132,12 +134,20 @@ rate_limiter = SlidingWindowRateLimiter()
 
 
 def get_client_ip(request: Request) -> str:
-    """Resolve client IP cleanly behind reverse proxies while rejecting malformed headers."""
+    """Resolve client IP cleanly behind reverse proxies while rejecting spoofed X-Forwarded-For strings."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first and len(first) <= 64:
-            return first
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        valid_hops = []
+        for h in hops:
+            try:
+                ipaddress.ip_address(h)
+                valid_hops.append(h)
+            except ValueError:
+                continue
+        if valid_hops:
+            idx = max(0, len(valid_hops) - max(1, settings.TRUSTED_PROXY_HOPS))
+            return valid_hops[idx]
     if request.client and request.client.host:
         return request.client.host
     return "unknown"

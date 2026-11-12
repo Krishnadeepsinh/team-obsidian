@@ -59,6 +59,16 @@ class Settings:
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
     PASSWORD_RESET_EXPIRE_MINUTES: int = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
+    AUTH_COOKIE_NAME: str = os.getenv("AUTH_COOKIE_NAME", "obsidian_session")
+    AUTH_COOKIE_ENABLED: bool = os.getenv("AUTH_COOKIE_ENABLED", "false").lower() == "true"
+    COOKIE_SAMESITE: str = (
+        os.getenv("COOKIE_SAMESITE", "none" if APP_ENV == "production" else "lax").strip().lower()
+    )
+    COOKIE_SECURE: bool = (
+        os.getenv("COOKIE_SECURE", "true" if APP_ENV == "production" else "false").strip().lower() == "true"
+        or COOKIE_SAMESITE == "none"
+    )
+    TRUSTED_PROXY_HOPS: int = max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "1")))
 
     # Deployment URLs & Restricted CORS (supports localhost + configured production Vercel/custom domains)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
@@ -126,10 +136,15 @@ class Settings:
     MAX_UPLOAD_BYTES: int = MAX_UPLOAD_MB * 1024 * 1024
 
     def validate_production_readiness(self) -> None:
-        if self.APP_ENV == "production":
-            if len(self.SECRET_KEY) < 32 or "change-in-prod" in self.SECRET_KEY:
-                raise RuntimeError("Insecure SECRET_KEY configured for production.")
-            if not self.CREDENTIALS_ENCRYPTION_KEY:
+        if self.COOKIE_SAMESITE not in ("lax", "strict", "none"):
+            raise RuntimeError(f"Invalid COOKIE_SAMESITE='{self.COOKIE_SAMESITE}'. Expected lax, strict, or none.")
+        if self.APP_ENV in ("production", "staging"):
+            weak_markers = ("change-in-prod", "dev-secret", "secret-key", "changeme", "default")
+            if len(self.SECRET_KEY) < 32 or any(m in self.SECRET_KEY.lower() for m in weak_markers):
+                raise RuntimeError(f"Insecure SECRET_KEY configured for {self.APP_ENV}.")
+            if len(set(self.SECRET_KEY)) < 10:
+                raise RuntimeError(f"Low-entropy SECRET_KEY configured for {self.APP_ENV}.")
+            if self.APP_ENV == "production" and not self.CREDENTIALS_ENCRYPTION_KEY:
                 raise RuntimeError("CREDENTIALS_ENCRYPTION_KEY must be configured in production.")
 
 

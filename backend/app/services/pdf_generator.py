@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import re
 from html import escape
@@ -19,6 +21,36 @@ from reportlab.platypus import (
 
 class PDFGenerator:
     """Enterprise Handover Dossier PDF Generator using ReportLab."""
+
+    @staticmethod
+    def compute_document_digest(handover_data: Dict[str, Any]) -> str:
+        """Compute deterministic SHA-256 tamper-evident digest over dossier sections and claim states."""
+        canonical_payload = {
+            "title": str(handover_data.get("title", "")),
+            "employee_name": str(handover_data.get("employee_name", "")),
+            "project_name": str(handover_data.get("project_name", "")),
+            "status": str(handover_data.get("status", "")),
+            "sections": [
+                {
+                    "section_number": sec.get("section_number"),
+                    "title": str(sec.get("title", "")),
+                    "verification_status": str(sec.get("verification_status", "")),
+                    "content": str(sec.get("content", "")),
+                    "claims": [
+                        {
+                            "claim_text": str(c.get("claim_text", "")),
+                            "verification_status": str(c.get("verification_status", "")),
+                            "confidence": round(float(c.get("confidence", 0.0)), 4),
+                            "evidence_count": int(c.get("evidence_count", len(c.get("evidence_ids") or []))),
+                        }
+                        for c in (sec.get("claims") or [])
+                    ],
+                }
+                for sec in (handover_data.get("sections") or [])
+            ],
+        }
+        serialized = json.dumps(canonical_payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def generate_handover_pdf(self, handover_data: Dict[str, Any], output_path: str) -> str:
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -140,6 +172,42 @@ class PDFGenerator:
                 ])
             )
             elements.append(app_table)
+
+        spofs = handover_data.get("spofs") or []
+        if spofs:
+            elements.append(Spacer(1, 10))
+            elements.append(Paragraph("Executive Bus-Factor & Single Points of Failure", section_heading_style))
+            spof_rows = [[
+                Paragraph("<b>Module / Entity</b>", body_style),
+                Paragraph("<b>Severity</b>", body_style),
+                Paragraph("<b>Primary Owner</b>", body_style),
+                Paragraph("<b>Eff. Bus Factor</b>", body_style),
+            ]]
+            for spof in spofs[:12]:
+                owners = spof.get("sole_owners") or [o.get("name") for o in (spof.get("owner_breakdown") or []) if o.get("name")]
+                owner_str = ", ".join(str(x) for x in owners[:3]) if owners else "Unassigned"
+                share = spof.get("ownership_share")
+                share_label = f" ({round(float(share) * 100)}%)" if share is not None else ""
+                eff_bf = spof.get("effective_bus_factor", spof.get("bus_factor", 1))
+                spof_rows.append([
+                    Paragraph(escape(str(spof.get("module") or spof.get("entity") or "Unknown")), meta_style),
+                    Paragraph(escape(str(spof.get("spof_severity") or spof.get("risk_level") or "HIGH").upper()), meta_style),
+                    Paragraph(escape(owner_str + share_label), meta_style),
+                    Paragraph(escape(f"{float(eff_bf):.2f}"), meta_style),
+                ])
+            spof_table = Table(spof_rows, colWidths=[175, 80, 175, 85])
+            spof_table.setStyle(
+                TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EDE9FE")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("PADDING", (0, 0), (-1, -1), 4),
+                ])
+            )
+            elements.append(spof_table)
+
+        if approvals or spofs:
             elements.append(PageBreak())
 
         for sec in handover_data.get("sections", []):
@@ -166,11 +234,55 @@ class PDFGenerator:
                 clean = re.sub(r"`([^`]+)`", r'<font name="Courier" size="8.8">\1</font>', clean)
                 elements.append(Paragraph(clean, body_style))
 
+            claims = sec.get("claims") or []
+            if claims:
+                claim_rows = [[
+                    Paragraph("<b>Atomic Claim</b>", meta_style),
+                    Paragraph("<b>Status</b>", meta_style),
+                    Paragraph("<b>Conf.</b>", meta_style),
+                    Paragraph("<b>Evidence</b>", meta_style),
+                ]]
+                for clm in claims[:10]:
+                    ctext = str(clm.get("claim_text", "")).strip()
+                    if len(ctext) > 150:
+                        ctext = ctext[:147].rstrip() + "..."
+                    ev_cnt = int(clm.get("evidence_count", len(clm.get("evidence_ids") or [])))
+                    conf_val = float(clm.get("confidence", 0.0))
+                    claim_rows.append([
+                        Paragraph(escape(ctext), meta_style),
+                        Paragraph(escape(str(clm.get("verification_status", "Needs Verification"))), meta_style),
+                        Paragraph(escape(f"{round(conf_val * 100)}%"), meta_style),
+                        Paragraph(escape(f"{ev_cnt} ref(s)"), meta_style),
+                    ])
+                claim_table = Table(claim_rows, colWidths=[275, 115, 55, 70])
+                claim_table.setStyle(
+                    TableStyle([
+                        ("BACKGROUND", (0, 0), (-1, 0), card_bg),
+                        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("PADDING", (0, 0), (-1, -1), 4),
+                    ])
+                )
+                elements.append(Spacer(1, 4))
+                elements.append(claim_table)
+                elements.append(Spacer(1, 4))
+
             refs = sec.get("evidence_refs") or []
             if refs:
                 elements.append(Paragraph("Supporting Evidence: " + escape("; ".join(refs)), meta_style))
 
             elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#E2E8F0"), spaceBefore=4, spaceAfter=6))
+
+        document_digest = self.compute_document_digest(handover_data)
+        handover_data["document_sha256"] = document_digest
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("Audit Integrity & Tamper-Evident Digest", section_heading_style))
+        elements.append(
+            Paragraph(
+                f'Document SHA-256: <font name="Courier" size="8.5">{escape(document_digest)}</font>',
+                meta_style,
+            )
+        )
 
         doc.build(elements)
         return output_path

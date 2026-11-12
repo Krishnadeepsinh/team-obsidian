@@ -231,7 +231,7 @@ def upload_document(
     vectors: List[List[float]] = []
     if non_empty_texts:
         try:
-            vectors = ai_engine.generate_embeddings_batch(non_empty_texts)
+            vectors = ai_engine.generate_embeddings_batch(non_empty_texts, task_type="RETRIEVAL_DOCUMENT")
         except Exception as exc:
             logger.warning("Embedding generation failed during upload of doc %s: %s", doc_id, exc)
             vectors = []
@@ -240,12 +240,19 @@ def upload_document(
     chunk_recs: List[DocumentChunk] = []
     evidences: List[Evidence] = []
     embedding_recs: List[EmbeddingRecord] = []
+    first_ev_id: Optional[str] = None
+    total_chunks = sum(1 for t in chunk_texts if t)
 
     for c, chunk_content in zip(chunks, chunk_texts):
         if not chunk_content:
             continue
         chunk_id = str(uuid.uuid4())
         ev_id = str(uuid.uuid4())
+        if first_ev_id is None:
+            first_ev_id = ev_id
+            parent_ev_ref = None
+        else:
+            parent_ev_ref = first_ev_id
         sheet_name = _clean_text(c.get("sheet_name"), 255) or None
         heading = _clean_text(c.get("heading"), 500) or None
         paragraph_ref = _clean_text(c.get("paragraph_ref"), 255) or None
@@ -283,14 +290,18 @@ def upload_document(
                 project_id=project_id,
                 document_id=doc_id,
                 chunk_id=chunk_id,
+                parent_evidence_id=parent_ev_ref,
+                chunk_index=c["chunk_index"],
+                total_chunks=total_chunks,
                 source_type="document",
                 source_id=doc_id,
                 source_title=source_title,
                 source_url=f"/documents?doc={doc_id}"[:1000],
                 source_author=author_label,
                 claim_type="document_chunk",
-                excerpt=chunk_content[:800],
-                ai_interpretation=f"Extracted chunk #{c['chunk_index'] + 1} from '{filename}' ({loc_label[:200]}).",
+                excerpt=chunk_content[:1200],
+                full_text=chunk_content,
+                ai_interpretation=f"Extracted chunk #{c['chunk_index'] + 1}/{total_chunks} from '{filename}' ({loc_label[:200]}).",
                 confidence=0.80,
                 verification_status="Supported by Evidence",
                 content_hash=c["sha256"],
@@ -313,6 +324,9 @@ def upload_document(
                     project_id=project_id,
                     entity_type="evidence",
                     entity_id=ev_id,
+                    parent_id=first_ev_id,
+                    chunk_index=c["chunk_index"],
+                    task_type="RETRIEVAL_DOCUMENT",
                     text_content=f"{clean_title} ({loc_label})\n{chunk_content}",
                     embedding=vec,
                     embedding_vector=vec,

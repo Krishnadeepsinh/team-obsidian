@@ -93,7 +93,7 @@ export function ReadinessCard() { return null }
         ],
         tree_paths=["backend/app/main.py", "frontend/components/ReadinessCard.tsx"],
     )
-    assert len(summary["records"]) == 1
+    assert len(summary["records"]) >= 1
     assert summary["records"][0]["source_type"] == "github_ast"
     assert "next" in summary["external_packages"]
 

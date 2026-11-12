@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -15,6 +15,7 @@ from app.core.permissions import (
 )
 from app.core.rate_limiter import get_client_ip, rate_limiter
 from app.core.security import (
+    clear_auth_cookie,
     create_access_token,
     decode_access_token,
     generate_reset_token,
@@ -22,6 +23,7 @@ from app.core.security import (
     get_password_hash,
     hash_reset_token,
     revoke_token_jti,
+    set_auth_cookie,
     verify_and_upgrade_password,
     verify_password,
 )
@@ -55,7 +57,7 @@ def require_roles(allowed_roles: list):
 
 
 @router.post("/register", response_model=Token)
-def register(user_in: UserRegister, request: Request, db: Session = Depends(get_db)):
+def register(user_in: UserRegister, request: Request, response: Response, db: Session = Depends(get_db)):
     rate_limiter.check(
         f"register:{get_client_ip(request)}",
         limit=60,
@@ -116,6 +118,8 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
         "workspace_id": ws.id,
         "project_id": proj.id,
     })
+    if settings.AUTH_COOKIE_ENABLED or request.headers.get("x-use-session-cookie") == "1":
+        set_auth_cookie(response, token)
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -136,7 +140,7 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
 
 
 @router.post("/login", response_model=Token)
-def login(login_in: UserLogin, request: Request, db: Session = Depends(get_db)):
+def login(login_in: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     ip = get_client_ip(request)
     normalized_email = login_in.email.strip().lower()
     fail_key = f"login_fail:{ip}:{normalized_email}"
@@ -188,6 +192,8 @@ def login(login_in: UserLogin, request: Request, db: Session = Depends(get_db)):
         "workspace_id": user.personal_workspace_id,
         "project_id": active_project_id,
     })
+    if settings.AUTH_COOKIE_ENABLED or request.headers.get("x-use-session-cookie") == "1":
+        set_auth_cookie(response, token)
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -210,15 +216,18 @@ def login(login_in: UserLogin, request: Request, db: Session = Depends(get_db)):
 @router.post("/logout")
 def logout(
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        payload = decode_access_token(auth_header[7:].strip())
+    raw_tok = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else (request.cookies.get(settings.AUTH_COOKIE_NAME) or "").strip()
+    if raw_tok:
+        payload = decode_access_token(raw_tok)
         if payload:
             revoke_token_jti(payload.get("jti"), payload.get("exp"), db=db)
             db.commit()
+    clear_auth_cookie(response)
     record_activity(
         db=db,
         action="auth.logout",

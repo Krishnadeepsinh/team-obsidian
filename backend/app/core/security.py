@@ -14,7 +14,7 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -255,21 +255,50 @@ def hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def set_auth_cookie(response: Response, token: str) -> None:
+    """Attach signed HttpOnly session cookie with strict SameSite/Secure policy."""
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=bool(settings.COOKIE_SECURE or settings.APP_ENV == "production"),
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    """Clear HttpOnly session cookie consistently across browsers."""
+    response.delete_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        path="/",
+        secure=bool(settings.COOKIE_SECURE or settings.APP_ENV == "production"),
+        samesite=settings.COOKIE_SAMESITE,
+        httponly=True,
+    )
+
+
 def get_current_user(
     authorization: Optional[str] = Header(None),
+    session_cookie: Optional[str] = Cookie(None, alias=settings.AUTH_COOKIE_NAME),
     db: Session = Depends(get_db),
 ):
-    """Strict Bearer JWT dependency. Never silently falls back to unauthenticated access."""
+    """Strict Bearer JWT (or signed HttpOnly cookie fallback) dependency."""
     from app.models.workspace import User
 
-    if not authorization or not authorization.startswith("Bearer "):
+    token: Optional[str] = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    elif session_cookie:
+        token = session_cookie.strip()
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid Authorization header. Bearer token required.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    token = authorization.split(" ", 1)[1].strip()
     payload = decode_access_token(token)
     if not payload or not payload.get("sub") or payload.get("token_type", "access") != "access":
         raise HTTPException(
