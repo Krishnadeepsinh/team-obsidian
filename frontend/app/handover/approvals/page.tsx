@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { api, getStoredProjectId } from "@/lib/api"
-import { Stamp, XCircle, AlertTriangle, ArrowLeft, Archive, Send } from "lucide-react"
+import { Stamp, XCircle, AlertTriangle, ArrowLeft, Archive, Send, CheckCircle2, ShieldCheck } from "lucide-react"
 
 export default function ApprovalsPage() {
   const [handovers, setHandovers] = useState<any[]>([])
   const [selectedId, setSelectedId] = useState("")
   const [handover, setHandover] = useState<any>(null)
+  const [readinessGate, setReadinessGate] = useState<any>(null)
   const [notes, setNotes] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
@@ -24,10 +25,15 @@ export default function ApprovalsPage() {
       const hid = targetHid || list[0]?.id
       if (hid) {
         setSelectedId(hid)
-        const full = await api.getHandover(hid).catch(() => null)
+        const [full, gate] = await Promise.all([
+          api.getHandover(hid).catch(() => null),
+          api.getHandoverReadinessGate(hid).catch(() => null),
+        ])
         setHandover(full)
+        setReadinessGate(gate)
       } else {
         setHandover(null)
+        setReadinessGate(null)
       }
     } catch (err: any) {
       setError(err.message || "Failed to load handover approvals.")
@@ -168,6 +174,48 @@ export default function ApprovalsPage() {
               </button>
             </div>
           </div>
+
+          {readinessGate && (
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                  <ShieldCheck className="w-4 h-4 text-violet-600" />
+                  <span>Pre-Completion Readiness Gate ({readinessGate.passed_checks}/{readinessGate.total_checks} checks passed)</span>
+                </div>
+                <span
+                  className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase border ${
+                    readinessGate.can_finalize
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-amber-50 text-amber-700 border-amber-200"
+                  }`}
+                >
+                  {readinessGate.readiness_score}% Ready
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {(readinessGate.checks || []).map((chk: any) => (
+                  <div
+                    key={chk.key}
+                    className={`px-3 py-2 rounded-lg border text-[11px] flex items-center justify-between gap-2 ${
+                      chk.passed
+                        ? "bg-white border-emerald-200 text-slate-700"
+                        : "bg-amber-50/60 border-amber-200 text-amber-900"
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5 font-medium">
+                      {chk.passed ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                      )}
+                      {chk.label}
+                    </span>
+                    <span className="font-mono text-[10px] font-semibold flex-shrink-0">{chk.current}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="text-xs font-semibold text-slate-700 block mb-1">Optional Review Notes for Next Sign-Off Action</label>

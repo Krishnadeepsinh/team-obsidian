@@ -25,6 +25,8 @@ export default function ReadinessSimulatorPage() {
   const [loading, setLoading] = useState(true)
   const [evaluating, setEvaluating] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
+  const [creatingTasks, setCreatingTasks] = useState(false)
+  const [tasksNotice, setTasksNotice] = useState<string>("")
   const [error, setError] = useState("")
 
   const loadSimulator = useCallback(async (targetHid?: string, regenerate: boolean = false) => {
@@ -85,6 +87,7 @@ export default function ReadinessSimulatorPage() {
     try {
       setEvaluating(true)
       setError("")
+      setTasksNotice("")
       const res = await api.evaluateReadinessSimulator(selectedId, {
         candidate_name: candidateName.trim() || simData.incoming_employee_name,
         scenarios: simData.scenarios,
@@ -97,6 +100,25 @@ export default function ReadinessSimulatorPage() {
       setError(err.message || "Simulation evaluation failed.")
     } finally {
       setEvaluating(false)
+    }
+  }
+
+  const handleCreateOnboardingTasks = async () => {
+    if (!selectedId || creatingTasks) return
+    try {
+      setCreatingTasks(true)
+      setError("")
+      const res = await api.createOnboardingTasksFromSimulator(selectedId, result?.id)
+      const count = res?.created_count ?? 0
+      setTasksNotice(
+        count > 0
+          ? `Created ${count} onboarding study task(s) assigned to ${res?.assignee || "successor"}.`
+          : "All missed readiness concepts already have matching open tasks in the Task Tracker."
+      )
+    } catch (err: any) {
+      setError(err?.message || "Failed to generate onboarding tasks.")
+    } finally {
+      setCreatingTasks(false)
     }
   }
 
@@ -322,6 +344,35 @@ export default function ReadinessSimulatorPage() {
                   </div>
                 ))}
               </div>
+
+              {(result.responses || []).some(
+                (r: any) => (Array.isArray(r.missed_concepts) && r.missed_concepts.length > 0) || (r.score ?? 100) < 75
+              ) && (
+                <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs text-slate-600">
+                    Convert missed readiness topics into tracked onboarding tasks for the incoming engineer.
+                  </span>
+                  <button
+                    type="button"
+                    disabled={creatingTasks}
+                    onClick={handleCreateOnboardingTasks}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white shadow-sm"
+                  >
+                    {creatingTasks ? "Creating Tasks..." : "Create Onboarding Tasks from Gaps"}
+                  </button>
+                </div>
+              )}
+
+              {tasksNotice && (
+                <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between gap-2">
+                  <span className="font-medium flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> {tasksNotice}
+                  </span>
+                  <Link href="/tasks" className="font-bold underline hover:text-emerald-950 flex-shrink-0">
+                    Open Tasks &rarr;
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -305,6 +305,7 @@ function IntegrationsContent() {
   const [configModal, setConfigModal] = useState<any>(null)
   const [editName, setEditName] = useState("")
   const [editConfigVal, setEditConfigVal] = useState("")
+  const [editSyncInterval, setEditSyncInterval] = useState<number>(0)
   const [configResources, setConfigResources] = useState<any[]>([])
   const [loadingConfigResources, setLoadingConfigResources] = useState(false)
   const [configResourceError, setConfigResourceError] = useState("")
@@ -322,11 +323,14 @@ function IntegrationsContent() {
   const [webhookInfo, setWebhookInfo] = useState<any>(null)
   const [loadingWebhook, setLoadingWebhook] = useState(false)
   const [rotatingWebhook, setRotatingWebhook] = useState(false)
+  const [autoWebhookLoading, setAutoWebhookLoading] = useState(false)
+  const [autoWebhookResults, setAutoWebhookResults] = useState<any[] | null>(null)
   const [copiedWebhook, setCopiedWebhook] = useState("")
 
   const openWebhookModal = async (integ: any) => {
     setWebhookModal(integ)
     setWebhookInfo(null)
+    setAutoWebhookResults(null)
     setCopiedWebhook("")
     try {
       setLoadingWebhook(true)
@@ -349,6 +353,28 @@ function IntegrationsContent() {
       setError(err?.message || "Failed to generate webhook secret.")
     } finally {
       setRotatingWebhook(false)
+    }
+  }
+
+  const handleRegisterAutoWebhook = async () => {
+    if (!webhookModal || autoWebhookLoading) return
+    try {
+      setAutoWebhookLoading(true)
+      setError("")
+      const res = await api.registerAutoWebhook(webhookModal.id)
+      if (res?.webhook_url || res?.webhook_secret) {
+        setWebhookInfo((prev: any) => ({
+          ...(prev || {}),
+          ...res,
+          webhook_secret: res.webhook_secret || prev?.webhook_secret,
+        }))
+      }
+      setAutoWebhookResults(Array.isArray(res?.results) ? res.results : [])
+      await loadAll(activeProject)
+    } catch (err: any) {
+      setError(err?.message || "Auto-webhook registration failed.")
+    } finally {
+      setAutoWebhookLoading(false)
     }
   }
 
@@ -379,6 +405,7 @@ function IntegrationsContent() {
       setEditName(integ.name || "")
       const targets = parseTargetsFromConfig(integ.provider, integ.config || {})
       setEditConfigVal(targets.join(", "))
+      setEditSyncInterval(Number(integ.config?.sync_interval_minutes ?? 0))
       setConfigResources([])
       setConfigResourceSearch("")
       setConfigResourceError("")
@@ -620,7 +647,10 @@ function IntegrationsContent() {
 
   const saveConfigAndOptionallySync = async (andSync: boolean) => {
     if (!configModal) return
-    const nextCfg = buildProviderConfig(configModal.provider, configModal.config || {}, editConfigVal)
+    const nextCfg = {
+      ...buildProviderConfig(configModal.provider, configModal.config || {}, editConfigVal),
+      sync_interval_minutes: editSyncInterval,
+    }
     try {
       setSavingConfig(true)
       setError("")
@@ -1221,6 +1251,22 @@ function IntegrationsContent() {
                   className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                 />
               </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Automated Sync Cadence
+                </label>
+                <select
+                  value={editSyncInterval}
+                  onChange={(e) => setEditSyncInterval(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200 text-slate-800"
+                >
+                  <option value={0}>Manual / Webhook-only</option>
+                  <option value={15}>Every 15 minutes</option>
+                  <option value={60}>Hourly</option>
+                  <option value={360}>Every 6 hours</option>
+                  <option value={1440}>Daily</option>
+                </select>
+              </div>
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1406,19 +1452,51 @@ function IntegrationsContent() {
                   </div>
                 )}
 
-                <div className="flex items-center justify-between pt-2">
-                  <button
-                    type="button"
-                    disabled={rotatingWebhook}
-                    onClick={handleRotateWebhookSecret}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50"
-                  >
-                    {rotatingWebhook
-                      ? "Generating..."
-                      : webhookInfo?.has_secret
-                      ? "Rotate Webhook Secret"
-                      : "Generate Webhook Secret"}
-                  </button>
+                {autoWebhookResults && autoWebhookResults.length > 0 && (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                    <div className="text-[11px] font-bold text-slate-700">Repository Webhook Registration Results:</div>
+                    {autoWebhookResults.map((r: any, idx: number) => (
+                      <div key={r.repo || idx} className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-mono text-slate-800 truncate">{r.repo}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                            r.status === "registered" || r.status === "already_exists"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-rose-100 text-rose-700"
+                          }`}
+                        >
+                          {r.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={rotatingWebhook}
+                      onClick={handleRotateWebhookSecret}
+                      className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50"
+                    >
+                      {rotatingWebhook
+                        ? "Generating..."
+                        : webhookInfo?.has_secret
+                        ? "Rotate Secret"
+                        : "Generate Secret"}
+                    </button>
+                    {webhookModal.provider === "github" && (
+                      <button
+                        type="button"
+                        disabled={autoWebhookLoading}
+                        onClick={handleRegisterAutoWebhook}
+                        className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white disabled:opacity-50"
+                      >
+                        {autoWebhookLoading ? "Registering..." : "1-Click Register on GitHub"}
+                      </button>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => setWebhookModal(null)}

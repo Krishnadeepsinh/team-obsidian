@@ -1,8 +1,8 @@
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ from app.models.handover import (
     HandoverVersion,
     ReadinessSimulation,
 )
+from app.models.knowledge import KnowledgeDriftEvent, KnowledgeGap, TaskItem
 from app.models.workspace import Project, ProjectMember, User
 from app.services.email_service import email_service
 from app.services.readiness_simulator import evaluate_simulation_submission, generate_scenarios_for_handover
@@ -606,3 +607,299 @@ def export_handover_pdf(
 
     pdf_generator.generate_handover_pdf(handover_data, output_path)
     return FileResponse(output_path, media_type="application/pdf", filename=pdf_filename)
+
+
+@router.get("/{handover_id}/readiness-gate")
+def get_handover_readiness_gate(
+    handover_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Evaluate concrete pre-completion engineering sign-off gates for a handover dossier."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db)
+
+    sections = db.query(HandoverSection).filter(HandoverSection.handover_id == handover_id).all()
+    claims = (
+        db.query(HandoverClaim)
+        .join(HandoverSection, HandoverClaim.section_id == HandoverSection.id)
+        .filter(HandoverSection.handover_id == handover_id)
+        .all()
+    )
+    approvals = db.query(HandoverApproval).filter(HandoverApproval.handover_id == handover_id).all()
+    open_crit_gaps = (
+        db.query(KnowledgeGap)
+        .filter(
+            KnowledgeGap.project_id == h.project_id,
+            KnowledgeGap.status == "open",
+            KnowledgeGap.severity.in_(["critical", "high"]),
+        )
+        .count()
+    )
+    open_crit_drift = (
+        db.query(KnowledgeDriftEvent)
+        .filter(
+            KnowledgeDriftEvent.project_id == h.project_id,
+            KnowledgeDriftEvent.status == "open",
+            KnowledgeDriftEvent.severity.in_(["critical", "high"]),
+        )
+        .count()
+    )
+    departing_open_tasks = (
+        db.query(TaskItem)
+        .filter(
+            TaskItem.project_id == h.project_id,
+            TaskItem.is_departing_owner == True,  # noqa: E712
+            TaskItem.status != "completed",
+        )
+        .count()
+    )
+
+    total_sections = len(sections)
+    verified_sections = sum(
+        1 for s in sections if s.is_verified or (getattr(s, "verification_status", "") == "Verified by Reviewer")
+    )
+    unverified_claims = sum(
+        1
+        for c in claims
+        if (getattr(c, "verification_status", "") or "").lower()
+        in {"contradicted", "outdated", "unknown / missing evidence", "unverified", "disputed"}
+    )
+    pending_approvals = sum(
+        1 for a in approvals if (a.status or "").lower() not in {"approved", "acknowledged"}
+    )
+    stats = h.reconstruction_stats or {}
+    sim_passed = bool(stats.get("readiness_passed", False))
+    sim_score = stats.get("latest_readiness_score")
+
+    checks: List[Dict[str, Any]] = [
+        {
+            "key": "sections_verified",
+            "label": "All handover sections verified",
+            "passed": total_sections > 0 and verified_sections == total_sections,
+            "current": f"{verified_sections}/{total_sections}",
+            "blocking": True,
+        },
+        {
+            "key": "claims_verified",
+            "label": "No unverified or disputed claims",
+            "passed": unverified_claims == 0,
+            "current": f"{unverified_claims} unverified",
+            "blocking": unverified_claims > 0,
+        },
+        {
+            "key": "critical_gaps_resolved",
+            "label": "High/critical knowledge gaps resolved",
+            "passed": open_crit_gaps == 0,
+            "current": f"{open_crit_gaps} open",
+            "blocking": open_crit_gaps > 0,
+        },
+        {
+            "key": "drift_resolved",
+            "label": "High/critical knowledge drift reconciled",
+            "passed": open_crit_drift == 0,
+            "current": f"{open_crit_drift} open",
+            "blocking": open_crit_drift > 0,
+        },
+        {
+            "key": "departing_tasks_reassigned",
+            "label": "Departing engineer tasks reassigned or closed",
+            "passed": departing_open_tasks == 0,
+            "current": f"{departing_open_tasks} remaining",
+            "blocking": departing_open_tasks > 0,
+        },
+        {
+            "key": "simulator_passed",
+            "label": "Incoming engineer readiness simulator passed",
+            "passed": sim_passed,
+            "current": f"{sim_score}%" if sim_score is not None else "Not taken",
+            "blocking": not sim_passed,
+        },
+        {
+            "key": "approvals_complete",
+            "label": "Required stakeholder approvals signed",
+            "passed": len(approvals) > 0 and pending_approvals == 0,
+            "current": f"{len(approvals) - pending_approvals}/{len(approvals)} signed",
+            "blocking": pending_approvals > 0,
+        },
+    ]
+
+    passed_count = sum(1 for c in checks if c["passed"])
+    readiness_score = round((passed_count / len(checks)) * 100, 1)
+    blockers = [f"{c['label']} ({c['current']})" for c in checks if not c["passed"]]
+
+    return {
+        "handover_id": h.id,
+        "handover_status": h.status,
+        "readiness_score": readiness_score,
+        "passed_checks": passed_count,
+        "total_checks": len(checks),
+        "can_finalize": len(blockers) == 0,
+        "blockers": blockers,
+        "checks": checks,
+    }
+
+
+@router.get("/{handover_id}/export/markdown")
+def export_handover_markdown(
+    handover_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Export the 16-section handover dossier as a portable repository-ready HANDOVER.md file."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db)
+
+    p = db.query(Project).filter(Project.id == h.project_id).first()
+    sections = (
+        db.query(HandoverSection)
+        .filter(HandoverSection.handover_id == handover_id)
+        .order_by(HandoverSection.section_number.asc())
+        .all()
+    )
+    approvals = db.query(HandoverApproval).filter(HandoverApproval.handover_id == handover_id).all()
+    evidences = db.query(Evidence).filter(Evidence.project_id == h.project_id).all()
+    ev_by_id = {e.id: e for e in evidences}
+
+    lines: List[str] = [
+        f"# {h.title}",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| **Project** | {p.name if p else 'Project'} |",
+        f"| **Departing Engineer** | {h.departing_employee_name} ({h.departing_employee_role or 'Contributor'}) |",
+        f"| **Incoming Successor** | {h.incoming_employee_name or 'Unassigned'} ({h.incoming_employee_role or 'Successor'}) |",
+        f"| **Status** | `{h.status}` |",
+        f"| **Overall Confidence** | {round((h.overall_confidence or 0) * 100, 1)}% |",
+        f"| **Generated** | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} |",
+        "",
+        "## Sign-Off Approvals",
+        "",
+        "| Role | Approver | Status | Signed At |",
+        "| --- | --- | --- | --- |",
+    ]
+    if approvals:
+        for a in approvals:
+            signed = a.signed_at.strftime("%Y-%m-%d") if a.signed_at else "Pending"
+            lines.append(f"| {a.role} | {a.approver_name} | `{a.status}` | {signed} |")
+    else:
+        lines.append("| — | No approvers configured | — | — |")
+
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for s in sections:
+        v_status = getattr(s, "verification_status", "Needs Human Verification")
+        badge = "VERIFIED" if s.is_verified or v_status == "Verified by Reviewer" else v_status
+        lines.append(f"## {s.section_number}. {s.title}")
+        lines.append(f"> Verification Status: **{badge}**")
+        lines.append("")
+        lines.append((s.content or "").strip() or "_No content recorded for this section._")
+        lines.append("")
+        refs = [ev_by_id[eid] for eid in (s.evidence_ids or []) if eid in ev_by_id]
+        if refs:
+            lines.append("**Verified Evidence Sources:**")
+            for ev in refs[:8]:
+                sha_short = (ev.content_hash or "")[:12]
+                url_part = f" ([link]({ev.source_url}))" if ev.source_url else ""
+                lines.append(f"- `{ev.source_type}` **{ev.source_title}** (SHA-256: `{sha_short}`){url_part}")
+            lines.append("")
+
+    md_content = "\n".join(lines)
+    safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in h.departing_employee_name)
+    filename = f"HANDOVER_{safe_name}_{h.id[:8]}.md"
+    return Response(
+        content=md_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{handover_id}/simulator/create-onboarding-tasks")
+def create_onboarding_tasks_from_simulator(
+    handover_id: str,
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Turn missed concepts from a readiness simulation into actionable onboarding tasks for the successor."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db, require_write=True)
+
+    sim_id = (payload or {}).get("simulation_id")
+    q = db.query(ReadinessSimulation).filter(ReadinessSimulation.handover_id == handover_id)
+    if sim_id:
+        sim = q.filter(ReadinessSimulation.id == sim_id).first()
+    else:
+        sim = q.order_by(ReadinessSimulation.created_at.desc()).first()
+
+    if not sim:
+        raise HTTPException(
+            status_code=400,
+            detail="No readiness simulation attempt found yet. Submit an evaluation first.",
+        )
+
+    existing_titles = {
+        (t.title or "").strip().lower()
+        for t in db.query(TaskItem).filter(TaskItem.project_id == h.project_id).all()
+    }
+    assignee = (h.incoming_employee_name or sim.candidate_name or current_user.name or current_user.email).strip()
+    created_tasks: List[Dict[str, Any]] = []
+
+    for resp_item in sim.responses_json or []:
+        missed = [str(c).strip() for c in (resp_item.get("missed_concepts") or []) if str(c).strip()]
+        score = float(resp_item.get("score") or 0)
+        if not missed and score >= 75:
+            continue
+
+        scenario_title = str(resp_item.get("title") or resp_item.get("scenario_id") or "Readiness Topic").strip()
+        task_title = f"Onboarding Study: {scenario_title}"[:240]
+        if task_title.lower() in existing_titles:
+            continue
+
+        missed_str = ", ".join(missed) if missed else "Review architectural decision & failover sequence"
+        t = TaskItem(
+            project_id=h.project_id,
+            created_by_user_id=current_user.id,
+            title=task_title,
+            description=(
+                f"Auto-generated from Readiness Simulator (score: {round(score)}%).\n"
+                f"Missed key concepts to master with mentor/docs: {missed_str}\n"
+                f"Coach feedback: {resp_item.get('feedback') or ''}"
+            ).strip(),
+            owner=assignee,
+            priority="high" if score < 60 else "medium",
+            status="open",
+            is_departing_owner=False,
+        )
+        db.add(t)
+        db.flush()
+        existing_titles.add(task_title.lower())
+        created_tasks.append({"id": t.id, "title": t.title, "owner": t.owner, "priority": t.priority})
+
+    if created_tasks:
+        record_activity(
+            db=db,
+            action="simulator.onboarding_tasks_created",
+            entity_type="handover",
+            entity_id=h.id,
+            user_id=current_user.id,
+            project_id=h.project_id,
+            actor_email=current_user.email,
+            details={"message": f"Created {len(created_tasks)} onboarding task(s) from readiness simulator gaps"},
+        )
+        db.commit()
+
+    return {
+        "created_count": len(created_tasks),
+        "assignee": assignee,
+        "tasks": created_tasks,
+    }
+

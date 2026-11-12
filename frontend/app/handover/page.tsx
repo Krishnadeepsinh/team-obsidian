@@ -144,6 +144,8 @@ export default function HandoverPage() {
   const [error, setError] = useState("")
   const [statusMsg, setStatusMsg] = useState("")
   const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [downloadingMd, setDownloadingMd] = useState(false)
+  const [readinessGate, setReadinessGate] = useState<any>(null)
 
   // Editing section
   const [editing, setEditing] = useState(false)
@@ -196,6 +198,8 @@ export default function HandoverPage() {
       if (targetId) {
         const full = await api.getHandover(targetId).catch(() => null)
         setCurrentHandover(full)
+        const gate = full?.id ? await api.getHandoverReadinessGate(full.id).catch(() => null) : null
+        setReadinessGate(gate)
         if (full?.project_id) {
           const evList = await api.getEvidence(full.project_id).catch(() => [])
           const map: Record<string, any> = {}
@@ -254,8 +258,12 @@ export default function HandoverPage() {
   const refreshCurrent = async (hid?: string) => {
     const id = hid || currentHandover?.id
     if (!id) return
-    const full = await api.getHandover(id)
+    const [full, gate] = await Promise.all([
+      api.getHandover(id),
+      api.getHandoverReadinessGate(id).catch(() => null),
+    ])
     setCurrentHandover(full)
+    setReadinessGate(gate)
   }
 
   const handleReconstruct = async (e: React.FormEvent) => {
@@ -318,6 +326,18 @@ export default function HandoverPage() {
       setError(err.message || "PDF export failed.")
     } finally {
       setDownloadingPdf(false)
+    }
+  }
+
+  const handleDownloadMarkdown = async () => {
+    if (!currentHandover) return
+    try {
+      setDownloadingMd(true)
+      await api.downloadHandoverMarkdown(currentHandover.id)
+    } catch (err: any) {
+      setError(err.message || "Markdown export failed.")
+    } finally {
+      setDownloadingMd(false)
     }
   }
 
@@ -489,6 +509,14 @@ export default function HandoverPage() {
                 <History className="w-3.5 h-3.5 text-violet-600" /> Version Diffs
               </Link>
               <button
+                onClick={handleDownloadMarkdown}
+                disabled={downloadingMd}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 text-slate-800 flex items-center gap-1.5"
+              >
+                <FileText className="w-3.5 h-3.5 text-violet-600" />
+                <span>{downloadingMd ? "Exporting..." : "Export HANDOVER.md"}</span>
+              </button>
+              <button
                 onClick={handleDownloadPdf}
                 disabled={downloadingPdf}
                 className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white shadow-sm flex items-center gap-1.5"
@@ -498,6 +526,49 @@ export default function HandoverPage() {
               </button>
             </div>
           </div>
+
+          {readinessGate && (
+            <div
+              className={`apple-card p-3.5 border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
+                readinessGate.can_finalize
+                  ? "bg-emerald-50/70 border-emerald-200 text-emerald-900"
+                  : "bg-amber-50/70 border-amber-200 text-amber-900"
+              }`}
+            >
+              <div className="space-y-1">
+                <div className="font-bold flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 flex-shrink-0" />
+                  <span>
+                    Readiness Gate: {readinessGate.readiness_score}% ({readinessGate.passed_checks}/{readinessGate.total_checks} checks passed)
+                  </span>
+                </div>
+                {Array.isArray(readinessGate.blockers) && readinessGate.blockers.length > 0 ? (
+                  <p className="text-[11px] text-amber-800">
+                    Remaining blockers: {readinessGate.blockers.slice(0, 3).join(" • ")}
+                    {readinessGate.blockers.length > 3 ? ` (+${readinessGate.blockers.length - 3} more)` : ""}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-emerald-700">
+                    All sign-off checks passed — dossier is ready for final completion.
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Link
+                  href="/handover/simulator"
+                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-[11px] font-semibold text-slate-700"
+                >
+                  Simulator
+                </Link>
+                <Link
+                  href="/handover/approvals"
+                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-[11px] font-semibold text-slate-700"
+                >
+                  Gate Checklist
+                </Link>
+              </div>
+            </div>
+          )}
 
           {/* Main 16-Section Split Workspace */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">

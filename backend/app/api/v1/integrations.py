@@ -8,6 +8,7 @@ from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
+import httpx
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -576,7 +577,14 @@ def update_integration_config(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
-    integ.config = req.config or {}
+    next_cfg = dict(req.config or {})
+    if "sync_interval_minutes" in next_cfg:
+        try:
+            cadence = max(0, min(10080, int(next_cfg["sync_interval_minutes"])))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="sync_interval_minutes must be an integer between 0 and 10080.")
+        next_cfg["sync_interval_minutes"] = cadence
+    integ.config = next_cfg
     if req.name:
         integ.name = req.name.strip()
     db.commit()
@@ -788,6 +796,144 @@ def generate_webhook_secret(
         "webhook_secret": new_secret,
         "has_secret": True,
         "note": "Store this webhook secret in your provider webhook settings. It will not be shown again in plain text.",
+    }
+
+
+@router.post("/{integration_id}/auto-webhook")
+def register_provider_auto_webhook(
+    integration_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Automatically register a signed webhook receiver on configured repositories/apps when supported."""
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db, require_write=True)
+
+    creds = decrypt_credentials(integ.credentials)
+    access_token = _token_from_dict(creds)
+    secret_created = False
+    webhook_secret = creds.get("webhook_secret")
+    if not webhook_secret:
+        webhook_secret = secrets.token_urlsafe(32)
+        creds["webhook_secret"] = webhook_secret
+        integ.credentials = encrypt_credentials(creds)
+        secret_created = True
+
+    base_url = _resolve_backend_base_url(request)
+    webhook_url = f"{base_url}/api/v1/webhooks/{integ.provider}/{integ.id}"
+    prov = (integ.provider or "").lower()
+    cfg = dict(integ.config or {})
+
+    if prov != "github":
+        db.commit()
+        return {
+            "integration_id": integ.id,
+            "provider": integ.provider,
+            "mode": "manual_setup",
+            "webhook_url": webhook_url,
+            "webhook_secret": webhook_secret if secret_created else None,
+            "has_secret": True,
+            "results": [],
+            "message": f"{integ.provider.title()} signed webhook URL is ready; add this endpoint in your {integ.provider.title()} app dashboard.",
+        }
+
+    # Parse configured GitHub repositories
+    raw_repos = cfg.get("repos")
+    repos: List[str] = []
+    if isinstance(raw_repos, list):
+        repos.extend(str(r).strip() for r in raw_repos if str(r).strip())
+    single_repo = cfg.get("repo") or cfg.get("target")
+    if isinstance(single_repo, str) and single_repo.strip():
+        for part in single_repo.split(","):
+            p_clean = part.strip()
+            if p_clean and p_clean not in repos:
+                repos.append(p_clean)
+
+    if not repos:
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one GitHub repository in integration configuration before registering webhooks.",
+        )
+    if not access_token:
+        db.commit()
+        raise HTTPException(status_code=400, detail="Integration has no active GitHub token. Reconnect first.")
+
+    results: List[Dict[str, Any]] = []
+    registered_repos: List[str] = list(cfg.get("auto_webhook_repos") or [])
+    with httpx.Client(timeout=12.0) as client_http:
+        for repo in repos:
+            if "/" not in repo:
+                results.append({"repo": repo, "status": "skipped", "detail": "Invalid owner/repo format"})
+                continue
+            try:
+                resp = client_http.post(
+                    f"https://api.github.com/repos/{repo}/hooks",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                    json={
+                        "name": "web",
+                        "active": True,
+                        "events": ["push", "pull_request", "issues"],
+                        "config": {
+                            "url": webhook_url,
+                            "content_type": "json",
+                            "secret": webhook_secret,
+                            "insecure_ssl": "0",
+                        },
+                    },
+                )
+            except httpx.HTTPError as exc:
+                results.append({"repo": repo, "status": "failed", "detail": str(exc)[:160]})
+                continue
+            if resp.status_code in (200, 201):
+                hook_id = resp.json().get("id")
+                results.append({"repo": repo, "status": "registered", "hook_id": hook_id})
+                if repo not in registered_repos:
+                    registered_repos.append(repo)
+            elif resp.status_code == 422:
+                results.append({"repo": repo, "status": "already_exists", "detail": "Webhook already configured"})
+                if repo not in registered_repos:
+                    registered_repos.append(repo)
+            else:
+                detail = resp.text[:180]
+                try:
+                    detail = resp.json().get("message") or detail
+                except Exception:
+                    pass
+                results.append({"repo": repo, "status": "failed", "code": resp.status_code, "detail": detail})
+
+    if registered_repos:
+        cfg["auto_webhook_registered"] = True
+        cfg["auto_webhook_repos"] = registered_repos
+        integ.config = cfg
+
+    record_activity(
+        db=db,
+        action="integration.auto_webhook_attempted",
+        entity_type="integration",
+        entity_id=integ.id,
+        user_id=current_user.id,
+        project_id=integ.project_id,
+        actor_email=current_user.email,
+        details={"message": f"Registered webhook on {len(registered_repos)} GitHub repo(s) for {integ.name}"},
+    )
+    db.commit()
+
+    return {
+        "integration_id": integ.id,
+        "provider": integ.provider,
+        "mode": "github_api",
+        "webhook_url": webhook_url,
+        "webhook_secret": webhook_secret if secret_created else None,
+        "has_secret": True,
+        "results": results,
     }
 
 

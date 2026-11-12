@@ -658,6 +658,10 @@ export const api = {
     }),
   downloadHandoverPdf: async (handoverId: string) =>
     downloadAuthFile(`/handovers/${handoverId}/pdf`, `Handover_${handoverId.slice(0, 8)}.pdf`),
+  downloadHandoverMarkdown: async (handoverId: string) =>
+    downloadAuthFile(`/handovers/${handoverId}/export/markdown`, `HANDOVER_${handoverId.slice(0, 8)}.md`),
+  getHandoverReadinessGate: async (handoverId: string) =>
+    fetchJson<any>(`/handovers/${handoverId}/readiness-gate`),
   getReadinessSimulator: async (handoverId: string, regenerate: boolean = false) =>
     fetchJson<any>(`/handovers/${handoverId}/simulator?regenerate=${regenerate ? "true" : "false"}`),
   evaluateReadinessSimulator: async (
@@ -667,6 +671,11 @@ export const api = {
     fetchJson<any>(`/handovers/${handoverId}/simulator/evaluate`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  createOnboardingTasksFromSimulator: async (handoverId: string, simulationId?: string) =>
+    fetchJson<any>(`/handovers/${handoverId}/simulator/create-onboarding-tasks`, {
+      method: "POST",
+      body: JSON.stringify(simulationId ? { simulation_id: simulationId } : {}),
     }),
 
   // Knowledge Drift & Realtime Webhooks
@@ -689,6 +698,8 @@ export const api = {
     fetchJson<any>(`/integrations/${integrationId}/webhook-config`),
   generateWebhookSecret: async (integrationId: string) =>
     fetchJson<any>(`/integrations/${integrationId}/webhook-config`, { method: "POST" }),
+  registerAutoWebhook: async (integrationId: string) =>
+    fetchJson<any>(`/integrations/${integrationId}/auto-webhook`, { method: "POST" }),
 
   // Organization, Team, Notifications, Logs & Settings
   getTeamMembers: async (projectId?: string) => {
