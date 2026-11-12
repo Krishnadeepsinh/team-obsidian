@@ -5,6 +5,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from sqlalchemy.orm import Session
 
@@ -168,6 +169,8 @@ def summarize_repository_ast(
     branch: str,
     files: List[Dict[str, str]],
     tree_paths: Optional[List[str]] = None,
+    source_type: str = "github_ast",
+    tree_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Analyze fetched repo source & manifests into normalized SourceRecords and structural graph items."""
     py_modules: List[Dict[str, Any]] = []
@@ -234,13 +237,14 @@ def summarize_repository_ast(
             )
 
     summary_text = "\n".join(lines)
+    prefix = "gitlab#" if source_type == "gitlab_ast" else ""
     records = [
         {
-            "source_type": "github_ast",
-            "external_id": f"{owner_repo}#ast-architecture",
+            "source_type": source_type,
+            "external_id": f"{prefix}{owner_repo}#ast-architecture",
             "title": f"Code-Tree AST & Dependency Map ({owner_repo})",
             "author": "Code AST Indexer",
-            "url": f"https://github.com/{owner_repo}/tree/{branch}",
+            "url": tree_url or f"https://github.com/{owner_repo}/tree/{branch}",
             "content": summary_text,
             "sha256": compute_sha256(summary_text),
             "source_timestamp": datetime.now(timezone.utc),
@@ -411,5 +415,63 @@ def fetch_and_index_github_ast(
         )
     except Exception as exc:
         logger.warning("GitHub AST indexing skipped for %s: %s", owner_repo, str(exc)[:140])
+        return {"records": [], "external_packages": [], "internal_edges": [], "top_directories": [], "manifests": []}
+
+
+def fetch_and_index_gitlab_ast(
+    connector: Any,
+    project_path: str,
+    default_branch: str = "main",
+    max_files: int = 18,
+) -> Dict[str, Any]:
+    """Fetch GitLab repository tree and high-signal files and produce AST records and graph facts."""
+    try:
+        enc_proj = quote(project_path, safe="")
+        tree_res = connector._request_with_retry(
+            "GET",
+            f"{connector.base_url}/projects/{enc_proj}/repository/tree",
+            headers=connector.headers,
+            params={"ref": default_branch, "recursive": "true", "per_page": 100},
+        )
+        if tree_res.status_code != 200:
+            return {"records": [], "external_packages": [], "internal_edges": [], "top_directories": [], "manifests": []}
+
+        tree_items = tree_res.json() or []
+        blob_paths = [
+            it.get("path")
+            for it in tree_items
+            if it.get("type") == "blob" and it.get("path") and _is_candidate_code_file(it.get("path"))
+        ]
+        blob_paths.sort(key=_file_priority)
+        selected_paths = blob_paths[:max_files]
+
+        fetched_files: List[Dict[str, str]] = []
+        for path in selected_paths:
+            try:
+                enc_file = quote(path, safe="")
+                c_res = connector._request_with_retry(
+                    "GET",
+                    f"{connector.base_url}/projects/{enc_proj}/repository/files/{enc_file}/raw",
+                    headers=connector.headers,
+                    params={"ref": default_branch},
+                )
+                if c_res.status_code == 200 and c_res.text:
+                    fetched_files.append({"path": path, "content": c_res.text[:30000]})
+            except Exception:
+                continue
+
+        if not fetched_files and not tree_items:
+            return {"records": [], "external_packages": [], "internal_edges": [], "top_directories": [], "manifests": []}
+
+        return summarize_repository_ast(
+            owner_repo=project_path,
+            branch=default_branch,
+            files=fetched_files,
+            tree_paths=[it.get("path") for it in tree_items if it.get("path")],
+            source_type="gitlab_ast",
+            tree_url=f"{getattr(connector, 'gitlab_origin', 'https://gitlab.com')}/{project_path}/-/tree/{default_branch}",
+        )
+    except Exception as exc:
+        logger.warning("GitLab AST indexing skipped for %s: %s", project_path, str(exc)[:140])
         return {"records": [], "external_packages": [], "internal_edges": [], "top_directories": [], "manifests": []}
 

@@ -321,3 +321,271 @@ async def notion_webhook(
     background_tasks.add_task(_run_webhook_pipeline, integ.project_id, integ.id)
     return {"status": "accepted", "records": counts, "drift_detected": drift_summary.get("detected", 0)}
 
+
+def _record_and_queue_webhook(
+    db: Session,
+    integ: Integration,
+    background_tasks: BackgroundTasks,
+    records: List[Dict[str, Any]],
+    details: Dict[str, Any],
+) -> Dict[str, Any]:
+    counts = (
+        upsert_source_records(db=db, integration=integ, raw_records=records)
+        if records
+        else {"added": 0, "updated": 0, "skipped": 0}
+    )
+    now = datetime.now(timezone.utc)
+    db.add(
+        SourceEvent(
+            integration_id=integ.id,
+            event_type="webhook_received",
+            status="success",
+            records_added=counts["added"],
+            records_updated=counts["updated"],
+            records_skipped=counts["skipped"],
+            details=details,
+        )
+    )
+    if records:
+        integ.last_sync = now
+    db.commit()
+
+    drift_summary = scan_project_for_drift(db, integ.project_id) if records else {"detected": 0}
+    if records:
+        background_tasks.add_task(_run_webhook_pipeline, integ.project_id, integ.id)
+    return {"status": "accepted", "records": counts, "drift_detected": drift_summary.get("detected", 0)}
+
+
+@router.post("/gitlab/{integration_id}")
+async def gitlab_webhook(
+    integration_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Receive signed GitLab webhook events (X-Gitlab-Token verification)."""
+    integ = db.query(Integration).filter(Integration.id == integration_id, Integration.provider == "gitlab").first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="GitLab integration not found")
+
+    secret = _get_webhook_secret(integ)
+    if not secret:
+        raise HTTPException(status_code=403, detail="GitLab webhook secret is not configured.")
+    token_hdr = (request.headers.get("X-Gitlab-Token") or "").strip()
+    if not token_hdr or not hmac.compare_digest(secret, token_hdr):
+        raise HTTPException(status_code=401, detail="Invalid GitLab webhook token.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid GitLab webhook JSON payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="GitLab webhook payload must be a JSON object.")
+
+    kind = (payload.get("object_kind") or request.headers.get("X-Gitlab-Event") or "push").lower()
+    repo_name = (payload.get("project") or {}).get("path_with_namespace") or integ.name
+    now = datetime.now(timezone.utc)
+    records: List[Dict[str, Any]] = []
+
+    if kind == "merge_request":
+        attrs = payload.get("object_attributes") or {}
+        iid = attrs.get("iid") or attrs.get("id")
+        title = attrs.get("title") or f"MR !{iid}"
+        author = (payload.get("user") or {}).get("username") or "gitlab-user"
+        content = f"GitLab MR !{iid}: {title}\nRepository: {repo_name} | State: {attrs.get('state')}\n\n{attrs.get('description') or ''}".strip()
+        records.append({
+            "source_type": "gitlab_mr",
+            "external_id": f"gitlab#{repo_name}#mr-{iid}",
+            "title": f"MR !{iid}: {title}",
+            "author": author,
+            "url": attrs.get("url"),
+            "content": content,
+            "sha256": compute_sha256(content),
+            "source_timestamp": now,
+            "metadata": {"repository": repo_name, "mr_iid": iid, "webhook_event": kind},
+            "raw_payload": payload,
+        })
+    elif kind == "issue":
+        attrs = payload.get("object_attributes") or {}
+        iid = attrs.get("iid") or attrs.get("id")
+        title = attrs.get("title") or f"Issue #{iid}"
+        author = (payload.get("user") or {}).get("username") or "gitlab-user"
+        content = f"GitLab Issue #{iid}: {title}\nRepository: {repo_name} | State: {attrs.get('state')}\n\n{attrs.get('description') or ''}".strip()
+        records.append({
+            "source_type": "gitlab_issue",
+            "external_id": f"gitlab#{repo_name}#issue-{iid}",
+            "title": f"Issue #{iid}: {title}",
+            "author": author,
+            "url": attrs.get("url"),
+            "content": content,
+            "sha256": compute_sha256(content),
+            "source_timestamp": now,
+            "metadata": {"repository": repo_name, "issue_iid": iid, "webhook_event": kind},
+            "raw_payload": payload,
+        })
+    elif kind == "push":
+        for c in (payload.get("commits") or [])[:15]:
+            sha = c.get("id") or compute_sha256(json.dumps(c))[:12]
+            msg = c.get("message") or c.get("title") or "Commit push"
+            author = (c.get("author") or {}).get("name") or payload.get("user_name") or "committer"
+            content = f"GitLab Commit {str(sha)[:10]} in {repo_name}:\nAuthor: {author}\n\n{msg}"
+            records.append({
+                "source_type": "gitlab_commit",
+                "external_id": f"gitlab#{repo_name}#commit-{sha}",
+                "title": f"Commit {str(sha)[:8]}: {msg.splitlines()[0][:120]}",
+                "author": author,
+                "url": c.get("url"),
+                "content": content,
+                "sha256": compute_sha256(content),
+                "source_timestamp": now,
+                "metadata": {"repository": repo_name, "webhook_event": "push"},
+                "raw_payload": c,
+            })
+
+    return _record_and_queue_webhook(db, integ, background_tasks, records, {"provider": "gitlab", "event": kind, "repository": repo_name})
+
+
+@router.post("/linear/{integration_id}")
+async def linear_webhook(
+    integration_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Receive signed Linear webhook events (Linear-Signature HMAC-SHA256 verification)."""
+    integ = db.query(Integration).filter(Integration.id == integration_id, Integration.provider == "linear").first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Linear integration not found")
+
+    raw_body = await request.body()
+    secret = _get_webhook_secret(integ)
+    if not secret:
+        raise HTTPException(status_code=403, detail="Linear webhook secret is not configured.")
+    sig = request.headers.get("Linear-Signature")
+    if not _verify_sha256_signature(secret, raw_body, sig, prefix=""):
+        raise HTTPException(status_code=401, detail="Invalid Linear webhook signature.")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Linear webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Linear webhook payload must be a JSON object.")
+
+    data = payload.get("data") or {}
+    event_type = str(payload.get("type") or "Issue")
+    ident = str(data.get("identifier") or data.get("id") or compute_sha256(raw_body.decode("utf-8", errors="replace"))[:10])
+    title = str(data.get("title") or data.get("name") or f"Linear {event_type} {ident}")
+    content = f"Linear {event_type} [{ident}]: {title}\nAction: {payload.get('action', 'update')}\n\n{data.get('description') or ''}".strip()
+    rec = {
+        "source_type": "linear_issue",
+        "external_id": f"linear#{ident}",
+        "title": f"[{ident}] {title[:400]}",
+        "author": str(((data.get("assignee") or {}).get("name")) or "Linear Member"),
+        "url": payload.get("url") or data.get("url"),
+        "content": content,
+        "sha256": compute_sha256(content),
+        "source_timestamp": datetime.now(timezone.utc),
+        "metadata": {"webhook_event": event_type, "action": payload.get("action"), "identifier": ident},
+        "raw_payload": payload,
+    }
+    return _record_and_queue_webhook(db, integ, background_tasks, [rec], {"provider": "linear", "event": event_type, "identifier": ident})
+
+
+@router.post("/jira/{integration_id}")
+async def jira_webhook(
+    integration_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Receive signed Jira Cloud webhook events (X-Hub-Signature HMAC-SHA256 verification)."""
+    integ = db.query(Integration).filter(Integration.id == integration_id, Integration.provider == "jira").first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Jira integration not found")
+
+    raw_body = await request.body()
+    secret = _get_webhook_secret(integ)
+    if not secret:
+        raise HTTPException(status_code=403, detail="Jira webhook secret is not configured.")
+    sig = request.headers.get("X-Hub-Signature") or request.headers.get("X-Hub-Signature-256")
+    if not _verify_sha256_signature(secret, raw_body, sig, prefix="sha256="):
+        raise HTTPException(status_code=401, detail="Invalid Jira webhook signature.")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Jira webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Jira webhook payload must be a JSON object.")
+
+    issue = payload.get("issue") or {}
+    fields = issue.get("fields") or {}
+    key = str(issue.get("key") or issue.get("id") or compute_sha256(raw_body.decode("utf-8", errors="replace"))[:10])
+    summary = str(fields.get("summary") or f"Jira Issue {key}")
+    status_name = str(((fields.get("status") or {}).get("name")) or "Updated")
+    author = str(((payload.get("user") or {}).get("displayName")) or ((fields.get("assignee") or {}).get("displayName")) or "Jira User")
+    content = f"Jira [{key}] ({status_name}): {summary}\nEvent: {payload.get('webhookEvent', 'jira:issue_updated')}\n\n{fields.get('description') or ''}".strip()
+    rec = {
+        "source_type": "jira_issue",
+        "external_id": f"jira#{key}",
+        "title": f"[{key}] {summary[:400]}",
+        "author": author,
+        "url": issue.get("self"),
+        "content": content,
+        "sha256": compute_sha256(content),
+        "source_timestamp": datetime.now(timezone.utc),
+        "metadata": {"issue_key": key, "status": status_name, "webhook_event": payload.get("webhookEvent")},
+        "raw_payload": payload,
+    }
+    return _record_and_queue_webhook(db, integ, background_tasks, [rec], {"provider": "jira", "issue_key": key})
+
+
+@router.post("/sentry/{integration_id}")
+async def sentry_webhook(
+    integration_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Receive signed Sentry webhook alerts (Sentry-Hook-Signature HMAC-SHA256 verification)."""
+    integ = db.query(Integration).filter(Integration.id == integration_id, Integration.provider == "sentry").first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Sentry integration not found")
+
+    raw_body = await request.body()
+    secret = _get_webhook_secret(integ)
+    if not secret:
+        raise HTTPException(status_code=403, detail="Sentry webhook secret is not configured.")
+    sig = request.headers.get("Sentry-Hook-Signature")
+    if not _verify_sha256_signature(secret, raw_body, sig, prefix=""):
+        raise HTTPException(status_code=401, detail="Invalid Sentry webhook signature.")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Sentry webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Sentry webhook payload must be a JSON object.")
+
+    data = payload.get("data") or {}
+    issue = data.get("issue") or data.get("event") or payload
+    iss_id = str(issue.get("id") or issue.get("issue_id") or compute_sha256(raw_body.decode("utf-8", errors="replace"))[:12])
+    short_id = str(issue.get("shortId") or iss_id)
+    title = str(issue.get("title") or issue.get("message") or f"Sentry Alert {short_id}")
+    culprit = str(issue.get("culprit") or "unknown")
+    content = f"Sentry Alert [{short_id}] ({payload.get('action', 'triggered')}): {title}\nCulprit: {culprit}\nLevel: {issue.get('level', 'error')}"
+    rec = {
+        "source_type": "sentry_issue",
+        "external_id": f"sentry#webhook#{iss_id}",
+        "title": f"[{short_id}] {title[:400]}",
+        "author": "Sentry Monitor",
+        "url": issue.get("permalink") or issue.get("web_url"),
+        "content": content,
+        "sha256": compute_sha256(content),
+        "source_timestamp": datetime.now(timezone.utc),
+        "metadata": {"short_id": short_id, "culprit": culprit, "action": payload.get("action")},
+        "raw_payload": payload,
+    }
+    return _record_and_queue_webhook(db, integ, background_tasks, [rec], {"provider": "sentry", "short_id": short_id})
+

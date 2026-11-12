@@ -89,6 +89,30 @@ class Settings:
     NOTION_CLIENT_SECRET: str = os.getenv("NOTION_CLIENT_SECRET", "")
     NOTION_API_KEY: str = os.getenv("NOTION_API_KEY", "")
 
+    ATLASSIAN_CLIENT_ID: str = os.getenv("ATLASSIAN_CLIENT_ID", "")
+    ATLASSIAN_CLIENT_SECRET: str = os.getenv("ATLASSIAN_CLIENT_SECRET", "")
+    JIRA_CLIENT_ID: str = os.getenv("JIRA_CLIENT_ID", "")
+    JIRA_CLIENT_SECRET: str = os.getenv("JIRA_CLIENT_SECRET", "")
+    JIRA_API_TOKEN: str = os.getenv("JIRA_API_TOKEN", "")
+    JIRA_EMAIL: str = os.getenv("JIRA_EMAIL", "")
+    CONFLUENCE_CLIENT_ID: str = os.getenv("CONFLUENCE_CLIENT_ID", "")
+    CONFLUENCE_CLIENT_SECRET: str = os.getenv("CONFLUENCE_CLIENT_SECRET", "")
+    CONFLUENCE_API_TOKEN: str = os.getenv("CONFLUENCE_API_TOKEN", "")
+    CONFLUENCE_EMAIL: str = os.getenv("CONFLUENCE_EMAIL", "")
+
+    LINEAR_CLIENT_ID: str = os.getenv("LINEAR_CLIENT_ID", "")
+    LINEAR_CLIENT_SECRET: str = os.getenv("LINEAR_CLIENT_SECRET", "")
+    LINEAR_API_TOKEN: str = os.getenv("LINEAR_API_TOKEN", "")
+
+    GITLAB_CLIENT_ID: str = os.getenv("GITLAB_CLIENT_ID", "")
+    GITLAB_CLIENT_SECRET: str = os.getenv("GITLAB_CLIENT_SECRET", "")
+    GITLAB_TOKEN: str = os.getenv("GITLAB_TOKEN", "")
+
+    SENTRY_CLIENT_ID: str = os.getenv("SENTRY_CLIENT_ID", "")
+    SENTRY_CLIENT_SECRET: str = os.getenv("SENTRY_CLIENT_SECRET", "")
+    SENTRY_AUTH_TOKEN: str = os.getenv("SENTRY_AUTH_TOKEN", "")
+    SENTRY_ORG_SLUG: str = os.getenv("SENTRY_ORG_SLUG", "")
+
     # Email Delivery (Password Reset & Invitations)
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")

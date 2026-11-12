@@ -22,6 +22,16 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   github_issue: "Issues",
   github_repository: "Repositories",
   github_ast: "Code AST",
+  gitlab_commit: "GitLab Commits",
+  gitlab_mr: "GitLab MRs",
+  gitlab_issue: "GitLab Issues",
+  gitlab_repository: "GitLab Repos",
+  gitlab_ast: "GitLab AST",
+  jira_issue: "Jira Issues",
+  confluence_page: "Confluence",
+  linear_issue: "Linear Issues",
+  linear_project: "Linear Projects",
+  sentry_issue: "Sentry Errors",
   document: "Documents",
   slack_message: "Slack",
   notion_page: "Notion Pages",
@@ -38,7 +48,18 @@ function formatSourceType(st?: string): string {
 
 function getEvidenceOrigin(ev: any): string {
   const meta = ev?.metadata_json && typeof ev.metadata_json === "object" ? ev.metadata_json : {}
-  for (const key of ["repository", "repo", "channel_name", "channel_id", "filename", "database_id"]) {
+  for (const key of [
+    "repository",
+    "repo",
+    "project_key",
+    "team_key",
+    "project",
+    "space_id",
+    "channel_name",
+    "channel_id",
+    "filename",
+    "database_id",
+  ]) {
     if (meta[key]) return String(meta[key]).trim()
   }
   const url = String(ev?.source_url || "")

@@ -284,14 +284,14 @@ export default function OverviewPage() {
               </div>
               <h2 className="text-base font-bold text-slate-900">Get started in 3 steps — or explore the E-Commerce Sandbox</h2>
               <p className="text-xs text-slate-600 max-w-2xl">
-                Real workspaces never start with synthetic employee names. Create a project, connect GitHub/Slack/Notion or upload docs, or explicitly load the synthetic E-Commerce demo dataset.
+                Real workspaces never start with synthetic employee names. Create a project, connect GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, or Notion, or explore the synthetic E-Commerce demo dataset.
               </p>
               <div className="flex flex-wrap gap-2 pt-2">
                 <Link href="/projects" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
                   1. Create Project
                 </Link>
                 <Link href="/integrations" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
-                  2. Connect GitHub / Slack / Notion
+                  2. Connect Engineering Sources
                 </Link>
                 <Link href="/documents" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
                   3. Upload Runbooks &amp; Docs
@@ -718,7 +718,7 @@ export default function OverviewPage() {
             <div className="py-8 text-center text-xs text-slate-400">
               <Link2 className="w-8 h-8 text-slate-300 mx-auto mb-2" />
               <p className="font-medium text-slate-600">No integrations connected</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Connect GitHub, Slack, Notion, or upload project documents.</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Connect GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, Notion, or upload project documents.</p>
             </div>
           ) : (
             <div className="space-y-2.5">

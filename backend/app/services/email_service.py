@@ -35,7 +35,11 @@ class EmailService:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "from": settings.SMTP_FROM_EMAIL or "TEAM OBSIDIAN <noreply@teamobsidian.local>",
+                        "from": (
+                            settings.SMTP_FROM_EMAIL
+                            if settings.SMTP_FROM_EMAIL and not settings.SMTP_FROM_EMAIL.lower().endswith(".local")
+                            else "TEAM OBSIDIAN <onboarding@resend.dev>"
+                        ),
                         "to": [to_email],
                         "subject": subject,
                         "html": html_body,

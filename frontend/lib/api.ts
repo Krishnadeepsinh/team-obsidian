@@ -557,10 +557,14 @@ export const api = {
   getIntegrationEvents: async (id: string) => fetchJson<any[]>(`/integrations/${id}/events`),
   getIntegrationResources: async (id: string) =>
     fetchJson<{ provider: string; resources: any[]; hint?: string | null }>(`/integrations/${id}/resources`),
-  discoverIntegrationResources: async (provider: string, token: string) =>
+  discoverIntegrationResources: async (
+    provider: string,
+    token: string,
+    credentials?: Record<string, any>
+  ) =>
     fetchJson<{ provider: string; resources: any[]; hint?: string | null }>("/integrations/discover-resources", {
       method: "POST",
-      body: JSON.stringify({ provider, token }),
+      body: JSON.stringify({ provider, token, ...(credentials ? { credentials } : {}) }),
     }),
   updateIntegrationConfig: async (id: string, data: { config: any; name?: string }) =>
     fetchJson<any>(`/integrations/${id}/config`, { method: "PUT", body: JSON.stringify(data) }),

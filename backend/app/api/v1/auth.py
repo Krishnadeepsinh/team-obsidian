@@ -315,6 +315,11 @@ def get_auth_capabilities() -> Dict[str, Any]:
             "github": bool(settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET),
             "slack": bool(settings.SLACK_CLIENT_ID and settings.SLACK_CLIENT_SECRET),
             "notion": bool(settings.NOTION_CLIENT_ID and settings.NOTION_CLIENT_SECRET),
+            "jira": bool((settings.JIRA_CLIENT_ID or settings.ATLASSIAN_CLIENT_ID) and (settings.JIRA_CLIENT_SECRET or settings.ATLASSIAN_CLIENT_SECRET)),
+            "confluence": bool((settings.CONFLUENCE_CLIENT_ID or settings.ATLASSIAN_CLIENT_ID) and (settings.CONFLUENCE_CLIENT_SECRET or settings.ATLASSIAN_CLIENT_SECRET)),
+            "linear": bool(settings.LINEAR_CLIENT_ID and settings.LINEAR_CLIENT_SECRET),
+            "gitlab": bool(settings.GITLAB_CLIENT_ID and settings.GITLAB_CLIENT_SECRET),
+            "sentry": bool(settings.SENTRY_CLIENT_ID and settings.SENTRY_CLIENT_SECRET),
         },
     }
 

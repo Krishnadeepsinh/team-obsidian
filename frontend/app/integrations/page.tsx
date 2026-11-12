@@ -5,6 +5,11 @@ import { useSearchParams } from "next/navigation"
 import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import {
   Github,
+  GitBranch,
+  Kanban,
+  BookOpen,
+  Layers,
+  Bug,
   MessageSquare,
   FileText,
   RefreshCw,
@@ -24,30 +29,26 @@ import {
   X,
 } from "lucide-react"
 
+const PROVIDER_CONFIG_KEYS: Record<string, { listKey: string; singleKey: string }> = {
+  github: { listKey: "repos", singleKey: "repo" },
+  gitlab: { listKey: "repos", singleKey: "repo" },
+  slack: { listKey: "channels", singleKey: "channel_id" },
+  jira: { listKey: "projects", singleKey: "project_key" },
+  confluence: { listKey: "spaces", singleKey: "space_id" },
+  linear: { listKey: "teams", singleKey: "team_key" },
+  sentry: { listKey: "projects", singleKey: "project" },
+  notion: { listKey: "targets", singleKey: "database_id" },
+}
+
 function parseTargetsFromConfig(provider: string, cfg: Record<string, any> = {}): string[] {
   const p = (provider || "").toLowerCase()
-  if (p === "github") {
-    if (Array.isArray(cfg.repos) && cfg.repos.length > 0) {
-      return cfg.repos.map((s: any) => String(s).trim()).filter(Boolean)
-    }
-    return String(cfg.repo || cfg.target || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
+  const mapping = PROVIDER_CONFIG_KEYS[p] || PROVIDER_CONFIG_KEYS.notion
+  const rawList = cfg[mapping.listKey]
+  if (Array.isArray(rawList) && rawList.length > 0) {
+    return rawList.map((s: any) => String(s).trim()).filter(Boolean)
   }
-  if (p === "slack") {
-    if (Array.isArray(cfg.channels) && cfg.channels.length > 0) {
-      return cfg.channels.map((s: any) => String(s).trim()).filter(Boolean)
-    }
-    return String(cfg.channel_id || cfg.channel || cfg.target || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-  }
-  if (Array.isArray(cfg.targets) && cfg.targets.length > 0) {
-    return cfg.targets.map((s: any) => String(s).trim()).filter(Boolean)
-  }
-  return String(cfg.database_id || cfg.page_id || cfg.target || "")
+  const fallback = cfg[mapping.singleKey] || cfg.database_id || cfg.page_id || cfg.target || ""
+  return String(fallback)
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
@@ -60,43 +61,26 @@ function buildProviderConfig(provider: string, baseCfg: Record<string, any>, raw
     .map((s) => s.trim())
     .filter(Boolean)
   const p = (provider || "").toLowerCase()
+  const mapping = PROVIDER_CONFIG_KEYS[p] || PROVIDER_CONFIG_KEYS.notion
 
-  if (p === "github") {
-    delete nextCfg.repo
-    delete nextCfg.repos
-    delete nextCfg.target
-    if (targets.length > 0) {
-      nextCfg.repos = targets
-      nextCfg.repo = targets.join(", ")
-    }
-    return nextCfg
+  for (const k of ["repo", "repos", "channel_id", "channels", "projects", "project_key", "project", "spaces", "space_id", "teams", "team_key", "database_id", "page_id", "targets", "target"]) {
+    delete nextCfg[k]
   }
-  if (p === "slack") {
-    delete nextCfg.channel_id
-    delete nextCfg.channels
-    delete nextCfg.target
-    if (targets.length > 0) {
-      nextCfg.channels = targets
-      nextCfg.channel_id = targets.join(", ")
-    }
-    return nextCfg
-  }
-  delete nextCfg.database_id
-  delete nextCfg.page_id
-  delete nextCfg.targets
-  delete nextCfg.target
   if (targets.length > 0) {
-    nextCfg.targets = targets
-    nextCfg.database_id = targets.join(", ")
+    nextCfg[mapping.listKey] = targets
+    nextCfg[mapping.singleKey] = targets.join(", ")
   }
   return nextCfg
 }
 
 function resourceNoun(provider?: string | null): string {
   const p = (provider || "").toLowerCase()
-  if (p === "github") return "Repositories"
+  if (p === "github" || p === "gitlab") return "Repositories"
   if (p === "slack") return "Channels"
   if (p === "notion") return "Pages & Databases"
+  if (p === "jira" || p === "sentry") return "Projects"
+  if (p === "confluence") return "Spaces"
+  if (p === "linear") return "Teams"
   return "Targets"
 }
 
@@ -263,6 +247,51 @@ const PROVIDER_CARDS = [
     configPlaceholder: "Notion UUID or leave empty for shared pages",
     tokenPlaceholder: "ntn_... or secret_...",
   },
+  {
+    key: "jira",
+    title: "Jira Cloud Projects",
+    desc: "Ingest sprint issues, epics, bug reports, blockers, and engineering comments via Atlassian OAuth or API token.",
+    icon: Kanban,
+    configLabel: "Project Key(s)",
+    configPlaceholder: "ENG, PLATFORM",
+    tokenPlaceholder: "ATATT... API Token",
+  },
+  {
+    key: "confluence",
+    title: "Confluence Knowledge Base",
+    desc: "Ingest ADRs, architecture wikis, onboarding playbooks, and postmortems from Confluence Cloud spaces.",
+    icon: BookOpen,
+    configLabel: "Space ID(s)",
+    configPlaceholder: "123456 or leave empty for all accessible spaces",
+    tokenPlaceholder: "ATATT... API Token",
+  },
+  {
+    key: "linear",
+    title: "Linear Teams & Issues",
+    desc: "Ingest engineering cycles, roadmaps, high-priority issues, and project leads via GraphQL.",
+    icon: Layers,
+    configLabel: "Team Key(s)",
+    configPlaceholder: "ENG, OPS",
+    tokenPlaceholder: "lin_api_...",
+  },
+  {
+    key: "gitlab",
+    title: "GitLab Repositories",
+    desc: "Ingest merge requests, issues, commits, and Python/TS AST architectural graphs.",
+    icon: GitBranch,
+    configLabel: "Project Path (namespace/repo)",
+    configPlaceholder: "my-group/core-api",
+    tokenPlaceholder: "glpat-...",
+  },
+  {
+    key: "sentry",
+    title: "Sentry Error Telemetry",
+    desc: "Ingest unresolved production error clusters, culprits, user impact counts, and regression alerts.",
+    icon: Bug,
+    configLabel: "Project Slug (org/project)",
+    configPlaceholder: "my-org/backend-api",
+    tokenPlaceholder: "sntryu_...",
+  },
 ]
 
 function IntegrationsContent() {
@@ -292,6 +321,9 @@ function IntegrationsContent() {
   const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null)
   const [connectName, setConnectName] = useState("")
   const [connectToken, setConnectToken] = useState("")
+  const [connectEmail, setConnectEmail] = useState("")
+  const [connectSiteUrl, setConnectSiteUrl] = useState("")
+  const [connectOrgSlug, setConnectOrgSlug] = useState("")
   const [connectConfigVal, setConnectConfigVal] = useState("")
   const [connectResources, setConnectResources] = useState<any[]>([])
   const [loadingConnectResources, setLoadingConnectResources] = useState(false)
@@ -509,6 +541,9 @@ function IntegrationsContent() {
     )
     setConnectName(existingInteg?.name || meta?.title || `${provider.toUpperCase()} Connector`)
     setConnectToken("")
+    setConnectEmail("")
+    setConnectSiteUrl("")
+    setConnectOrgSlug("")
     setConnectConfigVal(
       existingInteg ? parseTargetsFromConfig(provider, existingInteg.config || {}).join(", ") : ""
     )
@@ -517,6 +552,15 @@ function IntegrationsContent() {
     setConnectResourceHint(null)
     setConnectResourceSearch("")
     setConnectModalError("")
+  }
+
+  const buildConnectCredentials = () => {
+    const creds: Record<string, any> = {}
+    if (connectToken.trim()) creds.access_token = connectToken.trim()
+    if (connectEmail.trim()) creds.email = connectEmail.trim()
+    if (connectSiteUrl.trim()) creds.site_url = connectSiteUrl.trim()
+    if (connectOrgSlug.trim()) creds.org_slug = connectOrgSlug.trim()
+    return creds
   }
 
   const handleDiscoverForConnect = async () => {
@@ -529,7 +573,11 @@ function IntegrationsContent() {
       setLoadingConnectResources(true)
       setConnectResourceError("")
       setConnectResourceHint(null)
-      const res = await api.discoverIntegrationResources(connectProvider, connectToken.trim())
+      const res = await api.discoverIntegrationResources(
+        connectProvider,
+        connectToken.trim(),
+        buildConnectCredentials()
+      )
       setConnectResources(Array.isArray(res?.resources) ? res.resources : [])
       setConnectResourceHint(res?.hint || null)
     } catch (err: any) {
@@ -562,9 +610,10 @@ function IntegrationsContent() {
       setError("")
       setMessage("")
       setConnectModalError("")
+      const creds = buildConnectCredentials()
       if (reconnectTargetId) {
         await api.reconnectIntegration(reconnectTargetId, {
-          credentials: connectToken.trim() ? { access_token: connectToken.trim() } : undefined,
+          credentials: creds.access_token ? creds : undefined,
           config,
         })
         setMessage(`${connectProvider.toUpperCase()} integration reconnected and verified.`)
@@ -574,7 +623,7 @@ function IntegrationsContent() {
           provider: connectProvider,
           name: connectName.trim() || `${connectProvider.toUpperCase()} Integration`,
           auth_type: "token",
-          credentials: connectToken.trim() ? { access_token: connectToken.trim() } : {},
+          credentials: creds,
           config,
         })
         setMessage(`${connectProvider.toUpperCase()} integration saved. Click "Sync Now" to ingest live records.`)
@@ -719,7 +768,7 @@ function IntegrationsContent() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Connected Knowledge Sources</h1>
           <p className="text-xs text-slate-500 mt-1">
-            Authenticate GitHub, Slack, and Notion via OAuth or verified tokens for incremental, deduplicated ingestion.
+            Authenticate GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, and Notion via OAuth or verified tokens for incremental, deduplicated ingestion.
           </p>
         </div>
 
@@ -793,18 +842,29 @@ function IntegrationsContent() {
                   </>
                 ) : (
                   <>
-                    <button
-                      onClick={() => handleOAuthConnect(card.key)}
-                      className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
-                    >
-                      {oauthProviders[card.key] === false ? "OAuth Setup Required" : "OAuth Connect"}
-                    </button>
-                    <button
-                      onClick={() => openTokenConnect(card.key)}
-                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
-                    >
-                      <KeyRound className="w-3.5 h-3.5" /> Connect Integration
-                    </button>
+                    {oauthProviders[card.key] === false && card.key === "sentry" ? (
+                      <button
+                        onClick={() => openTokenConnect(card.key)}
+                        className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center justify-center gap-1.5"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" /> Connect Auth Token
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleOAuthConnect(card.key)}
+                          className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                        >
+                          {oauthProviders[card.key] === false ? "OAuth Setup Required" : "OAuth Connect"}
+                        </button>
+                        <button
+                          onClick={() => openTokenConnect(card.key)}
+                          className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" /> Connect Integration
+                        </button>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -822,7 +882,7 @@ function IntegrationsContent() {
             <Link2 className="w-9 h-9 text-slate-300 mx-auto" />
             <p className="text-sm font-bold text-slate-800">No Sources Connected Yet</p>
             <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Use OAuth Connect or API Token above to authenticate GitHub, Slack, or Notion for your selected project.
+              Use OAuth Connect or API Token above to authenticate GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, or Notion for your selected project.
             </p>
           </div>
         ) : (
@@ -1116,6 +1176,44 @@ function IntegrationsContent() {
                           className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                         />
                       </div>
+                      {(connectProvider === "jira" || connectProvider === "confluence") && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="text-xs font-semibold text-slate-700 block mb-1">Atlassian Site URL</label>
+                            <input
+                              type="url"
+                              required={!reconnectTargetId}
+                              value={connectSiteUrl}
+                              onChange={(e) => setConnectSiteUrl(e.target.value)}
+                              placeholder="https://your-org.atlassian.net"
+                              className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-semibold text-slate-700 block mb-1">Atlassian Email</label>
+                            <input
+                              type="email"
+                              required={!reconnectTargetId}
+                              value={connectEmail}
+                              onChange={(e) => setConnectEmail(e.target.value)}
+                              placeholder="you@company.com"
+                              className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {connectProvider === "sentry" && (
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">Sentry Organization Slug (optional)</label>
+                          <input
+                            type="text"
+                            value={connectOrgSlug}
+                            onChange={(e) => setConnectOrgSlug(e.target.value)}
+                            placeholder="my-org (auto-discovered if omitted)"
+                            className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                          />
+                        </div>
+                      )}
                       <div>
                         <label className="text-xs font-semibold text-slate-700 block mb-1">API / Bot Access Token</label>
                         <div className="flex gap-2">

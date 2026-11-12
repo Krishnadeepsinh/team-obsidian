@@ -34,9 +34,14 @@ from app.schemas.integration import (
 )
 from app.services.audit_service import record_activity
 from app.services.connectors import (
+    ConfluenceConnector,
     ConnectorError,
     GitHubConnector,
+    GitLabConnector,
+    JiraConnector,
+    LinearConnector,
     NotionConnector,
+    SentryConnector,
     SlackConnector,
     get_connector_class,
 )
@@ -90,30 +95,58 @@ def _token_from_dict(creds: Optional[Dict[str, Any]]) -> Optional[str]:
     return creds.get("access_token") or creds.get("token") or creds.get("api_key") or creds.get("bot_token")
 
 
+def _build_connector(connector_cls: Any, token: Optional[str], creds: Optional[Dict[str, Any]] = None) -> Any:
+    """Instantiate a connector passing optional provider-specific credential fields when supported."""
+    c = creds or {}
+    if connector_cls in (JiraConnector, ConfluenceConnector):
+        return connector_cls(
+            token=token,
+            email=c.get("email"),
+            site_url=c.get("site_url"),
+            cloud_id=c.get("cloud_id"),
+        )
+    if connector_cls is GitLabConnector:
+        return connector_cls(token=token, site_url=c.get("site_url"))
+    if connector_cls is SentryConnector:
+        return connector_cls(token=token, org_slug=c.get("org_slug"), site_url=c.get("site_url"))
+    return connector_cls(token=token)
+
+
 def _extract_token(integ: Integration) -> Optional[str]:
     """Extract only the credentials bound to this integration (never fall back to host env tokens)."""
     return _token_from_dict(decrypt_credentials(integ.credentials))
 
 
-def _refresh_github_token_if_possible(db: Session, integ: Integration) -> Optional[str]:
-    if (integ.provider or "").lower() != "github":
+def _refresh_oauth_token_if_possible(db: Session, integ: Integration) -> Optional[str]:
+    connector_cls = get_connector_class(integ.provider)
+    if not connector_cls or not hasattr(connector_cls, "refresh_oauth_token"):
         return None
     creds = decrypt_credentials(integ.credentials)
     refresh_token = creds.get("refresh_token")
     if not refresh_token:
         return None
     try:
-        new_bundle = GitHubConnector.refresh_oauth_token(refresh_token)
-        integ.credentials = encrypt_credentials(new_bundle)
+        new_bundle = connector_cls.refresh_oauth_token(refresh_token)
+        # Preserve cached Atlassian cloud_id/site_url/email or Sentry org metadata across token refreshes
+        merged = {**creds, **new_bundle}
+        integ.credentials = encrypt_credentials(merged)
         integ.error_message = None
         db.commit()
         db.refresh(integ)
-        return new_bundle.get("access_token") or new_bundle.get("token")
+        return merged.get("access_token") or merged.get("token")
     except ConnectorError:
         return None
 
 
-def _discover_provider_resources(provider: str, token: str) -> Dict[str, Any]:
+def _refresh_github_token_if_possible(db: Session, integ: Integration) -> Optional[str]:
+    if (integ.provider or "").lower() != "github":
+        return None
+    return _refresh_oauth_token_if_possible(db, integ)
+
+
+def _discover_provider_resources(
+    provider: str, token: str, creds: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     prov = (provider or "").lower().strip()
     if prov == "github":
         repos = GitHubConnector(token=token).list_repositories(max_pages=3)
@@ -178,6 +211,88 @@ def _discover_provider_resources(provider: str, token: str) -> Dict[str, Any]:
             if resources
             else "No Notion pages or databases are shared with this integration yet. Open a Notion page -> '...' -> Connections -> add Team Obsidian."
         )
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "jira":
+        conn = _build_connector(JiraConnector, token, creds)
+        projects = conn.list_projects()
+        resources = [
+            {
+                "id": p.get("key"),
+                "label": f"[{p.get('key')}] {p.get('name') or p.get('key')}",
+                "sublabel": f"{str(p.get('project_type') or 'software').title()} Jira project",
+                "value": p.get("key"),
+                "url": p.get("url"),
+            }
+            for p in projects
+            if p.get("key")
+        ]
+        hint = None if resources else "No accessible Jira projects found. Verify Jira API scopes or project permissions."
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "confluence":
+        conn = _build_connector(ConfluenceConnector, token, creds)
+        spaces = conn.list_spaces()
+        resources = [
+            {
+                "id": sp.get("id"),
+                "label": f"{sp.get('name') or sp.get('key')} ({sp.get('key')})",
+                "sublabel": f"{str(sp.get('type') or 'global').title()} space",
+                "value": sp.get("id"),
+                "url": sp.get("url"),
+            }
+            for sp in spaces
+            if sp.get("id")
+        ]
+        hint = None if resources else "No accessible Confluence spaces found. Verify Confluence read scopes."
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "linear":
+        teams = LinearConnector(token=token).list_teams()
+        resources = [
+            {
+                "id": t.get("key"),
+                "label": f"{t.get('key')} — {t.get('name')}",
+                "sublabel": (t.get("description") or "Linear Engineering Team")[:90],
+                "value": t.get("key"),
+            }
+            for t in teams
+            if t.get("key")
+        ]
+        hint = None if resources else "No Linear teams found for this token."
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "gitlab":
+        conn = _build_connector(GitLabConnector, token, creds)
+        projects = conn.list_projects(max_pages=2)
+        resources = [
+            {
+                "id": p.get("path_with_namespace"),
+                "label": p.get("path_with_namespace"),
+                "sublabel": f"{str(p.get('visibility') or 'private').title()} • branch: {p.get('default_branch') or 'main'}",
+                "value": p.get("path_with_namespace"),
+                "url": p.get("web_url"),
+            }
+            for p in projects
+            if p.get("path_with_namespace")
+        ]
+        hint = None if resources else "No accessible GitLab projects found. Check read_api/read_repository scopes."
+        return {"provider": prov, "resources": resources, "hint": hint}
+
+    if prov == "sentry":
+        conn = _build_connector(SentryConnector, token, creds)
+        projects = conn.list_projects()
+        resources = [
+            {
+                "id": p.get("full_slug"),
+                "label": p.get("full_slug"),
+                "sublabel": f"Platform: {p.get('platform') or 'app'}",
+                "value": p.get("full_slug"),
+            }
+            for p in projects
+            if p.get("full_slug")
+        ]
+        hint = None if resources else "No Sentry projects found. Verify org:read & project:read scopes on your Auth Token."
         return {"provider": prov, "resources": resources, "hint": hint}
 
     return {
@@ -332,10 +447,13 @@ def oauth_callback(
     try:
         token_bundle = connector_cls.exchange_oauth_code(code=code, redirect_uri=redirect_uri)
         token = token_bundle.get("access_token") or token_bundle.get("token")
-        conn = connector_cls(token=token)
+        conn = _build_connector(connector_cls, token=token, creds=token_bundle)
         check = conn.check_connection()
         if check.get("status") != "connected":
             raise ConnectorError(check.get("message", "Provider connection check failed."))
+        for k in ("cloud_id", "site_url", "org_slug"):
+            if check.get(k) and not token_bundle.get(k):
+                token_bundle[k] = check[k]
     except ConnectorError as exc:
         return RedirectResponse(f"{settings.FRONTEND_URL}/integrations?oauth_error={quote(str(exc), safe='')}")
 
@@ -420,7 +538,10 @@ def create_integration(
                 status_code=400,
                 detail=f"Valid authentication credentials are required to connect {provider}.",
             )
-        check = connector_cls(token=token).check_connection()
+        try:
+            check = _build_connector(connector_cls, token=token, creds=raw_creds).check_connection()
+        except ConnectorError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         if check.get("status") != "connected":
             raise HTTPException(
                 status_code=400,
@@ -429,6 +550,9 @@ def create_integration(
         auth_status = "verified"
         connected_account = check.get("connected_account") or check.get("login") or check.get("team") or check.get("bot_name")
         scopes = check.get("scopes") or []
+        for k in ("cloud_id", "site_url", "org_slug"):
+            if check.get(k) and not raw_creds.get(k):
+                raw_creds[k] = check[k]
 
     integ = Integration(
         project_id=integ_in.project_id,
@@ -476,7 +600,7 @@ def discover_resources_with_token(
             detail=f"Please enter a valid {req.provider.title()} token first to load available resources.",
         )
     try:
-        return _discover_provider_resources(req.provider, token)
+        return _discover_provider_resources(req.provider, token, creds=req.credentials)
     except ConnectorError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -487,25 +611,26 @@ def list_integration_resources(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """List repositories, Slack channels, or Notion pages/databases accessible to an existing integration."""
+    """List repositories, channels, projects, or spaces accessible to an existing integration."""
     integ = db.query(Integration).filter(Integration.id == integration_id).first()
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db)
 
-    token = _extract_token(integ)
+    creds = decrypt_credentials(integ.credentials)
+    token = _token_from_dict(creds)
     if not token:
         raise HTTPException(
             status_code=400,
             detail=f"Integration '{integ.name}' has no saved credentials. Please reconnect or enter a token.",
         )
     try:
-        return _discover_provider_resources(integ.provider, token)
+        return _discover_provider_resources(integ.provider, token, creds=creds)
     except ConnectorError as exc:
-        refreshed = _refresh_github_token_if_possible(db, integ)
+        refreshed = _refresh_oauth_token_if_possible(db, integ)
         if refreshed:
             try:
-                return _discover_provider_resources(integ.provider, refreshed)
+                return _discover_provider_resources(integ.provider, refreshed, creds=decrypt_credentials(integ.credentials))
             except ConnectorError as exc2:
                 raise HTTPException(status_code=400, detail=str(exc2))
         raise HTTPException(status_code=400, detail=str(exc))
@@ -526,12 +651,15 @@ def verify_integration(
     if not connector_cls:
         return {"status": integ.status, "auth_status": integ.auth_status}
 
-    token = _extract_token(integ)
-    check = connector_cls(token=token).check_connection()
+    creds = decrypt_credentials(integ.credentials)
+    token = _token_from_dict(creds)
+    check = _build_connector(connector_cls, token=token, creds=creds).check_connection()
     if check.get("status") != "connected":
-        refreshed = _refresh_github_token_if_possible(db, integ)
+        refreshed = _refresh_oauth_token_if_possible(db, integ)
         if refreshed:
-            check = connector_cls(token=refreshed).check_connection()
+            check = _build_connector(
+                connector_cls, token=refreshed, creds=decrypt_credentials(integ.credentials)
+            ).check_connection()
     if check.get("status") == "connected":
         integ.auth_status = "verified"
         integ.status = "connected"
@@ -632,16 +760,17 @@ def trigger_sync(
     if not connector_cls:
         raise HTTPException(status_code=400, detail=f"Provider '{provider}' does not have an automated sync connector.")
 
-    connector = connector_cls(token=token)
+    creds = decrypt_credentials(integ.credentials)
+    connector = _build_connector(connector_cls, token=token, creds=creds)
     try:
         synced_records, new_cursor = connector.sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
     except ConnectorError as exc:
-        refreshed = _refresh_github_token_if_possible(db, integ)
+        refreshed = _refresh_oauth_token_if_possible(db, integ)
         if refreshed:
             try:
-                synced_records, new_cursor = connector_cls(token=refreshed).sync(
-                    config=integ.config or {}, sync_cursor=integ.sync_cursor or {}
-                )
+                synced_records, new_cursor = _build_connector(
+                    connector_cls, token=refreshed, creds=decrypt_credentials(integ.credentials)
+                ).sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
             except ConnectorError as exc2:
                 exc = exc2
             else:
@@ -674,7 +803,7 @@ def trigger_sync(
     # Persist AST graph facts directly when repository AST summary records were indexed
     ast_graph_added = 0
     for rec in synced_records:
-        if rec.get("source_type") == "github_ast":
+        if rec.get("source_type") in ("github_ast", "gitlab_ast"):
             meta = rec.get("metadata") or {}
             repo_name = meta.get("repository") or integ.name
             ast_facts = meta.get("ast_facts") or {}
@@ -751,11 +880,15 @@ def get_webhook_config(
         "provider": integ.provider,
         "webhook_url": f"{base_url}/api/v1/webhooks/{integ.provider}/{integ.id}",
         "has_secret": has_secret,
-        "signature_header": (
-            "X-Hub-Signature-256" if integ.provider == "github"
-            else "X-Slack-Signature" if integ.provider == "slack"
-            else "X-Notion-Signature"
-        ),
+        "signature_header": {
+            "github": "X-Hub-Signature-256",
+            "slack": "X-Slack-Signature",
+            "notion": "X-Notion-Signature",
+            "gitlab": "X-Gitlab-Token",
+            "linear": "Linear-Signature",
+            "jira": "X-Hub-Signature",
+            "sentry": "Sentry-Hook-Signature",
+        }.get((integ.provider or "").lower(), "X-Hub-Signature-256"),
     }
 
 
@@ -983,7 +1116,7 @@ def reconnect_integration(
     if connector_cls:
         if not token:
             raise HTTPException(status_code=400, detail="Valid credentials are required to reconnect.")
-        check = connector_cls(token=token).check_connection()
+        check = _build_connector(connector_cls, token=token, creds=creds_to_check).check_connection()
         if check.get("status") != "connected":
             raise HTTPException(status_code=400, detail=f"Reconnection auth failed: {check.get('message')}")
         integ.auth_status = "verified"

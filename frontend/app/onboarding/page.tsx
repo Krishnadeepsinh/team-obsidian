@@ -17,7 +17,7 @@ export default function OnboardingPage() {
     },
     {
       title: "2. Connect Knowledge Sources",
-      desc: "Authenticate GitHub, Slack, and Notion connectors or verify your existing scopes.",
+      desc: "Authenticate GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, or Notion connectors.",
       href: "/integrations",
       cta: "Connect Sources",
       icon: GitBranch,
