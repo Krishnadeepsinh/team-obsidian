@@ -457,8 +457,9 @@ function IntegrationsContent() {
       setError("")
       setMessage("")
       const res = await api.getOAuthUrl(provider, targetProjectId)
-      if (res?.authorize_url) {
-        window.location.assign(res.authorize_url)
+      const safeUrl = safeHref(res?.authorize_url)
+      if (safeUrl) {
+        window.location.assign(safeUrl)
       }
     } catch (err: any) {
       setError(

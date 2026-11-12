@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import {
   ArrowLeft,
   Layers,
@@ -389,11 +389,14 @@ export default function ProjectDetailPage() {
                     <span>Author: {ev.author || "System"}</span>
                     <div className="flex items-center gap-2">
                       <span>{ev.timestamp ? new Date(ev.timestamp).toLocaleString() : ""}</span>
-                      {ev.url && (
-                        <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
-                          Source <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                      )}
+                      {(() => {
+                        const safeEvUrl = safeHref(ev.url)
+                        return safeEvUrl ? (
+                          <a href={safeEvUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                            Source <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ) : null
+                      })()}
                     </div>
                   </div>
                 </div>
