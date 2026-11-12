@@ -34,7 +34,7 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { ALL_PROJECTS_VALUE, api, setStoredProjectId, warmUpBackendHealth } from "@/lib/api"
+import { ALL_PROJECTS_VALUE, api, getStoredProjectId, setStoredProjectId, warmUpBackendHealth } from "@/lib/api"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -51,6 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [unreadCount, setUnreadCount] = useState(0)
   const [apiWaking, setApiWaking] = useState(false)
+  const [pipelineStatus, setPipelineStatus] = useState<any>(null)
 
   useEffect(() => {
     warmUpBackendHealth()
@@ -206,6 +207,42 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.addEventListener("obsidian_project_changed", syncFromStorage)
     return () => window.removeEventListener("obsidian_project_changed", syncFromStorage)
   }, [isPublic, projectsList])
+
+  useEffect(() => {
+    if (isPublic || typeof window === "undefined") return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+
+    const pollPipeline = async () => {
+      const pid = getStoredProjectId() || projectsList[0]?.id
+      if (!pid) {
+        setPipelineStatus(null)
+        return
+      }
+      try {
+        const st = await api.getProjectPipelineStatus(pid)
+        if (cancelled) return
+        setPipelineStatus(st?.stage && st.stage !== "idle" ? st : null)
+        if (st?.active) {
+          timer = setTimeout(pollPipeline, 3000)
+        }
+      } catch {
+        // Silent fallback so header polling never breaks navigation
+      }
+    }
+
+    pollPipeline()
+    const onPipelineTrigger = () => {
+      if (timer) clearTimeout(timer)
+      pollPipeline()
+    }
+    window.addEventListener("obsidian_pipeline_updated", onPipelineTrigger)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      window.removeEventListener("obsidian_pipeline_updated", onPipelineTrigger)
+    }
+  }, [isPublic, pathname, projectsList])
 
   const handleSignOut = async () => {
     setShowUserMenu(false)
@@ -570,6 +607,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {pipelineStatus && (
+              <div
+                title={pipelineStatus.message}
+                className={`hidden md:flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-semibold border ${
+                  pipelineStatus.active
+                    ? "bg-violet-50 border-violet-200 text-violet-700"
+                    : pipelineStatus.stage === "failed"
+                    ? "bg-rose-50 border-rose-200 text-rose-700"
+                    : "bg-emerald-50 border-emerald-200 text-emerald-700"
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    pipelineStatus.active
+                      ? "bg-violet-600 animate-pulse"
+                      : pipelineStatus.stage === "failed"
+                      ? "bg-rose-600"
+                      : "bg-emerald-600"
+                  }`}
+                />
+                <span className="max-w-[170px] truncate">
+                  {pipelineStatus.active
+                    ? `AI Pipeline ${pipelineStatus.progress}%`
+                    : pipelineStatus.stage === "failed"
+                    ? "Pipeline Warning"
+                    : "Graph Indexed"}
+                </span>
+              </div>
+            )}
+
             <div className="relative hidden sm:block">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
@@ -593,11 +660,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <button
               onClick={() => router.push("/notifications")}
               className="relative p-2 rounded-full hover:bg-slate-100 text-slate-600 transition-colors"
-              title="Notifications"
+              title={unreadCount > 0 ? `${unreadCount} unread notifications` : "Notifications"}
             >
               <Bell className="w-4 h-4" />
               {unreadCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white" />
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold flex items-center justify-center ring-2 ring-white">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
               )}
             </button>
 

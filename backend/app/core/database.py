@@ -51,11 +51,15 @@ def set_rls_user_context(db: Session, user_id: Optional[str]) -> None:
 
 
 def init_db() -> None:
-    """Initialize schema safely; in PostgreSQL prefer Alembic/Supabase migrations."""
+    """Initialize schema safely; create missing tables if needed."""
     import app.models  # noqa: F401 - Ensure all SQLAlchemy models are registered
     if IS_SQLITE:
         Base.metadata.create_all(bind=engine)
     else:
-        # In Postgres, verify connectivity; schema is managed via Alembic + Supabase migrations
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
+        try:
+            Base.metadata.create_all(bind=engine, checkfirst=True)
+        except Exception as exc:
+            import logging
+            logging.getLogger("team_obsidian").warning("Non-fatal Postgres create_all check skipped: %s", exc)

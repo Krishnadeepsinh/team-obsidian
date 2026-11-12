@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_effective_project, get_user_accessible_project_ids, verify_project_access
+from app.core.pipeline_tracker import pipeline_tracker
 from app.core.security import get_current_user
 from app.models.evidence import Evidence
 from app.models.integration import Document, DocumentChunk
@@ -92,12 +93,39 @@ def list_documents(
 
 def _run_background_extraction(project_id: str, actor_user_id: str, doc_id: str) -> None:
     """Extract structured knowledge graph items in a standalone DB session after upload responds."""
+    pipeline_tracker.update(
+        project_id,
+        stage="extracting_knowledge",
+        message="Extracting architectural entities, decisions, and risks from uploaded document...",
+        progress=65,
+        active=True,
+        job_type="document_extraction",
+        details={"doc_id": doc_id},
+    )
     bg_db = SessionLocal()
     try:
-        extract_and_persist_project_knowledge(bg_db, project_id, actor_user_id=actor_user_id)
+        summary = extract_and_persist_project_knowledge(bg_db, project_id, actor_user_id=actor_user_id)
+        pipeline_tracker.update(
+            project_id,
+            stage="completed",
+            message="Document indexed and Knowledge Graph updated.",
+            progress=100,
+            active=False,
+            job_type="document_extraction",
+            details={"doc_id": doc_id, **(summary or {})},
+        )
     except Exception as exc:
         bg_db.rollback()
         logger.warning("Post-upload knowledge extraction skipped for doc %s: %s", doc_id, exc)
+        pipeline_tracker.update(
+            project_id,
+            stage="failed",
+            message=f"Document saved, but background extraction encountered an issue: {str(exc)[:120]}",
+            progress=100,
+            active=False,
+            job_type="document_extraction",
+            details={"doc_id": doc_id},
+        )
     finally:
         bg_db.close()
         gc.collect()
@@ -315,6 +343,15 @@ def upload_document(
     db.refresh(doc)
 
     if extract_knowledge and chunk_recs:
+        pipeline_tracker.update(
+            project_id,
+            stage="queued",
+            message=f"Queued '{clean_title}' ({len(chunk_recs)} chunks) for AI knowledge extraction...",
+            progress=35,
+            active=True,
+            job_type="document_extraction",
+            details={"doc_id": doc_id, "chunks": len(chunk_recs)},
+        )
         background_tasks.add_task(_run_background_extraction, project_id, current_user.id, doc_id)
 
     gc.collect()

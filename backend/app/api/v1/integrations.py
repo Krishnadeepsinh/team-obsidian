@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_user_accessible_project_ids, verify_project_access
+from app.core.pipeline_tracker import pipeline_tracker
 from app.core.security import (
     create_oauth_state_token,
     decode_access_token,
@@ -187,11 +188,36 @@ def _discover_provider_resources(provider: str, token: str) -> Dict[str, Any]:
 
 def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None:
     """Run knowledge extraction asynchronously in an isolated session after integration sync."""
+    pipeline_tracker.update(
+        project_id,
+        stage="extracting_knowledge",
+        message="Extracting architectural entities, decisions, and risks from synced sources...",
+        progress=70,
+        active=True,
+        job_type="integration_sync_extraction",
+    )
     bg_db = SessionLocal()
     try:
-        extract_and_persist_project_knowledge(bg_db, project_id, actor_user_id=actor_user_id)
+        summary = extract_and_persist_project_knowledge(bg_db, project_id, actor_user_id=actor_user_id)
+        pipeline_tracker.update(
+            project_id,
+            stage="completed",
+            message="Integration sync and Knowledge Graph extraction finished.",
+            progress=100,
+            active=False,
+            job_type="integration_sync_extraction",
+            details=summary or {},
+        )
     except Exception as exc:
         logger.warning("Background sync knowledge extraction skipped for project %s: %s", project_id, exc)
+        pipeline_tracker.update(
+            project_id,
+            stage="failed",
+            message=f"Sync completed, but knowledge extraction encountered an issue: {str(exc)[:120]}",
+            progress=100,
+            active=False,
+            job_type="integration_sync_extraction",
+        )
         try:
             bg_db.rollback()
         except Exception:
@@ -670,6 +696,15 @@ def trigger_sync(
 
     extracted: Dict[str, Any] = {}
     if extract_knowledge and (counts["added"] > 0 or counts["updated"] > 0):
+        pipeline_tracker.update(
+            integ.project_id,
+            stage="queued",
+            message=f"Synced {integ.name} ({counts['added']} new, {counts['updated']} updated). Queued knowledge extraction...",
+            progress=40,
+            active=True,
+            job_type="integration_sync_extraction",
+            details={"integration_id": integ.id, "added": counts["added"], "updated": counts["updated"]},
+        )
         background_tasks.add_task(_run_background_sync_extraction, integ.project_id, current_user.id)
         extracted = {"status": "scheduled", "message": "Knowledge graph extraction scheduled in background."}
 

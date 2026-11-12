@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, Boolean, JSON, Index
+from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
 
@@ -214,3 +215,46 @@ class KnowledgeDriftEvent(Base):
     resolved_at = Column(DateTime, nullable=True)
     metadata_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=utc_now, index=True)
+
+
+class AssistantConversation(Base):
+    __tablename__ = "assistant_conversations"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    title = Column(String(255), nullable=False, default="New Conversation")
+    departing_focus = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=utc_now, index=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, index=True)
+
+    messages = relationship(
+        "AssistantMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="AssistantMessage.created_at.asc()",
+    )
+
+
+class AssistantMessage(Base):
+    __tablename__ = "assistant_messages"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    conversation_id = Column(
+        String(36),
+        ForeignKey("assistant_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role = Column(String(20), nullable=False)  # user, assistant
+    content = Column(Text, nullable=False)
+    citations_json = Column(JSON, default=list)
+    confidence = Column(Float, nullable=True)
+    confidence_breakdown_json = Column(JSON, default=dict)
+    is_grounded = Column(Boolean, default=True)
+    model_used = Column(String(100), nullable=True)
+    suggested_followups_json = Column(JSON, default=list)
+    created_at = Column(DateTime, default=utc_now, index=True)
+
+    conversation = relationship("AssistantConversation", back_populates="messages")
+

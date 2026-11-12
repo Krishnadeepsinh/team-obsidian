@@ -14,6 +14,7 @@ from app.core.permissions import (
     normalize_role,
     verify_project_access,
 )
+from app.core.pipeline_tracker import pipeline_tracker
 from app.core.security import get_current_user
 from app.models.evidence import Evidence
 from app.models.integration import SourceRecord
@@ -396,3 +397,15 @@ def remove_project_member(
     )
     db.commit()
     return {"status": "success", "message": "Project member removed."}
+
+
+@router.get("/{project_id}/pipeline-status")
+def get_project_pipeline_status(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return live status of background sync, chunking, or AI extraction pipelines for a project."""
+    verify_project_access(project_id, current_user, db)
+    return pipeline_tracker.get(project_id)
+

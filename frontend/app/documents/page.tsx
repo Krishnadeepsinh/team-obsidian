@@ -32,6 +32,7 @@ export default function DocumentsPage() {
   const [typeFilter, setTypeFilter] = useState("All")
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
+  const [pipelineStatus, setPipelineStatus] = useState<any>(null)
 
   // Chunk Inspector Drawer
   const [selectedDoc, setSelectedDoc] = useState<any>(null)
@@ -91,6 +92,37 @@ export default function DocumentsPage() {
     return () => window.removeEventListener("obsidian_project_changed", onProjectChange)
   }, [loadData])
 
+  useEffect(() => {
+    const targetPid = activeProject || projects[0]?.id
+    if (!targetPid) {
+      setPipelineStatus(null)
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const st = await api.getProjectPipelineStatus(targetPid)
+        if (cancelled) return
+        setPipelineStatus(st?.stage && st.stage !== "idle" ? st : null)
+        if (st?.active) {
+          timer = setTimeout(poll, 2500)
+        }
+      } catch {}
+    }
+    poll()
+    const onUpdate = () => {
+      if (timer) clearTimeout(timer)
+      poll()
+    }
+    window.addEventListener("obsidian_pipeline_updated", onUpdate)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      window.removeEventListener("obsidian_pipeline_updated", onUpdate)
+    }
+  }, [activeProject, projects])
+
   const handleFileChange = (picked: File | null) => {
     setError("")
     setFile(picked)
@@ -143,6 +175,7 @@ export default function DocumentsPage() {
           `Uploaded "${uploaded?.title || effectiveTitle}" (${uploaded?.chunk_count || 0} searchable chunks, SHA-256 verified).`
         )
       }
+      window.dispatchEvent(new Event("obsidian_pipeline_updated"))
       await loadData(activeProject || targetPid)
     } catch (err: any) {
       setError(err.message || "Document upload failed.")
@@ -238,6 +271,34 @@ export default function DocumentsPage() {
       {message && (
         <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4" /> {message}
+        </div>
+      )}
+      {pipelineStatus && (
+        <div
+          className={`p-3 rounded-xl border text-xs flex flex-col gap-1.5 ${
+            pipelineStatus.active
+              ? "bg-violet-50 border-violet-200 text-violet-800"
+              : pipelineStatus.stage === "failed"
+              ? "bg-rose-50 border-rose-200 text-rose-700"
+              : "bg-emerald-50 border-emerald-200 text-emerald-800"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2 font-semibold">
+            <span>{pipelineStatus.message}</span>
+            <span>{pipelineStatus.progress}%</span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-white/80 overflow-hidden">
+            <div
+              className={`h-full transition-all duration-500 ${
+                pipelineStatus.stage === "failed"
+                  ? "bg-rose-500"
+                  : pipelineStatus.active
+                  ? "bg-violet-600"
+                  : "bg-emerald-600"
+              }`}
+              style={{ width: `${pipelineStatus.progress ?? 0}%` }}
+            />
+          </div>
         </div>
       )}
 

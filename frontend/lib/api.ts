@@ -367,15 +367,113 @@ export const api = {
     return fetchJson<any[]>(`/knowledge/dependencies${q}`)
   },
 
+  getProjectPipelineStatus: async (projectId: string) =>
+    fetchJson<any>(`/projects/${projectId}/pipeline-status`),
+
   // AI Project Assistant
-  queryAssistant: async (projectId: string, question: string, departingFocus?: string) =>
+  queryAssistant: async (projectId: string, question: string, departingFocus?: string, conversationId?: string) =>
     fetchJson<any>("/assistant/query", {
       method: "POST",
       body: JSON.stringify({
         project_id: projectId,
         question,
         departing_focus: departingFocus || undefined,
+        conversation_id: conversationId || undefined,
       }),
+    }),
+  queryAssistantStream: async (params: {
+    projectId: string
+    question: string
+    departingFocus?: string
+    conversationId?: string
+    onMeta?: (meta: any) => void
+    onToken?: (chunk: string) => void
+  }) => {
+    const res = await performFetchWithRetry(`${API_BASE}/assistant/query/stream`, {
+      method: "POST",
+      headers: getAuthHeaders({
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      }),
+      body: JSON.stringify({
+        project_id: params.projectId,
+        question: params.question,
+        departing_focus: params.departingFocus || undefined,
+        conversation_id: params.conversationId || undefined,
+      }),
+    })
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData?.detail || `Assistant stream failed (${res.status})`)
+    }
+    const reader = res.body?.getReader()
+    if (!reader) {
+      return api.queryAssistant(params.projectId, params.question, params.departingFocus, params.conversationId)
+    }
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let finalPayload: any = null
+
+    const processFrame = (frame: string) => {
+      const lines = frame.split(/\r?\n/)
+      let evName = "message"
+      const dataLines: string[] = []
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          evName = line.slice(6).trim()
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trim())
+        }
+      }
+      if (dataLines.length === 0) return
+      const rawJson = dataLines.join("\n")
+      try {
+        const parsed = JSON.parse(rawJson)
+        if (evName === "meta" && params.onMeta) {
+          params.onMeta(parsed)
+        } else if (evName === "token" && params.onToken && parsed?.text) {
+          params.onToken(parsed.text)
+        } else if (evName === "done") {
+          finalPayload = parsed
+        }
+      } catch {}
+    }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx = buffer.indexOf("\n\n")
+      while (idx !== -1) {
+        const frame = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        if (frame.trim()) processFrame(frame)
+        idx = buffer.indexOf("\n\n")
+      }
+    }
+    if (buffer.trim()) processFrame(buffer)
+    return finalPayload
+  },
+  getAssistantConversations: async (projectId?: string) => {
+    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
+    return fetchJson<any[]>(`/assistant/conversations${q}`)
+  },
+  getAssistantConversation: async (conversationId: string) =>
+    fetchJson<any>(`/assistant/conversations/${conversationId}`),
+  deleteAssistantConversation: async (conversationId: string) =>
+    fetchJson<any>(`/assistant/conversations/${conversationId}`, { method: "DELETE" }),
+  promoteAssistantInsight: async (data: {
+    project_id: string
+    target_type: "decision" | "gap"
+    title: string
+    content: string
+    component?: string
+    severity?: string
+    evidence_ids?: string[]
+  }) =>
+    fetchJson<any>("/assistant/promote", {
+      method: "POST",
+      body: JSON.stringify(data),
     }),
 
   // Decisions

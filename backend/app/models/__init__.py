@@ -28,6 +28,8 @@ from app.models.knowledge import (
     KnowledgeGap,
     EmbeddingRecord,
     KnowledgeDriftEvent,
+    AssistantConversation,
+    AssistantMessage,
 )
 from app.models.handover import (
     Handover,
@@ -65,6 +67,8 @@ __all__ = [
     "KnowledgeGap",
     "EmbeddingRecord",
     "KnowledgeDriftEvent",
+    "AssistantConversation",
+    "AssistantMessage",
     "Handover",
     "HandoverSection",
     "HandoverClaim",

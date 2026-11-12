@@ -378,6 +378,7 @@ class AIEngine:
         question: str,
         context_docs: List[Dict[str, Any]],
         departing_name: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Answer project question strictly grounded in retrieved evidence."""
         if not context_docs:
@@ -426,6 +427,17 @@ class AIEngine:
             try:
                 from google.genai import types
 
+                history_block = ""
+                if conversation_history:
+                    recent = conversation_history[-4:]
+                    formatted_turns = "\n".join(
+                        f"- {str(t.get('role', 'user')).upper()}: {str(t.get('content', ''))[:400]}"
+                        for t in recent
+                        if t.get("content")
+                    )
+                    if formatted_turns:
+                        history_block = f"\nPRIOR CONVERSATION CONTEXT (reference only; still verify facts solely against CONTEXT EVIDENCE):\n{formatted_turns}\n"
+
                 prompt = f"""You are the TEAM OBSIDIAN Evidence-Grounded Knowledge Intelligence Assistant.
 Rules:
 1. Answer ONLY from the CONTEXT EVIDENCE below. Never use outside knowledge, never guess, and never fabricate names, decisions, links, or ownership.
@@ -434,7 +446,7 @@ Rules:
 4. Distinguish clearly between verified facts and draft/unverified evidence if relevant.
 
 DEPARTING FOCUS: {departing_name or 'Not specified'}
-
+{history_block}
 CONTEXT EVIDENCE:
 {context_str}
 

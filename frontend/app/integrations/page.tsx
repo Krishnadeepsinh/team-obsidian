@@ -288,6 +288,7 @@ function IntegrationsContent() {
 
   // Token / Connect Modal
   const [connectProvider, setConnectProvider] = useState<string | null>(null)
+  const [connectAuthTab, setConnectAuthTab] = useState<"oauth" | "token">("oauth")
   const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null)
   const [connectName, setConnectName] = useState("")
   const [connectToken, setConnectToken] = useState("")
@@ -476,6 +477,9 @@ function IntegrationsContent() {
     const meta = PROVIDER_CARDS.find((p) => p.key === provider)
     setConnectProvider(provider)
     setReconnectTargetId(existingInteg?.id || null)
+    setConnectAuthTab(
+      existingInteg || oauthProviders[provider] === false ? "token" : "oauth"
+    )
     setConnectName(existingInteg?.name || meta?.title || `${provider.toUpperCase()} Connector`)
     setConnectToken("")
     setConnectConfigVal(
@@ -591,6 +595,7 @@ function IntegrationsContent() {
         res?.items_processed ??
         (res?.records_added ?? 0) + (res?.records_updated ?? 0) + (res?.records_skipped ?? 0)
       setMessage(res?.details?.message || res?.message || `Synced ${count} records from ${integ.name}.`)
+      window.dispatchEvent(new Event("obsidian_pipeline_updated"))
       await loadAll(activeProject)
     } catch (err: any) {
       setError(err.message || "Synchronization failed.")
@@ -631,6 +636,7 @@ function IntegrationsContent() {
             syncRes?.items_processed ??
             (syncRes?.records_added ?? 0) + (syncRes?.records_updated ?? 0) + (syncRes?.records_skipped ?? 0)
           setMessage(syncRes?.details?.message || `Configuration saved and synced ${count} records.`)
+          window.dispatchEvent(new Event("obsidian_pipeline_updated"))
         } finally {
           setBusyId(null)
         }
@@ -969,141 +975,195 @@ function IntegrationsContent() {
               </div>
             )}
             {(() => {
-              if (reconnectTargetId) return null
-              const existingConnected = integrations.find(
-                (i) =>
-                  i.provider === connectProvider &&
-                  i.status === "connected" &&
-                  (!activeProject || i.project_id === activeProject)
-              )
-              if (existingConnected) {
-                return (
-                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="text-emerald-900">
-                      <strong>Already connected</strong>
-                      {existingConnected.connected_account ? ` (@${existingConnected.connected_account})` : ""}. No API key needed to pick {resourceNoun(connectProvider).toLowerCase()}.
+              const existingConnected = !reconnectTargetId
+                ? integrations.find(
+                    (i) =>
+                      i.provider === connectProvider &&
+                      i.status === "connected" &&
+                      (!activeProject || i.project_id === activeProject)
+                  )
+                : null
+              const supportsOauth = !reconnectTargetId && oauthProviders[connectProvider] !== false
+
+              return (
+                <>
+                  {existingConnected && (
+                    <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="text-emerald-900">
+                        <strong>Already connected</strong>
+                        {existingConnected.connected_account ? ` (@${existingConnected.connected_account})` : ""}. No API key needed to pick {resourceNoun(connectProvider).toLowerCase()}.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConnectProvider(null)
+                          setReconnectTargetId(null)
+                          openConfigModal(existingConnected)
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
+                      >
+                        Pick {resourceNoun(connectProvider)}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setConnectProvider(null)
-                        setReconnectTargetId(null)
-                        openConfigModal(existingConnected)
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
-                    >
-                      Load from Connected Account
-                    </button>
-                  </div>
-                )
-              }
-              if (oauthProviders[connectProvider] !== false) {
-                return (
-                  <div className="p-3 rounded-xl bg-violet-50 border border-violet-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <span className="text-violet-900">
-                      Prefer not to create an API key? Connect in one click with OAuth.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const prov = connectProvider
-                        setConnectProvider(null)
-                        handleOAuthConnect(prov)
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white whitespace-nowrap"
-                    >
-                      Use OAuth Instead
-                    </button>
-                  </div>
-                )
-              }
-              return null
+                  )}
+
+                  {supportsOauth && (
+                    <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100 border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setConnectAuthTab("oauth")}
+                        className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          connectAuthTab === "oauth"
+                            ? "bg-white text-violet-700 shadow-sm"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        1-Click OAuth (Recommended)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConnectAuthTab("token")}
+                        className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          connectAuthTab === "token"
+                            ? "bg-white text-slate-900 shadow-sm"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        API / PAT Token
+                      </button>
+                    </div>
+                  )}
+
+                  {supportsOauth && connectAuthTab === "oauth" ? (
+                    <div className="p-4 rounded-xl bg-violet-50/70 border border-violet-200 space-y-3">
+                      <div className="text-xs text-slate-700 leading-relaxed">
+                        Authorize <strong>TEAM OBSIDIAN</strong> securely with your{" "}
+                        <span className="capitalize font-semibold">{connectProvider}</span> account via OAuth 2.0.
+                        Right after authorization, your {resourceNoun(connectProvider).toLowerCase()} picker opens automatically — no manual API key required.
+                      </div>
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setConnectAuthTab("token")}
+                          className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 underline"
+                        >
+                          Use manual token instead
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConnectProvider(null)
+                              setReconnectTargetId(null)
+                            }}
+                            className="px-3 py-1.5 rounded-xl text-xs text-slate-600 hover:bg-slate-100"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const prov = connectProvider
+                              setConnectProvider(null)
+                              handleOAuthConnect(prov)
+                            }}
+                            className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                          >
+                            Continue with {connectProvider.toUpperCase()} OAuth
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleTokenConnect} className="space-y-3.5">
+                      <div>
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">Connection Label</label>
+                        <input
+                          type="text"
+                          required
+                          value={connectName}
+                          onChange={(e) => setConnectName(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">API / Bot Access Token</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="password"
+                            required={!reconnectTargetId}
+                            value={connectToken}
+                            onChange={(e) => setConnectToken(e.target.value)}
+                            placeholder={PROVIDER_CARDS.find((p) => p.key === connectProvider)?.tokenPlaceholder}
+                            className="flex-1 px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleDiscoverForConnect}
+                            disabled={loadingConnectResources || !connectToken.trim()}
+                            className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 whitespace-nowrap disabled:opacity-50"
+                          >
+                            {loadingConnectResources ? "Loading..." : `Fetch ${resourceNoun(connectProvider)}`}
+                          </button>
+                        </div>
+                      </div>
+
+                      <ResourcePickerList
+                        provider={connectProvider}
+                        resources={connectResources}
+                        loading={loadingConnectResources}
+                        error={connectResourceError}
+                        hint={connectResourceHint}
+                        search={connectResourceSearch}
+                        onSearchChange={setConnectResourceSearch}
+                        valueText={connectConfigVal}
+                        onToggleValue={(val) => toggleTargetValue(connectConfigVal, setConnectConfigVal, val)}
+                        onRefresh={handleDiscoverForConnect}
+                        refreshLabel={connectResources.length > 0 ? "Refresh List" : `Load ${resourceNoun(connectProvider)}`}
+                        refreshDisabled={!connectToken.trim()}
+                        emptyNotice={
+                          !connectToken.trim()
+                            ? `Paste a Personal Access Token above and click Fetch ${resourceNoun(connectProvider)}, or switch to 1-Click OAuth.`
+                            : undefined
+                        }
+                      />
+
+                      <div>
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                          {PROVIDER_CARDS.find((p) => p.key === connectProvider)?.configLabel} (optional, comma-separated)
+                        </label>
+                        <input
+                          type="text"
+                          value={connectConfigVal}
+                          onChange={(e) => setConnectConfigVal(e.target.value)}
+                          placeholder={PROVIDER_CARDS.find((p) => p.key === connectProvider)?.configPlaceholder}
+                          className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setConnectProvider(null)
+                            setReconnectTargetId(null)
+                          }}
+                          className="px-3 py-1.5 rounded-xl text-xs text-slate-600 hover:bg-slate-100"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={submitting}
+                          className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50"
+                        >
+                          {submitting ? "Connecting..." : reconnectTargetId ? "Reconnect & Verify" : "Save & Connect"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </>
+              )
             })()}
-            <form onSubmit={handleTokenConnect} className="space-y-3.5">
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">Connection Label</label>
-                <input
-                  type="text"
-                  required
-                  value={connectName}
-                  onChange={(e) => setConnectName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">API / Bot Access Token</label>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    required={!reconnectTargetId}
-                    value={connectToken}
-                    onChange={(e) => setConnectToken(e.target.value)}
-                    placeholder={PROVIDER_CARDS.find((p) => p.key === connectProvider)?.tokenPlaceholder}
-                    className="flex-1 px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleDiscoverForConnect}
-                    disabled={loadingConnectResources || !connectToken.trim()}
-                    className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 whitespace-nowrap disabled:opacity-50"
-                  >
-                    {loadingConnectResources ? "Loading..." : `Fetch ${resourceNoun(connectProvider)}`}
-                  </button>
-                </div>
-              </div>
-
-              <ResourcePickerList
-                provider={connectProvider}
-                resources={connectResources}
-                loading={loadingConnectResources}
-                error={connectResourceError}
-                hint={connectResourceHint}
-                search={connectResourceSearch}
-                onSearchChange={setConnectResourceSearch}
-                valueText={connectConfigVal}
-                onToggleValue={(val) => toggleTargetValue(connectConfigVal, setConnectConfigVal, val)}
-                onRefresh={handleDiscoverForConnect}
-                refreshLabel={connectResources.length > 0 ? "Refresh List" : `Load ${resourceNoun(connectProvider)}`}
-                refreshDisabled={!connectToken.trim()}
-                emptyNotice={
-                  !connectToken.trim()
-                    ? `Paste a Personal Access Token above and click Fetch ${resourceNoun(connectProvider)}, or use your OAuth connection above (no key required).`
-                    : undefined
-                }
-              />
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  {PROVIDER_CARDS.find((p) => p.key === connectProvider)?.configLabel} (optional, comma-separated)
-                </label>
-                <input
-                  type="text"
-                  value={connectConfigVal}
-                  onChange={(e) => setConnectConfigVal(e.target.value)}
-                  placeholder={PROVIDER_CARDS.find((p) => p.key === connectProvider)?.configPlaceholder}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConnectProvider(null)
-                    setReconnectTargetId(null)
-                  }}
-                  className="px-3 py-1.5 rounded-xl text-xs text-slate-600 hover:bg-slate-100"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-50"
-                >
-                  {submitting ? "Connecting..." : reconnectTargetId ? "Reconnect & Verify" : "Save & Connect"}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

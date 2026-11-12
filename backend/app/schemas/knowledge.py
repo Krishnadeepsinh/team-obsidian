@@ -141,6 +141,8 @@ class AssistantQueryRequest(BaseModel):
     project_id: str
     question: str
     departing_focus: Optional[str] = None
+    conversation_id: Optional[str] = None
+
 
 class Citation(BaseModel):
     evidence_id: str
@@ -162,4 +164,51 @@ class AssistantQueryResponse(BaseModel):
     is_grounded: bool
     model_used: str
     suggested_followups: List[str]
+    conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
+
+
+class AssistantMessageOut(BaseModel):
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    citations: List[Citation] = []
+    confidence: Optional[float] = None
+    confidence_breakdown: Optional[Dict[str, Any]] = None
+    is_grounded: bool = True
+    model_used: Optional[str] = None
+    suggested_followups: List[str] = []
+    created_at: datetime
+
+
+class AssistantConversationSummary(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    departing_focus: Optional[str] = None
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssistantConversationDetail(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    departing_focus: Optional[str] = None
+    messages: List[AssistantMessageOut] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssistantPromoteRequest(BaseModel):
+    project_id: str
+    target_type: str  # "decision" or "gap"
+    title: str
+    content: str
+    component: Optional[str] = None
+    severity: Optional[str] = "high"
+    evidence_ids: Optional[List[str]] = []
+
 
