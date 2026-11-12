@@ -2,6 +2,31 @@
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1"
 
+/**
+ * Sanitize dynamic URLs before rendering them inside <a> or Next.js <Link> href attributes.
+ * Blocks javascript:, data:, vbscript:, and protocol-relative (//) external redirects.
+ */
+export function safeHref(
+  rawUrl?: string | null,
+  options: { allowRelative?: boolean } = {}
+): string | null {
+  if (!rawUrl || typeof rawUrl !== "string") return null
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return null
+  if (options.allowRelative && trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+    return trimmed
+  }
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString()
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
 function getAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("obsidian_token") : null
   const headers: Record<string, string> = { ...extra }

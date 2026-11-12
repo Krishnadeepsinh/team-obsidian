@@ -3,7 +3,26 @@ import hashlib
 import io
 import json
 import re
+import zipfile
 from typing import Any, Dict, List, Optional
+
+
+MAX_OOXML_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB decompression cap
+MAX_OOXML_ENTRIES = 2000
+
+
+def _guard_zip_bomb(file_bytes: bytes) -> None:
+    """Reject malformed archives or decompression bombs before XML parsing."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+            entries = zf.infolist()
+            if len(entries) > MAX_OOXML_ENTRIES:
+                raise ValueError("Archive exceeds maximum permitted entry count.")
+            total_uncompressed = sum(max(0, info.file_size) for info in entries)
+            if total_uncompressed > MAX_OOXML_UNCOMPRESSED_BYTES:
+                raise ValueError("Archive uncompressed size exceeds security limit (100 MB).")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Corrupt or unreadable OOXML archive: {exc}")
 
 
 def _strip_nul(text: Optional[str]) -> str:
@@ -204,6 +223,7 @@ class DocumentParser:
                 return self.parse_markdown_or_text(_decode_text_bytes(file_bytes))
             raise ValueError("Invalid Word document container. Please upload a valid .docx or .pdf file.")
 
+        _guard_zip_bomb(file_bytes)
         import docx
 
         try:
@@ -279,6 +299,7 @@ class DocumentParser:
                 return self.parse_csv(_decode_text_bytes(file_bytes))
             raise ValueError("Invalid Excel workbook container. Please upload a valid .xlsx or .csv file.")
 
+        _guard_zip_bomb(file_bytes)
         import openpyxl
 
         try:

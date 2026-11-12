@@ -259,6 +259,8 @@ def oauth_callback(
     payload = decode_access_token(state)
     if not payload or payload.get("token_type") != "oauth_state":
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state token.")
+    if (payload.get("provider") or "").lower() != provider.lower():
+        raise HTTPException(status_code=400, detail="OAuth state token does not match callback provider.")
 
     user_id = payload.get("sub")
     project_id = payload.get("project_id")

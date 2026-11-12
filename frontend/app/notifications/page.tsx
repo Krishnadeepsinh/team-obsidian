@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { api } from "@/lib/api"
+import { api, safeHref } from "@/lib/api"
 import { Bell, CheckCircle2, Clock } from "lucide-react"
 
 export default function NotificationsPage() {
@@ -91,11 +91,14 @@ export default function NotificationsPage() {
                   <span className="inline-flex items-center gap-1">
                     <Clock className="w-3 h-3" /> {n.created_at ? new Date(n.created_at).toLocaleString() : ""}
                   </span>
-                  {n.link && (
-                    <Link href={n.link} className="text-violet-600 hover:underline font-semibold">
-                      View Details →
-                    </Link>
-                  )}
+                  {(() => {
+                    const safeNotifLink = safeHref(n.link, { allowRelative: true })
+                    return safeNotifLink ? (
+                      <Link href={safeNotifLink} className="text-violet-600 hover:underline font-semibold">
+                        View Details →
+                      </Link>
+                    ) : null
+                  })()}
                 </div>
               </div>
 

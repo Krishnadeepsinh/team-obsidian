@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import {
   FileText,
   Sparkles,
@@ -669,7 +669,8 @@ export default function HandoverPage() {
                               </div>
                             )
                           }
-                          const isExt = ev.source_url && /^https?:\/\//i.test(ev.source_url)
+                          const safeEvUrl = safeHref(ev.source_url, { allowRelative: true })
+                          const isExt = Boolean(safeEvUrl && /^https?:\/\//i.test(safeEvUrl))
                           return (
                             <div key={eid} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] space-y-1">
                               <div className="flex items-start justify-between gap-2">
@@ -681,13 +682,13 @@ export default function HandoverPage() {
                               <p className="text-slate-600 line-clamp-2 italic">&ldquo;{ev.excerpt}&rdquo;</p>
                               <div className="flex items-center justify-between text-[10px] text-slate-400">
                                 <span>{ev.source_author || "Author"} • SHA {ev.content_hash?.slice(0, 10)}</span>
-                                {ev.source_url && (
+                                {safeEvUrl && (
                                   isExt ? (
-                                    <a href={ev.source_url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                                    <a href={safeEvUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
                                       Origin <ExternalLink className="w-2.5 h-2.5" />
                                     </a>
                                   ) : (
-                                    <Link href={ev.source_url} className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                                    <Link href={safeEvUrl} className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
                                       Source <ExternalLink className="w-2.5 h-2.5" />
                                     </Link>
                                   )

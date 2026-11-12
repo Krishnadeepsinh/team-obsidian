@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import { Clock, Scale, CheckSquare, GitCommit, ExternalLink, Search } from "lucide-react"
 
 export default function TimelinePage() {
@@ -152,11 +152,14 @@ export default function TimelinePage() {
                 <span>By {ev.author || "Team"}</span>
                 <div className="flex items-center gap-3">
                   <span>{ev.timestamp ? new Date(ev.timestamp).toLocaleString() : ""}</span>
-                  {ev.url && (
-                    <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
-                      Origin <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
+                  {(() => {
+                    const safeTimelineUrl = safeHref(ev.url)
+                    return safeTimelineUrl ? (
+                      <a href={safeTimelineUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                        Origin <ExternalLink className="w-3 h-3" />
+                      </a>
+                    ) : null
+                  })()}
                 </div>
               </div>
             </div>

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.permissions import normalize_role
+from app.core.permissions import ALL_ROLES, normalize_role
 from app.core.security import get_current_user
 from app.models.workspace import Organization, User, Workspace
 from app.services.audit_service import create_notification, record_activity
@@ -220,6 +220,19 @@ def invite_to_organization(
         raise HTTPException(status_code=404, detail="Organization not found.")
     _verify_org_admin(org, current_user)
 
+    if getattr(org, "is_personal", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot invite external users into a personal workspace organization. Create a team organization or invite via project membership.",
+        )
+
+    norm_role = normalize_role(req.role or "developer")
+    if norm_role not in ALL_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role '{req.role}'. Allowed roles: {', '.join(sorted(ALL_ROLES))}",
+        )
+
     target_user = db.query(User).filter(User.email == req.email.strip().lower()).first()
     if not target_user:
         raise HTTPException(
@@ -227,8 +240,30 @@ def invite_to_organization(
             detail=f"User with email '{req.email}' not found. Ask them to register first.",
         )
 
+    if target_user.org_id and target_user.org_id != org.id:
+        current_org = db.query(Organization).filter(Organization.id == target_user.org_id).first()
+        if current_org and not getattr(current_org, "is_personal", False):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User already belongs to another team organization. Use project-level invitations instead.",
+            )
+    owned_other_team_org = (
+        db.query(Organization)
+        .filter(
+            Organization.owner_id == target_user.id,
+            Organization.id != org.id,
+            Organization.is_personal == False,  # noqa: E712
+        )
+        .first()
+    )
+    if owned_other_team_org:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User owns another team organization. Use project-level invitations instead.",
+        )
+
     target_user.org_id = org.id
-    target_user.role = req.role or "developer"
+    target_user.role = norm_role
 
     create_notification(
         db=db,

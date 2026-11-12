@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import {
   Github,
   MessageSquare,
@@ -1243,11 +1243,14 @@ function IntegrationsContent() {
                           {ev.details?.provider ? `${String(ev.details.provider).toUpperCase()} • ` : ""}
                           {eventTime ? new Date(eventTime).toLocaleString() : ""}
                         </span>
-                        {ev.url && (
-                          <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
-                            Open Source <ExternalLink className="w-2.5 h-2.5" />
-                          </a>
-                        )}
+                        {(() => {
+                          const safeEventUrl = safeHref(ev.url)
+                          return safeEventUrl ? (
+                            <a href={safeEventUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                              Open Source <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          ) : null
+                        })()}
                       </div>
                     </div>
                   )

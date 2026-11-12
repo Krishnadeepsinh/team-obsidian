@@ -58,6 +58,12 @@ class HandoverStatusRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class SimulatorEvaluateRequest(BaseModel):
+    candidate_name: Optional[str] = None
+    answers: Dict[str, str] = {}
+    scenarios: Optional[List[Dict[str, Any]]] = None
+
+
 class HandoverClaimResponse(BaseModel):
     id: str
     handover_id: str

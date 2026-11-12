@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.permissions import create_personal_workspace_for_user, get_user_accessible_projects
+from app.core.permissions import (
+    ALL_ROLES,
+    create_personal_workspace_for_user,
+    get_user_accessible_projects,
+    normalize_role,
+)
 from app.core.security import (
     create_access_token,
     generate_reset_token,
@@ -52,10 +57,22 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
     if existing:
         raise HTTPException(status_code=400, detail="User with this email already exists.")
 
+    requested_role = normalize_role(user_in.role or "developer")
+    if requested_role not in ALL_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role '{user_in.role}'. Allowed roles: {', '.join(sorted(ALL_ROLES))}",
+        )
+    if requested_role == "org_admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot self-assign 'org_admin' during public registration.",
+        )
+
     user = User(
         name=user_in.name.strip(),
         email=normalized_email,
-        role=user_in.role or "developer",
+        role=requested_role,
         title=user_in.title,
         department=user_in.department,
         password_hash=get_password_hash(user_in.password),

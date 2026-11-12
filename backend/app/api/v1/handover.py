@@ -40,6 +40,7 @@ from app.schemas.handover import (
     SectionCommentRequest,
     SectionEditRequest,
     SectionReviewRequest,
+    SimulatorEvaluateRequest,
 )
 from app.services.audit_service import record_activity
 from app.services.handover_engine import handover_engine
@@ -386,8 +387,8 @@ def _notify_stakeholders_of_handover(db: Session, h: Handover, role_label: str =
         pname = proj.name if proj else "Project"
         members = db.query(ProjectMember).filter(ProjectMember.project_id == h.project_id).all()
         user_ids = [m.user_id for m in members]
-        if proj and proj.owner_id and proj.owner_id not in user_ids:
-            user_ids.append(proj.owner_id)
+        if proj and proj.creator_id and proj.creator_id not in user_ids:
+            user_ids.append(proj.creator_id)
         for u in db.query(User).filter(User.id.in_(user_ids)).all() if user_ids else []:
             email_service.send_handover_review_email(
                 to_email=u.email,
@@ -420,10 +421,16 @@ def get_readiness_simulator(
         .limit(10)
         .all()
     )
+    stats = dict(h.reconstruction_stats or {})
     if history and not regenerate and history[0].scenarios_json:
         scenarios = history[0].scenarios_json
+    elif not regenerate and stats.get("active_simulator_scenarios"):
+        scenarios = stats["active_simulator_scenarios"]
     else:
         scenarios = generate_scenarios_for_handover(db, h)
+        stats["active_simulator_scenarios"] = scenarios
+        h.reconstruction_stats = stats
+        db.commit()
 
     return {
         "handover_id": h.id,
@@ -451,19 +458,32 @@ def get_readiness_simulator(
 @router.post("/{handover_id}/simulator/evaluate")
 def evaluate_readiness_simulator(
     handover_id: str,
-    payload: dict,
+    payload: SimulatorEvaluateRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Grade incoming engineer answers across project SPOF/ADR/dependency readiness scenarios."""
+    """Grade incoming engineer answers across server-issued SPOF/ADR/dependency readiness scenarios."""
     h = db.query(Handover).filter(Handover.id == handover_id).first()
     if not h:
         raise HTTPException(status_code=404, detail="Handover not found")
     verify_project_access(h.project_id, current_user, db, require_write=True)
 
-    scenarios = payload.get("scenarios") or generate_scenarios_for_handover(db, h)
-    answers = payload.get("answers") or {}
-    candidate_name = (payload.get("candidate_name") or h.incoming_employee_name or current_user.name or current_user.email).strip()
+    stats = dict(h.reconstruction_stats or {})
+    scenarios = stats.get("active_simulator_scenarios")
+    if not scenarios:
+        last_sim = (
+            db.query(ReadinessSimulation)
+            .filter(ReadinessSimulation.handover_id == handover_id)
+            .order_by(ReadinessSimulation.created_at.desc())
+            .first()
+        )
+        scenarios = (last_sim.scenarios_json if last_sim and last_sim.scenarios_json else None) or generate_scenarios_for_handover(db, h)
+        stats["active_simulator_scenarios"] = scenarios
+        h.reconstruction_stats = stats
+        db.flush()
+
+    answers = payload.answers or {}
+    candidate_name = (payload.candidate_name or h.incoming_employee_name or current_user.name or current_user.email).strip()
 
     sim = evaluate_simulation_submission(
         db=db,

@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -71,6 +72,8 @@ async def github_webhook(
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="GitHub webhook payload must be a JSON object.")
 
     event_name = (request.headers.get("X-GitHub-Event") or "push").lower()
     repo_name = (payload.get("repository") or {}).get("full_name") or integ.name
@@ -192,13 +195,21 @@ async def slack_webhook(
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid Slack webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Slack webhook payload must be a JSON object.")
 
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Slack signing webhook secret is not configured.")
 
-    ts = request.headers.get("X-Slack-Request-Timestamp") or ""
+    ts = (request.headers.get("X-Slack-Request-Timestamp") or "").strip()
     sig = request.headers.get("X-Slack-Signature") or ""
+    try:
+        ts_val = int(ts)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid or missing Slack request timestamp.")
+    if abs(time.time() - ts_val) > 300:
+        raise HTTPException(status_code=401, detail="Stale Slack webhook timestamp outside 5-minute replay window.")
     base_str = f"v0:{ts}:{raw_body.decode('utf-8', errors='replace')}".encode("utf-8")
     expected = "v0=" + hmac.new(secret.encode("utf-8"), base_str, hashlib.sha256).hexdigest()
     if not sig or not hmac.compare_digest(expected, sig):
@@ -272,6 +283,8 @@ async def notion_webhook(
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid Notion webhook payload.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Notion webhook payload must be a JSON object.")
 
     entity = payload.get("entity") or payload
     page_id = str(entity.get("id") or payload.get("id") or compute_sha256(raw_body.decode("utf-8", errors="replace"))[:12])

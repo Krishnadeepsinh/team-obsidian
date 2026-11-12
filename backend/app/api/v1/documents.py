@@ -124,7 +124,7 @@ def upload_document(
             detail=f"Unsupported or dangerous file type '.{ext}'. Allowed types: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    file_bytes = file.file.read()
+    file_bytes = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
     file_size = len(file_bytes)
     if file_size == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -369,11 +369,18 @@ def download_document(
         storage_path=doc.storage_path,
     )
     if raw_bytes is not None:
+        raw_mime = (doc.mime_type or "application/octet-stream").lower()
+        safe_media_type = (
+            "application/octet-stream"
+            if any(tok in raw_mime for tok in ("html", "xml", "svg", "javascript", "ecmascript"))
+            else (doc.mime_type or "application/octet-stream")
+        )
         return Response(
             content=raw_bytes,
-            media_type=doc.mime_type or "application/octet-stream",
+            media_type=safe_media_type,
             headers={
                 "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(doc.filename or ascii_name)}",
+                "X-Content-Type-Options": "nosniff",
                 "X-Obsidian-Source": "supabase-storage" if getattr(doc, "storage_key", None) else "local-storage",
             },
         )
@@ -400,6 +407,7 @@ def download_document(
         media_type="text/plain; charset=utf-8",
         headers={
             "Content-Disposition": f"attachment; filename=\"{ascii_download}\"; filename*=UTF-8''{quote(download_name)}",
+            "X-Content-Type-Options": "nosniff",
             "X-Obsidian-Source": "database-chunks",
         },
     )

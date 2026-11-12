@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import { ShieldCheck, Search, ExternalLink, Clock, User, FolderGit2, Layers, RotateCcw, AlertTriangle, RefreshCw, CheckCircle2, X } from "lucide-react"
 
 const STATUS_FILTERS = [
@@ -469,7 +469,8 @@ export default function EvidencePage() {
       {/* Evidence Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {visibleItems.map((ev) => {
-          const isExternalUrl = ev.source_url && /^https?:\/\//i.test(ev.source_url)
+          const safeEvUrl = safeHref(ev.source_url, { allowRelative: true })
+          const isExternalUrl = Boolean(safeEvUrl && /^https?:\/\//i.test(safeEvUrl))
           const origin = getEvidenceOrigin(ev)
           const projName = !activeProject && ev.project_id ? projectNames[ev.project_id] : ""
           return (
@@ -503,10 +504,10 @@ export default function EvidencePage() {
                     <h3 className="text-sm font-bold text-slate-900">{ev.source_title}</h3>
                   </div>
 
-                  {ev.source_url && (
+                  {safeEvUrl && (
                     isExternalUrl ? (
                       <a
-                        href={ev.source_url}
+                        href={safeEvUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-[11px] font-semibold text-violet-600 hover:underline inline-flex items-center gap-1 flex-shrink-0"
@@ -515,7 +516,7 @@ export default function EvidencePage() {
                       </a>
                     ) : (
                       <Link
-                        href={ev.source_url}
+                        href={safeEvUrl}
                         className="text-[11px] font-semibold text-violet-600 hover:underline inline-flex items-center gap-1 flex-shrink-0"
                       >
                         Source <ExternalLink className="w-3 h-3" />

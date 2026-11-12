@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { api, getStoredProjectId, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import {
   Sparkles,
   Send,
@@ -182,7 +182,8 @@ export default function AssistantPage() {
                     </span>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                       {m.citations.map((c: any, ci: number) => {
-                        const isExt = c.source_url && /^https?:\/\//i.test(c.source_url)
+                        const safeCitationUrl = safeHref(c.source_url, { allowRelative: true })
+                        const isExt = Boolean(safeCitationUrl && /^https?:\/\//i.test(safeCitationUrl))
                         return (
                           <div key={ci} className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-[11px]">
                             <div className="flex items-start justify-between gap-2">
@@ -205,13 +206,13 @@ export default function AssistantPage() {
                                   </span>
                                 )}
                               </div>
-                              {c.source_url && (
+                              {safeCitationUrl && (
                                 isExt ? (
-                                  <a href={c.source_url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                                  <a href={safeCitationUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
                                     Source <ExternalLink className="w-2.5 h-2.5" />
                                   </a>
                                 ) : (
-                                  <Link href={c.source_url} className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
+                                  <Link href={safeCitationUrl} className="text-violet-600 hover:underline inline-flex items-center gap-0.5">
                                     Source <ExternalLink className="w-2.5 h-2.5" />
                                   </Link>
                                 )
