@@ -7,6 +7,7 @@ import {
   Activity,
   AlertTriangle,
   Bell,
+  BrainCircuit,
   CheckCircle2,
   ChevronDown,
   Compass,
@@ -33,7 +34,7 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { ALL_PROJECTS_VALUE, api, setStoredProjectId } from "@/lib/api"
+import { ALL_PROJECTS_VALUE, api, setStoredProjectId, warmUpBackendHealth } from "@/lib/api"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -49,6 +50,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [isDesktopViewport, setIsDesktopViewport] = useState(true)
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [apiWaking, setApiWaking] = useState(false)
+
+  useEffect(() => {
+    warmUpBackendHealth()
+    const onWaking = (ev: Event) => {
+      const detail = (ev as CustomEvent)?.detail
+      setApiWaking(Boolean(detail?.waking))
+    }
+    window.addEventListener("obsidian_api_waking", onWaking)
+    return () => window.removeEventListener("obsidian_api_waking", onWaking)
+  }, [])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -217,6 +229,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { name: "Knowledge Gaps", href: "/gaps", icon: HelpCircle },
     { name: "Documents", href: "/documents", icon: FileText },
     { name: "Evidence Center", href: "/evidence", icon: ShieldCheck },
+    { name: "Readiness Sim", href: "/handover/simulator", icon: BrainCircuit },
     { name: "Approvals", href: "/handover/approvals", icon: Stamp },
     { name: "History", href: "/handover/history", icon: History },
     { name: "Timeline", href: "/timeline", icon: Activity },
@@ -584,6 +597,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </header>
+
+        {apiWaking && (
+          <div className="px-4 py-1.5 bg-amber-50 border-b border-amber-200 text-amber-800 text-[11px] font-medium flex items-center justify-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span>Waking cloud API instance from idle sleep — your request is retrying automatically...</span>
+          </div>
+        )}
 
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>

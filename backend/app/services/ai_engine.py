@@ -611,5 +611,47 @@ RECORDS:
                 )
         return bundle
 
+    def extract_text_and_diagram_from_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        context_label: str = "document",
+    ) -> Dict[str, Any]:
+        """Extract OCR text and architectural diagram structure from an image or rasterized PDF page via Gemini Vision."""
+        client = self._get_client()
+        if client is not None and image_bytes:
+            try:
+                from google.genai import types
+
+                prompt = (
+                    f"Analyze this {context_label} image for an engineering knowledge handover platform.\n"
+                    "1. Transcribe ALL readable text, labels, API routes, commands, error messages, and notes accurately.\n"
+                    "2. If it contains an architecture diagram, flowchart, schema, or whiteboard, describe every component/service, "
+                    "data store, and directional connection (A -> B).\n"
+                    "Return clean structured plain text/markdown."
+                )
+                image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type or "image/png")
+                resp, model_used = self._generate_content_with_fallback(
+                    client,
+                    self.secondary_model_name,
+                    [prompt, image_part],
+                    types.GenerateContentConfig(temperature=0.1),
+                )
+                text_out = (resp.text or "").strip()
+                if text_out:
+                    return {
+                        "ocr_text": text_out,
+                        "ocr_performed": True,
+                        "ocr_provider": model_used,
+                    }
+            except Exception as exc:
+                logger.warning("Gemini multimodal OCR failed for %s: %s", context_label, str(exc)[:160])
+
+        return {
+            "ocr_text": "",
+            "ocr_performed": False,
+            "ocr_provider": "fallback_metadata",
+        }
+
 
 ai_engine = AIEngine()

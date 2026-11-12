@@ -72,27 +72,67 @@ class DocumentParser:
                     text_pages.append(f"--- [Page {i + 1}] ---\n{text}")
 
             metadata = _clean_json_val(doc.metadata or {})
-            if not sections:
-                meta_parts = [
-                    f"PDF document contains {page_count} page(s) with no selectable embedded text layer (scanned/image-only PDF)."
-                ]
-                if total_images:
-                    meta_parts.append(f"Detected {total_images} embedded page image(s).")
-                if isinstance(metadata, dict):
-                    for k in ("title", "subject", "author"):
-                        v = (metadata.get(k) or "").strip()
-                        if v:
-                            meta_parts.append(f"PDF {k}: {v}")
-                fallback_note = " ".join(meta_parts)
-                sections.append({
-                    "page_number": 1 if page_count else None,
-                    "sheet_name": None,
-                    "heading": "PDF Visual / Scanned Notice",
-                    "paragraph_ref": "page:1",
-                    "text": fallback_note,
-                })
-                text_pages.append(fallback_note)
-                metadata["is_scanned"] = True
+            if not sections and page_count > 0:
+                from app.services.ai_engine import ai_engine
+
+                ocr_pages_done = 0
+                ocr_provider = "fallback_metadata"
+                max_ocr_pages = min(page_count, 8)
+                has_visual = total_images > 0 or any(len(doc[i].get_drawings()) > 0 for i in range(max_ocr_pages))
+                if has_visual:
+                    for idx in range(max_ocr_pages):
+                        page = doc[idx]
+                        pix = None
+                        try:
+                            pix = page.get_pixmap(dpi=150)
+                            png_bytes = pix.tobytes("png")
+                        finally:
+                            pix = None
+                        ocr_res = ai_engine.extract_text_and_diagram_from_image(
+                            png_bytes,
+                            mime_type="image/png",
+                            context_label=f"scanned PDF page {idx + 1}",
+                        )
+                        ocr_txt = _strip_nul(ocr_res.get("ocr_text") or "").strip()
+                        if ocr_txt:
+                            ocr_pages_done += 1
+                            ocr_provider = str(ocr_res.get("ocr_provider") or ocr_provider)
+                            first_line = next((ln.strip() for ln in ocr_txt.splitlines() if ln.strip()), None)
+                            sections.append({
+                                "page_number": idx + 1,
+                                "sheet_name": None,
+                                "heading": (first_line[:180] if first_line else f"Scanned OCR Page {idx + 1}"),
+                                "paragraph_ref": f"ocr_page:{idx + 1}",
+                                "text": ocr_txt,
+                            })
+                            text_pages.append(f"--- [Scanned OCR - Page {idx + 1}] ---\n{ocr_txt}")
+
+                if sections:
+                    metadata["is_scanned"] = True
+                    metadata["ocr_performed"] = True
+                    metadata["ocr_pages_processed"] = ocr_pages_done
+                    metadata["ocr_provider"] = ocr_provider
+                else:
+                    meta_parts = [
+                        f"Scanned PDF contains {page_count} page(s) and {total_images} embedded image(s). "
+                        "Rasterized pages were inspected; configure GEMINI_API_KEY for full multimodal vision OCR transcription."
+                    ]
+                    if isinstance(metadata, dict):
+                        for k in ("title", "subject", "author"):
+                            v = (metadata.get(k) or "").strip()
+                            if v:
+                                meta_parts.append(f"PDF {k}: {v}")
+                    fallback_note = " ".join(meta_parts)
+                    sections.append({
+                        "page_number": 1 if page_count else None,
+                        "sheet_name": None,
+                        "heading": "Scanned PDF Visual Notice",
+                        "paragraph_ref": "ocr_page:1",
+                        "text": fallback_note,
+                    })
+                    text_pages.append(fallback_note)
+                    metadata["is_scanned"] = True
+                    metadata["ocr_performed"] = False
 
             return {
                 "text": "\n\n".join(text_pages),
@@ -103,6 +143,49 @@ class DocumentParser:
             }
         finally:
             doc.close()
+
+    def parse_image(self, filename: str, file_bytes: bytes) -> Dict[str, Any]:
+        from app.services.ai_engine import ai_engine
+
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+        mime_map = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+        }
+        mime_type = mime_map.get(ext, "image/png")
+        ocr_res = ai_engine.extract_text_and_diagram_from_image(
+            file_bytes,
+            mime_type=mime_type,
+            context_label=f"architecture diagram / image ({filename})",
+        )
+        ocr_txt = _strip_nul(ocr_res.get("ocr_text") or "").strip()
+        if not ocr_txt:
+            ocr_txt = (
+                f"Uploaded visual artifact '{filename}' ({mime_type}, {len(file_bytes)} bytes). "
+                "Multimodal vision analysis runs automatically when GEMINI_API_KEY is active."
+            )
+        return {
+            "text": ocr_txt,
+            "page_count": 1,
+            "sheet_names": [],
+            "metadata": {
+                "is_visual_diagram": True,
+                "ocr_performed": bool(ocr_res.get("ocr_performed")),
+                "ocr_provider": ocr_res.get("ocr_provider"),
+                "mime_type": mime_type,
+            },
+            "sections": [
+                {
+                    "page_number": 1,
+                    "sheet_name": None,
+                    "heading": f"Visual / Diagram OCR ({filename[:120]})",
+                    "paragraph_ref": "image:1",
+                    "text": ocr_txt,
+                }
+            ],
+        }
 
     def parse_docx(self, file_bytes: bytes) -> Dict[str, Any]:
         head = file_bytes.lstrip()[:32].lower()
@@ -345,6 +428,8 @@ class DocumentParser:
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
         if ext == "pdf":
             return self.parse_pdf(file_bytes)
+        if ext in ("png", "jpg", "jpeg", "webp"):
+            return self.parse_image(filename, file_bytes)
         if ext in ("docx", "doc"):
             return self.parse_docx(file_bytes)
         if ext in ("xlsx", "xls"):

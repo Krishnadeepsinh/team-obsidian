@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -606,12 +607,37 @@ def trigger_sync(
         actor_user_id=current_user.id,
         actor_email=current_user.email,
     )
+
+    # Persist AST graph facts directly when repository AST summary records were indexed
+    ast_graph_added = 0
+    for rec in synced_records:
+        if rec.get("source_type") == "github_ast":
+            meta = rec.get("metadata") or {}
+            repo_name = meta.get("repository") or integ.name
+            ast_facts = meta.get("ast_facts") or {}
+            if ast_facts:
+                try:
+                    from app.services.code_ast_indexer import persist_ast_graph_facts
+
+                    ast_graph_added += persist_ast_graph_facts(db, integ.project_id, repo_name, ast_facts)
+                except Exception:
+                    pass
+
     integ.sync_cursor = new_cursor
     integ.status = "connected"
     integ.auth_status = "verified"
     integ.error_message = None
     integ.last_sync = datetime.now(timezone.utc)
     db.commit()
+
+    drift_result = {"detected": 0}
+    if counts["added"] > 0 or counts["updated"] > 0:
+        try:
+            from app.services.drift_detector import scan_project_for_drift
+
+            drift_result = scan_project_for_drift(db, integ.project_id, actor_user_id=current_user.id)
+        except Exception:
+            drift_result = {"detected": 0}
 
     extracted: Dict[str, Any] = {}
     if extract_knowledge and (counts["added"] > 0 or counts["updated"] > 0):
@@ -628,8 +654,77 @@ def trigger_sync(
         details={
             "message": f"Synced {integ.name}: {counts['added']} added, {counts['updated']} updated, {counts['skipped']} deduplicated.",
             "extracted_knowledge": extracted,
+            "ast_facts_added": ast_graph_added,
+            "drift_detected": drift_result.get("detected", 0),
         },
     )
+
+
+@router.get("/{integration_id}/webhook-config")
+def get_webhook_config(
+    integration_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db)
+    base_url = _resolve_backend_base_url(request)
+    creds = decrypt_credentials(integ.credentials)
+    has_secret = bool(creds.get("webhook_secret"))
+    return {
+        "integration_id": integ.id,
+        "provider": integ.provider,
+        "webhook_url": f"{base_url}/api/v1/webhooks/{integ.provider}/{integ.id}",
+        "has_secret": has_secret,
+        "signature_header": (
+            "X-Hub-Signature-256" if integ.provider == "github"
+            else "X-Slack-Signature" if integ.provider == "slack"
+            else "X-Notion-Signature"
+        ),
+    }
+
+
+@router.post("/{integration_id}/webhook-config")
+def generate_webhook_secret(
+    integration_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db, require_write=True)
+
+    new_secret = secrets.token_urlsafe(32)
+    creds = decrypt_credentials(integ.credentials)
+    creds["webhook_secret"] = new_secret
+    integ.credentials = encrypt_credentials(creds)
+    base_url = _resolve_backend_base_url(request)
+    webhook_url = f"{base_url}/api/v1/webhooks/{integ.provider}/{integ.id}"
+
+    record_activity(
+        db=db,
+        action="integration.webhook_secret_rotated",
+        entity_type="integration",
+        entity_id=integ.id,
+        user_id=current_user.id,
+        project_id=integ.project_id,
+        actor_email=current_user.email,
+        details={"message": f"Generated signed webhook endpoint for {integ.name}"},
+    )
+    db.commit()
+    return {
+        "integration_id": integ.id,
+        "provider": integ.provider,
+        "webhook_url": webhook_url,
+        "webhook_secret": new_secret,
+        "has_secret": True,
+        "note": "Store this webhook secret in your provider webhook settings. It will not be shown again in plain text.",
+    }
 
 
 @router.post("/{integration_id}/disconnect")

@@ -11,7 +11,7 @@ logger = logging.getLogger("team_obsidian.email")
 
 
 class EmailService:
-    """Delivers password reset and invitation emails via Resend, SMTP, or safe local dev outbox."""
+    """Delivers transactional password resets, handover sign-off requests, and drift alerts via Resend or SMTP."""
 
     def __init__(self):
         self._outbox_path = Path(__file__).resolve().parent.parent.parent / ".dev_mail_outbox.log"
@@ -23,6 +23,9 @@ class EmailService:
         )
 
     def send_email(self, to_email: str, subject: str, html_body: str, text_body: str) -> dict:
+        if not to_email or "@" not in to_email:
+            return {"delivered": False, "provider": "invalid_recipient"}
+
         if settings.RESEND_API_KEY:
             try:
                 res = requests.post(
@@ -42,7 +45,7 @@ class EmailService:
                 )
                 if 200 <= res.status_code < 300:
                     return {"delivered": True, "provider": "resend"}
-                logger.warning("Resend email delivery failed (%s): %s", res.status_code, res.text)
+                logger.warning("Resend email delivery failed (%s): %s", res.status_code, res.text[:200])
             except Exception as exc:
                 logger.warning("Resend email exception: %s", exc)
 
@@ -62,7 +65,6 @@ class EmailService:
             except Exception as exc:
                 logger.warning("SMTP email delivery failed: %s", exc)
 
-        # Development/test outbox fallback (never exposes token in API response)
         if settings.APP_ENV != "production":
             try:
                 with self._outbox_path.open("a", encoding="utf-8") as fh:
@@ -98,6 +100,63 @@ class EmailService:
             text_body=text_body,
         )
 
+    def send_handover_review_email(
+        self,
+        to_email: str,
+        reviewer_name: str,
+        handover_title: str,
+        project_name: str,
+        role: str,
+    ) -> dict:
+        approvals_url = f"{settings.FRONTEND_URL}/handover/approvals"
+        text_body = (
+            f"Hi {reviewer_name},\n\n"
+            f"You have been requested to review and sign off on handover dossier '{handover_title}' "
+            f"for project '{project_name}' as {role}.\n\n"
+            f"Review & Sign Off: {approvals_url}\n"
+        )
+        html_body = (
+            f"<p>Hi {reviewer_name},</p>"
+            f"<p>You have been requested to review and sign off on handover dossier "
+            f"<strong>{handover_title}</strong> for project <strong>{project_name}</strong> as <em>{role}</em>.</p>"
+            f"<p><a href=\"{approvals_url}\">Open Handover Approvals</a></p>"
+        )
+        return self.send_email(
+            to_email=to_email,
+            subject=f"TEAM OBSIDIAN — Sign-Off Requested: {handover_title}",
+            html_body=html_body,
+            text_body=text_body,
+        )
+
+    def send_drift_alert_email(
+        self,
+        to_email: str,
+        recipient_name: str,
+        project_name: str,
+        target_title: str,
+        drift_summary: str,
+        severity: str = "high",
+    ) -> dict:
+        evidence_url = f"{settings.FRONTEND_URL}/evidence"
+        text_body = (
+            f"Hi {recipient_name},\n\n"
+            f"[{severity.upper()} KNOWLEDGE DRIFT] Detected in project '{project_name}':\n"
+            f"Target: {target_title}\n"
+            f"Details: {drift_summary}\n\n"
+            f"Audit in Evidence Center: {evidence_url}\n"
+        )
+        html_body = (
+            f"<p>Hi {recipient_name},</p>"
+            f"<p><strong>[{severity.upper()} KNOWLEDGE DRIFT]</strong> Detected in project <strong>{project_name}</strong>:</p>"
+            f"<p><strong>Target:</strong> {target_title}<br/><strong>Details:</strong> {drift_summary}</p>"
+            f"<p><a href=\"{evidence_url}\">Inspect Drift in Evidence Center</a></p>"
+        )
+        return self.send_email(
+            to_email=to_email,
+            subject=f"TEAM OBSIDIAN — Knowledge Drift Alert ({severity.upper()}): {project_name}",
+            html_body=html_body,
+            text_body=text_body,
+        )
+
 
 email_service = EmailService()
-

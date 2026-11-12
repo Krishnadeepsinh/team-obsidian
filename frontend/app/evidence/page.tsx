@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, setStoredProjectId } from "@/lib/api"
-import { ShieldCheck, Search, ExternalLink, Clock, User, FolderGit2, Layers, RotateCcw } from "lucide-react"
+import { ShieldCheck, Search, ExternalLink, Clock, User, FolderGit2, Layers, RotateCcw, AlertTriangle, RefreshCw, CheckCircle2, X } from "lucide-react"
 
 const STATUS_FILTERS = [
   "All",
@@ -21,6 +21,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   github_pr: "Pull Requests",
   github_issue: "Issues",
   github_repository: "Repositories",
+  github_ast: "Code AST",
   document: "Documents",
   slack_message: "Slack",
   notion_page: "Notion Pages",
@@ -87,15 +88,19 @@ export default function EvidencePage() {
   const [auditNotes, setAuditNotes] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [auditError, setAuditError] = useState("")
+  const [driftAlerts, setDriftAlerts] = useState<any[]>([])
+  const [scanningDrift, setScanningDrift] = useState(false)
+  const [driftMessage, setDriftMessage] = useState("")
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
       const allSelected = isAllProjectsSelected()
       const storedPid = allSelected ? "" : getStoredProjectId()
-      const [projs, resRaw] = await Promise.all([
+      const [projs, resRaw, driftRaw] = await Promise.all([
         api.getProjects().catch(() => []),
         api.getEvidence(storedPid || undefined).catch(() => []),
+        api.getKnowledgeDrift(storedPid || undefined, "open").catch(() => []),
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
@@ -107,11 +112,37 @@ export default function EvidencePage() {
         finalRes = await api.getEvidence(resolvedPid).catch(() => [])
       }
       setEvidences(Array.isArray(finalRes) ? finalRes : [])
+      setDriftAlerts(Array.isArray(driftRaw) ? driftRaw : [])
       setVisibleLimit(PAGE_SIZE)
     } finally {
       setLoading(false)
     }
   }, [])
+
+  const handleScanDrift = async () => {
+    try {
+      setScanningDrift(true)
+      setDriftMessage("")
+      const res = await api.scanKnowledgeDrift(activeProject || undefined)
+      setDriftMessage(
+        res?.detected > 0
+          ? `Detected ${res.detected} new knowledge drift alert(s) against ADRs, risks, and claims.`
+          : "Drift scan complete — no new contradictions detected."
+      )
+      await loadData()
+    } catch (err: any) {
+      setDriftMessage(err?.message || "Drift scan failed.")
+    } finally {
+      setScanningDrift(false)
+    }
+  }
+
+  const handleResolveDrift = async (id: string, nextStatus: "resolved" | "dismissed") => {
+    try {
+      await api.updateDriftStatus(id, nextStatus)
+      setDriftAlerts((prev) => prev.filter((d) => d.id !== id))
+    } catch {}
+  }
 
   useEffect(() => {
     loadData()
@@ -238,21 +269,73 @@ export default function EvidencePage() {
           </p>
         </div>
 
-        <select
-          value={activeProject}
-          onChange={(e) => {
-            const pid = e.target.value
-            setActiveProject(pid)
-            setStoredProjectId(pid)
-          }}
-          className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
-        >
-          <option value="">All Accessible Projects</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleScanDrift}
+            disabled={scanningDrift}
+            className="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1.5 shadow-sm"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${scanningDrift ? "animate-spin" : ""}`} />
+            <span>{scanningDrift ? "Scanning Drift..." : "Scan for Drift"}</span>
+          </button>
+          <select
+            value={activeProject}
+            onChange={(e) => {
+              const pid = e.target.value
+              setActiveProject(pid)
+              setStoredProjectId(pid)
+            }}
+            className="px-3 py-2 rounded-xl text-xs bg-white border border-slate-200 text-slate-800 shadow-sm focus:outline-none focus:border-violet-500"
+          >
+            <option value="">All Accessible Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
+
+      {driftMessage && (
+        <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-xs font-medium">{driftMessage}</div>
+      )}
+
+      {driftAlerts.length > 0 && (
+        <div className="apple-card p-4 border border-amber-200 bg-amber-50/40 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold text-amber-900 flex items-center gap-1.5 uppercase tracking-wide">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+              <span>Knowledge Drift Alerts ({driftAlerts.length} Open)</span>
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {driftAlerts.slice(0, 6).map((da) => (
+              <div key={da.id} className="p-3 rounded-xl bg-white border border-amber-200/80 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-900 truncate">{da.target_title}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-bold uppercase flex-shrink-0">
+                    {da.severity} • {da.drift_type?.replace("_", " ")}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 line-clamp-2">{da.summary}</p>
+                <div className="flex items-center justify-end gap-1.5 pt-1">
+                  <button
+                    onClick={() => handleResolveDrift(da.id, "resolved")}
+                    className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 inline-flex items-center gap-1"
+                  >
+                    <CheckCircle2 className="w-3 h-3" /> Resolve
+                  </button>
+                  <button
+                    onClick={() => handleResolveDrift(da.id, "dismissed")}
+                    className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 inline-flex items-center gap-1"
+                  >
+                    <X className="w-3 h-3" /> Dismiss
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filters Card */}
       <div className="apple-card p-4 space-y-3">

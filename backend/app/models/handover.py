@@ -144,3 +144,21 @@ class HandoverVersion(Base):
     created_at = Column(DateTime, default=utc_now)
 
     handover = relationship("Handover", back_populates="versions")
+
+
+class ReadinessSimulation(Base):
+    __tablename__ = "readiness_simulations"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    handover_id = Column(String(36), ForeignKey("handovers.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True, index=True)
+    candidate_name = Column(String(255), nullable=False)
+    overall_score = Column(Float, nullable=False, default=0.0)
+    passed = Column(Boolean, nullable=False, default=False)
+    scenarios_json = Column(JSON, default=list)
+    responses_json = Column(JSON, default=list)
+    summary_feedback = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, index=True)
+
+    handover = relationship("Handover")

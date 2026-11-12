@@ -249,7 +249,7 @@ export default function DocumentsPage() {
             <span>Upload Project Knowledge Document</span>
           </h2>
           <span className="text-[11px] text-slate-400">
-            Supported (max {MAX_UPLOAD_MB} MB): PDF, DOCX, XLSX, CSV, MD, TXT, HTML, JSON, YAML, SQL, LOG
+            Supported (max {MAX_UPLOAD_MB} MB): PDF (text &amp; scanned OCR), PNG/JPG/WEBP diagrams, DOCX, XLSX, CSV, MD, TXT, HTML, JSON, YAML, SQL, LOG
           </span>
         </div>
 
@@ -274,7 +274,7 @@ export default function DocumentsPage() {
             ref={fileInputRef}
             type="file"
             required
-            accept=".pdf,.docx,.doc,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json,.yaml,.yml,.log,.rst,.sql,.xml"
+            accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.doc,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json,.yaml,.yml,.log,.rst,.sql,.xml"
             onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
             className="md:col-span-5 text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-200 file:bg-slate-50 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-100"
           />
@@ -354,6 +354,11 @@ export default function DocumentsPage() {
                 <span className="px-2 py-0.5 rounded-md bg-slate-50 border border-slate-100">
                   {((doc.file_size_bytes || 0) / 1024).toFixed(1)} KB
                 </span>
+                {doc.storage_key ? (
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    Cloud Object Storage
+                  </span>
+                ) : null}
               </div>
 
               {doc.extracted_text && (

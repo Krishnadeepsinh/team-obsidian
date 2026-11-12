@@ -23,6 +23,7 @@ from app.services.ai_engine import ai_engine
 from app.services.audit_service import record_activity
 from app.services.document_parser import document_parser
 from app.services.knowledge_extractor import extract_and_persist_project_knowledge
+from app.services.storage_service import storage_service
 
 logger = logging.getLogger("team_obsidian.documents")
 router = APIRouter(prefix="/documents", tags=["Document Library"])
@@ -33,6 +34,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 ALLOWED_EXTENSIONS = {
     "pdf", "docx", "doc", "xlsx", "xls", "txt", "md", "csv",
     "html", "htm", "json", "yaml", "yml", "log", "rst", "sql", "xml",
+    "png", "jpg", "jpeg", "webp",
 }
 DANGEROUS_EXTENSIONS = {"exe", "bat", "sh", "cmd", "ps1", "dll", "vbs", "jar", "bin", "msi", "js", "php"}
 
@@ -160,11 +162,15 @@ def upload_document(
     clean_title = _clean_text(title, 255) or _clean_text(os.path.splitext(filename)[0], 255) or filename
     author_label = _clean_text(current_user.name or current_user.email, 255) or "Workspace Member"
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    safe_filename = _safe_disk_name(sha256[:16], filename)
-    save_path = os.path.join(UPLOAD_DIR, safe_filename)[:500]
-    with open(save_path, "wb") as f:
-        f.write(file_bytes)
+    stored = storage_service.save_document_bytes(
+        project_id=project_id,
+        sha256_hash=sha256,
+        filename=filename,
+        file_bytes=file_bytes,
+        content_type=file.content_type,
+    )
+    meta = dict(parsed.get("metadata") or {})
+    meta["storage_backend"] = stored.get("backend", "local")
 
     doc_id = str(uuid.uuid4())
     doc = Document(
@@ -176,14 +182,16 @@ def upload_document(
         file_type=ext,
         mime_type=_clean_text(file.content_type, 120) or None,
         file_size_bytes=file_size,
-        storage_path=save_path,
+        storage_path=stored.get("storage_path"),
+        storage_bucket=stored.get("storage_bucket"),
+        storage_key=stored.get("storage_key"),
         sha256_hash=sha256,
         status="processed",
         extracted_text=extracted_text,
         chunk_count=len(chunks),
         page_count=parsed.get("page_count"),
         sheet_names=[_clean_text(str(s), 255) for s in (parsed.get("sheet_names") or []) if _clean_text(str(s))],
-        metadata_json=parsed.get("metadata") or {},
+        metadata_json=meta,
         uploaded_by=author_label,
     )
     db.add(doc)
@@ -354,9 +362,21 @@ def download_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     verify_project_access(doc.project_id, current_user, db)
-    if doc.storage_path and os.path.exists(doc.storage_path):
-        ascii_name = _ascii_header_filename(doc.filename, f"document.{doc.file_type or 'bin'}")
-        return FileResponse(doc.storage_path, filename=ascii_name)
+    ascii_name = _ascii_header_filename(doc.filename, f"document.{doc.file_type or 'bin'}")
+    raw_bytes = storage_service.read_document_bytes(
+        storage_bucket=getattr(doc, "storage_bucket", None),
+        storage_key=getattr(doc, "storage_key", None),
+        storage_path=doc.storage_path,
+    )
+    if raw_bytes is not None:
+        return Response(
+            content=raw_bytes,
+            media_type=doc.mime_type or "application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(doc.filename or ascii_name)}",
+                "X-Obsidian-Source": "supabase-storage" if getattr(doc, "storage_key", None) else "local-storage",
+            },
+        )
 
     # Cloud/ephemeral container fallback: reconstruct text from persisted PostgreSQL chunks
     chunks = (
@@ -405,11 +425,11 @@ def delete_document(
         ).delete(synchronize_session=False)
         db.query(Evidence).filter(Evidence.id.in_(ev_ids)).delete(synchronize_session=False)
 
-    if doc.storage_path and os.path.exists(doc.storage_path):
-        try:
-            os.remove(doc.storage_path)
-        except Exception:
-            pass
+    storage_service.delete_document_bytes(
+        storage_bucket=getattr(doc, "storage_bucket", None),
+        storage_key=getattr(doc, "storage_key", None),
+        storage_path=doc.storage_path,
+    )
 
     title = doc.title
     pid = doc.project_id

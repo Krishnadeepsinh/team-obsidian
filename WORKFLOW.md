@@ -146,3 +146,4 @@ sequenceDiagram
 - **Frontend (`Vercel`)**: Static + dynamic Next.js 16 build (`31/31` routes) with `NEXT_PUBLIC_API_URL` targeting Render and automatic `obsidian_project_changed` state recovery.
 - **Backend (`Render`)**: `uvicorn app.main:app` with `Alembic` startup migrations (`python -m alembic upgrade head`), IPv4 Supabase Pooler PostgreSQL connection pooling, Fernet secret encryption, `384-dim` API embeddings (`gemini-embedding-001`) in production to stay well inside 512 MB RAM limits, and `BackgroundTasks` isolation for heavy LLM extraction.
 - **Cold-Start Resilience**: Client `api.ts` retries transient `502`/`503`/`504` gateway wake-up responses cleanly (`2s -> 4s -> 6s` backoff).
+

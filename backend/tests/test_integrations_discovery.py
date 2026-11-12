@@ -356,3 +356,4 @@ def test_github_oauth_callback_redirects_with_integration_id():
         assert "/integrations?connected=github&integration_id=" in loc
     finally:
         _cleanup_context(ctx["org_id"], ctx["project_id"])
+

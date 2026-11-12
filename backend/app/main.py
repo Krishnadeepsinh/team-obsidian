@@ -23,6 +23,7 @@ from app.api.v1.risks import router as risks_router
 from app.api.v1.seed import router as seed_router
 from app.api.v1.tasks import router as tasks_router
 from app.api.v1.team import router as team_router
+from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.workspaces import router as workspaces_router
 
 logging.basicConfig(
@@ -73,6 +74,7 @@ app.include_router(evidence_router, prefix=api_prefix)
 app.include_router(handover_router, prefix=api_prefix)
 app.include_router(team_router, prefix=api_prefix)
 app.include_router(seed_router, prefix=api_prefix)
+app.include_router(webhooks_router, prefix=api_prefix)
 
 
 @app.get("/health")

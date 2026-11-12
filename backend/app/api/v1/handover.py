@@ -24,8 +24,11 @@ from app.models.handover import (
     HandoverClaim,
     HandoverSection,
     HandoverVersion,
+    ReadinessSimulation,
 )
-from app.models.workspace import Project, User
+from app.models.workspace import Project, ProjectMember, User
+from app.services.email_service import email_service
+from app.services.readiness_simulator import evaluate_simulation_submission, generate_scenarios_for_handover
 from app.schemas.handover import (
     ClaimVerifyRequest,
     HandoverApprovalRequest,
@@ -89,7 +92,7 @@ def run_reconstruction(
     sources = req.selected_source_ids or req.selected_sources or []
     approvers_cfg = [a.model_dump() for a in req.approvers] if req.approvers else None
 
-    return handover_engine.reconstruct_and_generate(
+    h = handover_engine.reconstruct_and_generate(
         db=db,
         project_id=project.id,
         departing_name=req.departing_employee_name.strip(),
@@ -102,6 +105,8 @@ def run_reconstruction(
         approvers=approvers_cfg,
         created_by_user_id=current_user.id,
     )
+    _notify_stakeholders_of_handover(db, h, role_label="Stakeholder / Reviewer")
+    return h
 
 
 @router.put("/{handover_id}/sections/{section_id}", response_model=HandoverSectionResponse)
@@ -373,6 +378,111 @@ def sign_off_approval(
     db.commit()
     db.refresh(h)
     return h
+
+
+def _notify_stakeholders_of_handover(db: Session, h: Handover, role_label: str = "Reviewer") -> None:
+    try:
+        proj = db.query(Project).filter(Project.id == h.project_id).first()
+        pname = proj.name if proj else "Project"
+        members = db.query(ProjectMember).filter(ProjectMember.project_id == h.project_id).all()
+        user_ids = [m.user_id for m in members]
+        if proj and proj.owner_id and proj.owner_id not in user_ids:
+            user_ids.append(proj.owner_id)
+        for u in db.query(User).filter(User.id.in_(user_ids)).all() if user_ids else []:
+            email_service.send_handover_review_email(
+                to_email=u.email,
+                reviewer_name=u.name or u.email,
+                handover_title=h.title,
+                project_name=pname,
+                role=role_label,
+            )
+    except Exception:
+        pass
+
+
+@router.get("/{handover_id}/simulator")
+def get_readiness_simulator(
+    handover_id: str,
+    regenerate: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return project-grounded incident/ADR readiness scenarios and evaluation history for this handover."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db)
+
+    history = (
+        db.query(ReadinessSimulation)
+        .filter(ReadinessSimulation.handover_id == handover_id)
+        .order_by(ReadinessSimulation.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    if history and not regenerate and history[0].scenarios_json:
+        scenarios = history[0].scenarios_json
+    else:
+        scenarios = generate_scenarios_for_handover(db, h)
+
+    return {
+        "handover_id": h.id,
+        "handover_title": h.title,
+        "incoming_employee_name": h.incoming_employee_name,
+        "departing_employee_name": h.departing_employee_name,
+        "scenarios": scenarios,
+        "latest_score": (h.reconstruction_stats or {}).get("latest_readiness_score"),
+        "readiness_passed": (h.reconstruction_stats or {}).get("readiness_passed", False),
+        "history": [
+            {
+                "id": sim.id,
+                "candidate_name": sim.candidate_name,
+                "overall_score": sim.overall_score,
+                "passed": sim.passed,
+                "responses": sim.responses_json or [],
+                "summary_feedback": sim.summary_feedback,
+                "created_at": sim.created_at.isoformat() if sim.created_at else "",
+            }
+            for sim in history
+        ],
+    }
+
+
+@router.post("/{handover_id}/simulator/evaluate")
+def evaluate_readiness_simulator(
+    handover_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Grade incoming engineer answers across project SPOF/ADR/dependency readiness scenarios."""
+    h = db.query(Handover).filter(Handover.id == handover_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    verify_project_access(h.project_id, current_user, db, require_write=True)
+
+    scenarios = payload.get("scenarios") or generate_scenarios_for_handover(db, h)
+    answers = payload.get("answers") or {}
+    candidate_name = (payload.get("candidate_name") or h.incoming_employee_name or current_user.name or current_user.email).strip()
+
+    sim = evaluate_simulation_submission(
+        db=db,
+        handover=h,
+        candidate_name=candidate_name,
+        user_id=current_user.id,
+        scenarios=scenarios,
+        answers=answers,
+    )
+    return {
+        "id": sim.id,
+        "handover_id": sim.handover_id,
+        "candidate_name": sim.candidate_name,
+        "overall_score": sim.overall_score,
+        "passed": sim.passed,
+        "responses": sim.responses_json or [],
+        "summary_feedback": sim.summary_feedback,
+        "created_at": sim.created_at.isoformat() if sim.created_at else "",
+    }
 
 
 @router.post("/{handover_id}/status", response_model=HandoverResponse)

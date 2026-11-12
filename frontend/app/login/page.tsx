@@ -1,9 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { api } from "@/lib/api"
+import { api, warmUpBackendHealth } from "@/lib/api"
 import { Layers, ArrowRight, Lock, Mail, Sparkles } from "lucide-react"
 
 export default function LoginPage() {
@@ -11,7 +11,17 @@ export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
+  const [wakingApi, setWakingApi] = useState(false)
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    warmUpBackendHealth()
+    const onWaking = (ev: Event) => {
+      setWakingApi(Boolean((ev as CustomEvent)?.detail?.waking))
+    }
+    window.addEventListener("obsidian_api_waking", onWaking)
+    return () => window.removeEventListener("obsidian_api_waking", onWaking)
+  }, [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -48,6 +58,11 @@ export default function LoginPage() {
         </div>
 
         <div className="apple-card p-6 sm:p-7 space-y-5">
+          {wakingApi && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium">
+              Waking cloud API instance from sleep — signing in automatically once ready...
+            </div>
+          )}
           {error && (
             <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
               {error}

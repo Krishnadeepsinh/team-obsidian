@@ -237,6 +237,7 @@ class GitHubConnector(BaseConnector):
         owner_repo: str,
         since_iso: Optional[str] = None,
         max_pages: int = 10,
+        include_code_ast: bool = True,
     ) -> List[Dict[str, Any]]:
         """Sync PRs (with reviews & comments), commits, issues (with comments), releases, and branches."""
         if not self.token:
@@ -474,6 +475,21 @@ class GitHubConnector(BaseConnector):
         except Exception:
             pass
 
+        # 6. Static Code-Tree & AST Architecture Indexing
+        if include_code_ast:
+            try:
+                from app.services.code_ast_indexer import fetch_and_index_github_ast
+
+                ast_bundle = fetch_and_index_github_ast(self, owner_repo, max_files=16)
+                for ast_rec in ast_bundle.get("records") or []:
+                    ast_rec.setdefault("metadata", {})["ast_facts"] = {
+                        "external_packages": ast_bundle.get("external_packages") or [],
+                        "top_directories": ast_bundle.get("top_directories") or [],
+                    }
+                    records.append(ast_rec)
+            except Exception:
+                pass
+
         return records
 
     def sync(
@@ -483,6 +499,7 @@ class GitHubConnector(BaseConnector):
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         cfg = config or {}
         cursor = dict(sync_cursor or {})
+        include_ast = cfg.get("include_code_ast", True) is not False
         repos: List[str] = []
         if cfg.get("repos") and isinstance(cfg["repos"], list):
             repos = [r.strip() for r in cfg["repos"] if isinstance(r, str) and "/" in r]
@@ -501,7 +518,10 @@ class GitHubConnector(BaseConnector):
         now_iso = datetime.now(timezone.utc).isoformat()
         for repo_name in repos:
             since_iso = cursor.get(repo_name)
-            recs = self.sync_repository(repo_name, since_iso=since_iso)
+            if include_ast:
+                recs = self.sync_repository(repo_name, since_iso=since_iso)
+            else:
+                recs = self.sync_repository(repo_name, since_iso=since_iso, include_code_ast=False)
             all_records.extend(recs)
             cursor[repo_name] = now_iso
 

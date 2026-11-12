@@ -256,10 +256,13 @@ def get_user_context(
 
 @router.get("/capabilities")
 def get_auth_capabilities() -> Dict[str, Any]:
-    """Report non-sensitive runtime capabilities for password recovery email and OAuth providers."""
+    """Report non-sensitive runtime capabilities for password recovery email, storage, and OAuth providers."""
+    from app.services.storage_service import storage_service
+
     return {
         "app_env": settings.APP_ENV,
         "email_delivery_configured": email_service.is_configured(),
+        "supabase_storage_configured": storage_service.is_supabase_storage_configured(),
         "oauth_providers": {
             "github": bool(settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET),
             "slack": bool(settings.SLACK_CLIENT_ID and settings.SLACK_CLIENT_SECRET),

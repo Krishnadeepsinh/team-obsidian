@@ -125,17 +125,24 @@ def test_multiformat_pdf_docx_xlsx_and_yaml_uploads():
         assert scan_data["chunk_count"] >= 1
         assert scan_data["title"] == "scanned_diagram"
 
-        # Simulate ephemeral cloud disk loss and confirm chunk reconstruction download still succeeds
+        # Simulate ephemeral cloud disk loss: durable Supabase Storage returns original bytes if configured,
+        # otherwise reconstructs searchable text from persisted PostgreSQL chunks.
         db_check = SessionLocal()
+        has_durable_key = False
         try:
             db_doc = db_check.query(Document).filter(Document.id == scan_data["id"]).first()
+            has_durable_key = bool(db_doc and db_doc.storage_key)
             if db_doc and db_doc.storage_path and os.path.exists(db_doc.storage_path):
                 os.remove(db_doc.storage_path)
         finally:
             db_check.close()
         r_dl = client.get(f"/api/v1/documents/{scan_data['id']}/download", headers=headers)
         assert r_dl.status_code == 200
-        assert "no selectable embedded text layer" in r_dl.text
+        if has_durable_key:
+            assert r_dl.headers.get("x-obsidian-source") == "supabase-storage"
+            assert r_dl.content.startswith(b"%PDF-")
+        else:
+            assert ("no selectable embedded text layer" in r_dl.text) or ("Scanned PDF" in r_dl.text)
 
         # 3. Valid DOCX with heading + table
         d = docx.Document()
@@ -250,9 +257,11 @@ def test_legacy_binary_and_dangerous_and_unicode_long_inputs():
                 os.remove(db_doc.storage_path)
         finally:
             db_check.close()
+        r_chunks = client.get(f"/api/v1/documents/{doc_rec['id']}/chunks", headers=headers)
+        assert r_chunks.status_code == 200
+        assert "\x00" not in r_chunks.text
         r_dl = client.get(f"/api/v1/documents/{doc_rec['id']}/download", headers=headers)
         assert r_dl.status_code == 200
-        assert "\x00" not in r_dl.text
     finally:
         _cleanup_org(org_id)
 

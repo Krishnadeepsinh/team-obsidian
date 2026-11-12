@@ -57,6 +57,8 @@ class DocumentResponse(BaseModel):
     file_type: str
     mime_type: Optional[str] = None
     file_size_bytes: int
+    storage_bucket: Optional[str] = None
+    storage_key: Optional[str] = None
     sha256_hash: str
     status: str
     chunk_count: int

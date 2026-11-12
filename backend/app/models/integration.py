@@ -109,6 +109,8 @@ class Document(Base):
     mime_type = Column(String(120), nullable=True)
     file_size_bytes = Column(Integer, default=0)
     storage_path = Column(String(500), nullable=True)
+    storage_bucket = Column(String(120), nullable=True)
+    storage_key = Column(String(500), nullable=True)
     sha256_hash = Column(String(64), nullable=False, index=True)
     status = Column(String(50), default="processed")
     extracted_text = Column(Text, nullable=True)

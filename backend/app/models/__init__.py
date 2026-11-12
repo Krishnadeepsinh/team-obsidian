@@ -27,6 +27,7 @@ from app.models.knowledge import (
     RiskItem,
     KnowledgeGap,
     EmbeddingRecord,
+    KnowledgeDriftEvent,
 )
 from app.models.handover import (
     Handover,
@@ -34,6 +35,7 @@ from app.models.handover import (
     HandoverClaim,
     HandoverApproval,
     HandoverVersion,
+    ReadinessSimulation,
 )
 
 __all__ = [
@@ -62,9 +64,11 @@ __all__ = [
     "RiskItem",
     "KnowledgeGap",
     "EmbeddingRecord",
+    "KnowledgeDriftEvent",
     "Handover",
     "HandoverSection",
     "HandoverClaim",
     "HandoverApproval",
     "HandoverVersion",
+    "ReadinessSimulation",
 ]

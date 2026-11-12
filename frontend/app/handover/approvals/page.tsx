@@ -128,6 +128,17 @@ export default function ApprovalsPage() {
               <span className="text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase bg-violet-50 text-violet-700 border border-violet-200">
                 Status: {handover.status?.replace("_", " ")}
               </span>
+              {handover.reconstruction_stats?.latest_readiness_score !== undefined && (
+                <span
+                  className={`ml-2 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase border ${
+                    handover.reconstruction_stats?.readiness_passed
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-amber-50 text-amber-700 border-amber-200"
+                  }`}
+                >
+                  Readiness: {handover.reconstruction_stats.latest_readiness_score}%
+                </span>
+              )}
               <h2 className="text-base font-bold text-slate-900 mt-1">{handover.title}</h2>
               <p className="text-xs text-slate-500">
                 {handover.departing_employee_name} → {handover.incoming_employee_name}
@@ -135,6 +146,12 @@ export default function ApprovalsPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Link
+                href="/handover/simulator"
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 flex items-center gap-1.5"
+              >
+                Run Readiness Simulator →
+              </Link>
               <button
                 disabled={submitting}
                 onClick={() => handleLifecycleStatus("published")}

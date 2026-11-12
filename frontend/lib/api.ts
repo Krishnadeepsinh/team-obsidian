@@ -14,22 +14,31 @@ function getAuthHeaders(extra: Record<string, string> = {}): Record<string, stri
 async function performFetchWithRetry(url: string, options: RequestInit): Promise<Response> {
   const retryableStatuses = new Set([502, 503, 504])
   const retryDelaysMs = [2000, 4000, 6000]
+  const emitWaking = (waking: boolean, attempt: number) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("obsidian_api_waking", { detail: { waking, attempt } }))
+    }
+  }
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
     try {
       const res = await fetch(url, options)
       if (attempt < retryDelaysMs.length && retryableStatuses.has(res.status)) {
+        emitWaking(true, attempt + 1)
         await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]))
         continue
       }
+      if (attempt > 0) emitWaking(false, attempt)
       return res
     } catch (err: any) {
       const isNetworkError =
         err instanceof TypeError ||
         (typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch"))
       if (attempt < retryDelaysMs.length && isNetworkError) {
+        emitWaking(true, attempt + 1)
         await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]))
         continue
       }
+      emitWaking(false, attempt)
       if (isNetworkError) {
         throw new Error(
           `Cannot reach TEAM OBSIDIAN API (${API_BASE}). If the backend just woke from cold start, please retry in a few seconds.`
@@ -38,7 +47,14 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
       throw err
     }
   }
+  emitWaking(false, 0)
   throw new Error(`Cannot reach TEAM OBSIDIAN API (${API_BASE}).`)
+}
+
+export function warmUpBackendHealth(): void {
+  if (typeof window === "undefined") return
+  const rootUrl = API_BASE.replace(/\/api\/v1\/?$/, "")
+  fetch(`${rootUrl}/health`, { method: "GET", cache: "no-store" }).catch(() => {})
 }
 
 async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -482,6 +498,37 @@ export const api = {
     }),
   downloadHandoverPdf: async (handoverId: string) =>
     downloadAuthFile(`/handovers/${handoverId}/pdf`, `Handover_${handoverId.slice(0, 8)}.pdf`),
+  getReadinessSimulator: async (handoverId: string, regenerate: boolean = false) =>
+    fetchJson<any>(`/handovers/${handoverId}/simulator?regenerate=${regenerate ? "true" : "false"}`),
+  evaluateReadinessSimulator: async (
+    handoverId: string,
+    payload: { candidate_name?: string; scenarios: any[]; answers: Record<string, string> }
+  ) =>
+    fetchJson<any>(`/handovers/${handoverId}/simulator/evaluate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Knowledge Drift & Realtime Webhooks
+  getKnowledgeDrift: async (projectId?: string, status: string = "all") => {
+    const params = new URLSearchParams()
+    if (projectId) params.set("project_id", projectId)
+    if (status) params.set("status", status)
+    return fetchJson<any[]>(`/knowledge/drift?${params.toString()}`)
+  },
+  scanKnowledgeDrift: async (projectId?: string) => {
+    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
+    return fetchJson<any>(`/knowledge/drift/scan${q}`, { method: "POST" })
+  },
+  updateDriftStatus: async (driftId: string, status: "acknowledged" | "resolved" | "dismissed") =>
+    fetchJson<any>(`/knowledge/drift/${driftId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+  getWebhookConfig: async (integrationId: string) =>
+    fetchJson<any>(`/integrations/${integrationId}/webhook-config`),
+  generateWebhookSecret: async (integrationId: string) =>
+    fetchJson<any>(`/integrations/${integrationId}/webhook-config`, { method: "POST" }),
 
   // Organization, Team, Notifications, Logs & Settings
   getTeamMembers: async (projectId?: string) => {

@@ -1,14 +1,17 @@
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.permissions import get_user_accessible_project_ids, verify_project_access
+from app.core.permissions import get_effective_project, get_user_accessible_project_ids, verify_project_access
 from app.core.security import get_current_user
 from app.models.knowledge import (
     Decision,
     Dependency,
+    KnowledgeDriftEvent,
     KnowledgeEntity,
     KnowledgeGap,
     KnowledgeRelationship,
@@ -17,6 +20,7 @@ from app.models.knowledge import (
     TaskItem,
 )
 from app.models.workspace import User
+from app.services.drift_detector import scan_project_for_drift
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Intelligence"])
 
@@ -357,3 +361,83 @@ def get_dependencies(
                     "created_at": "",
                 })
     return results
+
+
+class DriftStatusUpdate(BaseModel):
+    status: str  # acknowledged, resolved, dismissed
+
+
+@router.get("/drift")
+def list_knowledge_drift(
+    project_id: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    if project_id:
+        verify_project_access(project_id, current_user, db)
+        p_ids = [project_id]
+    else:
+        p_ids = get_user_accessible_project_ids(current_user, db)
+    if not p_ids:
+        return []
+
+    query = db.query(KnowledgeDriftEvent).filter(KnowledgeDriftEvent.project_id.in_(p_ids))
+    if status and status.lower() != "all":
+        query = query.filter(KnowledgeDriftEvent.status == status.lower())
+    rows = query.order_by(KnowledgeDriftEvent.created_at.desc()).limit(100).all()
+    return [
+        {
+            "id": e.id,
+            "project_id": e.project_id,
+            "integration_id": e.integration_id,
+            "source_record_id": e.source_record_id,
+            "drift_type": e.drift_type,
+            "severity": e.severity,
+            "target_entity_type": e.target_entity_type,
+            "target_entity_id": e.target_entity_id,
+            "target_title": e.target_title,
+            "summary": e.summary,
+            "evidence_excerpt": e.evidence_excerpt,
+            "status": e.status,
+            "metadata_json": e.metadata_json or {},
+            "created_at": e.created_at.isoformat() if e.created_at else "",
+            "resolved_at": e.resolved_at.isoformat() if e.resolved_at else None,
+        }
+        for e in rows
+    ]
+
+
+@router.post("/drift/scan")
+def trigger_drift_scan(
+    project_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    proj = get_effective_project(project_id, current_user, db, require_write=True)
+    if not proj:
+        raise HTTPException(status_code=404, detail="No accessible project found.")
+    return scan_project_for_drift(db, proj.id, actor_user_id=current_user.id)
+
+
+@router.patch("/drift/{drift_id}")
+def update_drift_status(
+    drift_id: str,
+    req: DriftStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    ev = db.query(KnowledgeDriftEvent).filter(KnowledgeDriftEvent.id == drift_id).first()
+    if not ev:
+        raise HTTPException(status_code=404, detail="Drift alert not found")
+    verify_project_access(ev.project_id, current_user, db, require_write=True)
+    allowed = {"open", "acknowledged", "resolved", "dismissed"}
+    next_status = req.status.strip().lower()
+    if next_status not in allowed:
+        raise HTTPException(status_code=400, detail=f"Status must be one of {sorted(allowed)}")
+    ev.status = next_status
+    if next_status in ("resolved", "dismissed"):
+        ev.resolved_by_user_id = current_user.id
+        ev.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"id": ev.id, "status": ev.status, "resolved_at": ev.resolved_at.isoformat() if ev.resolved_at else None}

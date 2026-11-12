@@ -190,3 +190,27 @@ class EmbeddingRecord(Base):
     embedding = Column(JSON, nullable=False)
     embedding_vector = Column(Vector(384).with_variant(JSON(), "sqlite"), nullable=True)
     created_at = Column(DateTime, default=utc_now)
+
+
+class KnowledgeDriftEvent(Base):
+    __tablename__ = "knowledge_drift_events"
+    __table_args__ = (
+        Index("idx_drift_project_status", "project_id", "status"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_id = Column(String(36), nullable=True)
+    source_record_id = Column(String(36), nullable=True)
+    drift_type = Column(String(50), nullable=False, default="contradiction")  # contradiction, superseded, ownership_change, dependency_shift, doc_stale
+    severity = Column(String(20), nullable=False, default="high")  # critical, high, medium, low
+    target_entity_type = Column(String(50), nullable=False, default="decision")  # decision, risk, dependency, handover_claim, evidence
+    target_entity_id = Column(String(36), nullable=False)
+    target_title = Column(String(500), nullable=False)
+    summary = Column(Text, nullable=False)
+    evidence_excerpt = Column(Text, nullable=True)
+    status = Column(String(30), nullable=False, default="open")  # open, acknowledged, resolved, dismissed
+    resolved_by_user_id = Column(String(36), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    metadata_json = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=utc_now, index=True)

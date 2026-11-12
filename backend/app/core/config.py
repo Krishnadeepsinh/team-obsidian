@@ -45,6 +45,7 @@ class Settings:
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     SUPABASE_PROJECT_REF: str = os.getenv("SUPABASE_PROJECT_REF", "")
+    SUPABASE_STORAGE_BUCKET: str = os.getenv("SUPABASE_STORAGE_BUCKET", "obsidian-documents")
 
     # Security: Never allow insecure hardcoded JWT secrets in production
     _raw_secret = os.getenv("SECRET_KEY", "").strip()
