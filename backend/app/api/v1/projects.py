@@ -10,6 +10,8 @@ from app.core.permissions import (
     ALL_ROLES,
     create_personal_workspace_for_user,
     get_user_accessible_project_ids,
+    get_user_project_role,
+    normalize_role,
     verify_project_access,
 )
 from app.core.security import get_current_user
@@ -283,8 +285,25 @@ def add_project_member(
     db: Session = Depends(get_db),
 ):
     p = verify_project_access(project_id, current_user, db, require_admin=True)
-    if member_in.project_role not in ALL_ROLES:
+    normalized_member_role = normalize_role(member_in.project_role)
+    if normalized_member_role not in ALL_ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid project role '{member_in.project_role}'.")
+    if normalized_member_role == "org_admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Organization admin ('org_admin') cannot be granted via project membership.",
+        )
+
+    actor_role = get_user_project_role(p, current_user, db)
+    if normalized_member_role in {"project_owner", "workspace_owner"} and actor_role not in {
+        "org_admin",
+        "workspace_owner",
+        "project_owner",
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Only project or workspace owners can assign owner roles.",
+        )
 
     target_user = None
     if member_in.user_id:
@@ -302,14 +321,14 @@ def add_project_member(
     )
 
     if existing:
-        existing.project_role = member_in.project_role
+        existing.project_role = normalized_member_role
         existing.status = member_in.status
         pm = existing
     else:
         pm = ProjectMember(
             project_id=project_id,
             user_id=target_user.id,
-            project_role=member_in.project_role,
+            project_role=normalized_member_role,
             status=member_in.status,
         )
         db.add(pm)
@@ -319,7 +338,7 @@ def add_project_member(
         user_id=target_user.id,
         project_id=p.id,
         title=f"Project Role Assigned: {p.name}",
-        message=f"You were assigned role '{member_in.project_role}' on project '{p.name}'.",
+        message=f"You were assigned role '{normalized_member_role}' on project '{p.name}'.",
         notif_type="info",
         link=f"/projects",
     )
@@ -331,7 +350,7 @@ def add_project_member(
         user_id=current_user.id,
         project_id=p.id,
         actor_email=current_user.email,
-        details={"message": f"Set {target_user.email} role to {member_in.project_role} on {p.name}"},
+        details={"message": f"Set {target_user.email} role to {normalized_member_role} on {p.name}"},
     )
     db.commit()
     db.refresh(pm)
@@ -354,7 +373,9 @@ def remove_project_member(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    verify_project_access(project_id, current_user, db, require_admin=True)
+    p = verify_project_access(project_id, current_user, db, require_admin=True)
+    if user_id == p.creator_id:
+        raise HTTPException(status_code=400, detail="Cannot remove the project owner.")
     pm = (
         db.query(ProjectMember)
         .filter(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id)

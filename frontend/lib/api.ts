@@ -98,6 +98,18 @@ async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promis
   })
 
   if (!res.ok) {
+    if (
+      res.status === 401 &&
+      typeof window !== "undefined" &&
+      !endpoint.startsWith("/auth/login") &&
+      !endpoint.startsWith("/auth/register") &&
+      !endpoint.startsWith("/auth/forgot-password") &&
+      !endpoint.startsWith("/auth/reset-password")
+    ) {
+      localStorage.removeItem("obsidian_token")
+      localStorage.removeItem("obsidian_user")
+      window.dispatchEvent(new Event("obsidian_session_expired"))
+    }
     let detail = res.statusText
     try {
       const parsed = await res.json()
@@ -239,10 +251,12 @@ export const api = {
     })
   },
   changePassword: async (current_password: string, new_password: string) => {
-    return fetchJson<any>("/auth/change-password", {
+    const res = await fetchJson<any>("/auth/change-password", {
       method: "POST",
       body: JSON.stringify({ current_password, new_password }),
     })
+    persistAuthSession(res)
+    return res
   },
   forgotPassword: async (email: string) => {
     return fetchJson<any>("/auth/forgot-password", {

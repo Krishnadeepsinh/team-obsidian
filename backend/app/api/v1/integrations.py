@@ -1,9 +1,10 @@
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
@@ -199,16 +200,42 @@ def _run_background_sync_extraction(project_id: str, actor_user_id: str) -> None
         bg_db.close()
 
 
+_SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+(?::\d{1,5})?$")
+
+
+def _is_trusted_forwarded_host(host: str) -> bool:
+    if not host or ".." in host or not _SAFE_HOST_RE.fullmatch(host):
+        return False
+    hostname = host.split(":")[0].lower()
+    if hostname in {"localhost", "127.0.0.1", "testserver"} or hostname.endswith(".onrender.com"):
+        return True
+    for origin in [settings.BACKEND_URL, *(settings.CORS_ORIGINS or [])]:
+        try:
+            netloc = urlparse((origin or "").strip()).hostname
+            if netloc and hostname == netloc.lower():
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _resolve_backend_base_url(request: Request) -> str:
     """Resolve external backend base URL cleanly in local dev and reverse-proxied cloud environments."""
     configured = (settings.BACKEND_URL or "").strip().rstrip("/")
     if configured and not configured.startswith("http://localhost") and not configured.startswith("http://127.0.0.1"):
         return configured
-    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    if forwarded_host:
-        proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-        if not forwarded_host.startswith("localhost") and not forwarded_host.startswith("127.0.0.1"):
+
+    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    forwarded_host = raw_host.split(",")[0].strip()
+    if _is_trusted_forwarded_host(forwarded_host):
+        raw_proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+        proto = raw_proto.split(",")[0].strip().lower()
+        if proto not in {"http", "https"}:
+            proto = request.url.scheme if request.url.scheme in {"http", "https"} else "https"
+        hostname = forwarded_host.split(":")[0].lower()
+        if hostname not in {"localhost", "127.0.0.1", "testserver"}:
             return f"{proto}://{forwarded_host}".rstrip("/")
+
     return configured or str(request.base_url).rstrip("/")
 
 

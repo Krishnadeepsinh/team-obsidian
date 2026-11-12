@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -12,12 +13,15 @@ from app.core.permissions import (
     get_user_accessible_projects,
     normalize_role,
 )
+from app.core.rate_limiter import get_client_ip, rate_limiter
 from app.core.security import (
     create_access_token,
+    decode_access_token,
     generate_reset_token,
     get_current_user,
     get_password_hash,
     hash_reset_token,
+    revoke_token_jti,
     verify_and_upgrade_password,
     verify_password,
 )
@@ -52,6 +56,12 @@ def require_roles(allowed_roles: list):
 
 @router.post("/register", response_model=Token)
 def register(user_in: UserRegister, request: Request, db: Session = Depends(get_db)):
+    rate_limiter.check(
+        f"register:{get_client_ip(request)}",
+        limit=60,
+        window_seconds=300,
+        detail="Too many registration attempts. Please try again later.",
+    )
     normalized_email = user_in.email.strip().lower()
     existing = db.query(User).filter(User.email == normalized_email).first()
     if existing:
@@ -127,10 +137,25 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
 
 @router.post("/login", response_model=Token)
 def login(login_in: UserLogin, request: Request, db: Session = Depends(get_db)):
+    ip = get_client_ip(request)
     normalized_email = login_in.email.strip().lower()
+    fail_key = f"login_fail:{ip}:{normalized_email}"
+    rate_limiter.check(
+        f"login_ip:{ip}",
+        limit=60,
+        window_seconds=60,
+        detail="Too many login attempts from this network. Please retry shortly.",
+    )
+    rate_limiter.check(
+        fail_key,
+        limit=10,
+        window_seconds=60,
+        detail="Too many failed login attempts for this account. Please wait a minute before retrying.",
+    )
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_and_upgrade_password(login_in.password, user, db):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+    rate_limiter.reset_key(fail_key)
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account has been deactivated.")
 
@@ -188,6 +213,11 @@ def logout(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        payload = decode_access_token(auth_header[7:].strip())
+        if payload:
+            revoke_token_jti(payload.get("jti"), payload.get("exp"))
     record_activity(
         db=db,
         action="auth.logout",
@@ -291,6 +321,14 @@ def get_auth_capabilities() -> Dict[str, Any]:
 @router.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """Create a single-use hashed password reset token and deliver via email. Never returns token in HTTP response."""
+    ip = get_client_ip(request)
+    normalized_email = req.email.strip().lower()
+    rate_limiter.check(
+        f"forgot:{ip}:{normalized_email}",
+        limit=8,
+        window_seconds=300,
+        detail="Too many password reset requests. Please try again later.",
+    )
     if settings.APP_ENV == "production" and not email_service.is_configured():
         raise HTTPException(
             status_code=503,
@@ -299,7 +337,6 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
                 "(RESEND_API_KEY or SMTP credentials required). Signed-in users can update their password under Profile."
             ),
         )
-    normalized_email = req.email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
     if user and user.is_active:
         # Invalidate any prior unused reset tokens for this user
@@ -339,7 +376,14 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
 @router.post("/reset-password")
 def reset_password(req: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """Verify single-use expiring password reset token and update password."""
+    ip = get_client_ip(request)
     normalized_email = req.email.strip().lower()
+    rate_limiter.check(
+        f"reset:{ip}:{normalized_email}",
+        limit=8,
+        window_seconds=300,
+        detail="Too many reset verification attempts. Please wait a few minutes.",
+    )
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
@@ -386,9 +430,16 @@ def reset_password(req: ResetPasswordRequest, request: Request, db: Session = De
 @router.post("/change-password")
 def change_password(
     req: ChangePasswordRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    rate_limiter.check(
+        f"chgpwd:{current_user.id}",
+        limit=10,
+        window_seconds=300,
+        detail="Too many password change attempts. Please wait a few minutes.",
+    )
     if not verify_password(req.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
     now = datetime.now(timezone.utc)
@@ -403,9 +454,31 @@ def change_password(
         org_id=current_user.org_id,
         actor_email=current_user.email,
         details={"message": "User updated account password"},
+        ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return {"status": "success", "message": "Password updated successfully."}
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        payload = decode_access_token(auth_header[7:].strip())
+        if payload:
+            revoke_token_jti(payload.get("jti"), payload.get("exp"))
+
+    accessible_projects = get_user_accessible_projects(current_user, db)
+    active_project_id = accessible_projects[0].id if accessible_projects else None
+    new_token = create_access_token({
+        "sub": current_user.id,
+        "email": current_user.email,
+        "role": current_user.role,
+        "workspace_id": current_user.personal_workspace_id,
+        "project_id": active_project_id,
+    })
+    return {
+        "status": "success",
+        "message": "Password updated successfully.",
+        "access_token": new_token,
+        "token_type": "bearer",
+    }
 
 
 @router.put("/me", response_model=UserResponse)
@@ -415,13 +488,26 @@ def update_profile(
     db: Session = Depends(get_db),
 ):
     if profile_in.name is not None:
-        current_user.name = profile_in.name.strip()
+        clean_name = profile_in.name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=400, detail="Display name cannot be empty.")
+        current_user.name = clean_name
     if profile_in.title is not None:
-        current_user.title = profile_in.title
+        current_user.title = profile_in.title.strip()
     if profile_in.department is not None:
-        current_user.department = profile_in.department
+        current_user.department = profile_in.department.strip()
     if profile_in.avatar_url is not None:
-        current_user.avatar_url = profile_in.avatar_url
+        raw_avatar = profile_in.avatar_url.strip()
+        if raw_avatar:
+            if len(raw_avatar) > 500 or raw_avatar.startswith("//"):
+                raise HTTPException(status_code=400, detail="Invalid avatar URL.")
+            parsed = urlparse(raw_avatar)
+            if parsed.scheme:
+                if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+                    raise HTTPException(status_code=400, detail="Avatar URL must use http or https.")
+            elif not raw_avatar.startswith("/"):
+                raise HTTPException(status_code=400, detail="Avatar URL must be an https URL or relative path.")
+        current_user.avatar_url = raw_avatar or None
     db.commit()
     db.refresh(current_user)
     return current_user

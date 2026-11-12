@@ -1,4 +1,5 @@
 import base64
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -10,6 +11,8 @@ from app.services.connectors.base import (
     compute_sha256,
     parse_iso_timestamp,
 )
+
+_NOTION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
 
 
 class NotionConnector(BaseConnector):
@@ -157,6 +160,7 @@ class NotionConnector(BaseConnector):
     def _fetch_children_blocks(self, block_id: str, depth: int = 0) -> List[str]:
         if not block_id:
             return []
+        clean_block_id = self._validate_notion_id(block_id)
         lines: List[str] = []
         cursor: Optional[str] = None
         for _ in range(10):
@@ -164,7 +168,7 @@ class NotionConnector(BaseConnector):
             if cursor:
                 params["start_cursor"] = cursor
             res = self._request_with_retry(
-                "GET", f"{self.base_url}/blocks/{block_id}/children", headers=self.headers, params=params
+                "GET", f"{self.base_url}/blocks/{clean_block_id}/children", headers=self.headers, params=params
             )
             if res.status_code != 200:
                 break
@@ -177,6 +181,7 @@ class NotionConnector(BaseConnector):
         return lines
 
     def _fetch_database_rows(self, db_id: str) -> List[str]:
+        clean_db_id = self._validate_notion_id(db_id)
         rows_text: List[str] = []
         cursor: Optional[str] = None
         for _ in range(5):
@@ -184,7 +189,7 @@ class NotionConnector(BaseConnector):
             if cursor:
                 body["start_cursor"] = cursor
             res = self._request_with_retry(
-                "POST", f"{self.base_url}/databases/{db_id}/query", headers=self.headers, json_body=body
+                "POST", f"{self.base_url}/databases/{clean_db_id}/query", headers=self.headers, json_body=body
             )
             if res.status_code != 200:
                 break
@@ -217,6 +222,13 @@ class NotionConnector(BaseConnector):
                 break
             cursor = data.get("next_cursor")
         return rows_text
+
+    @staticmethod
+    def _validate_notion_id(raw_id: str) -> str:
+        clean_id = (raw_id or "").strip()
+        if not _NOTION_ID_RE.fullmatch(clean_id):
+            raise ConnectorError("Invalid Notion page, database, or block ID format.")
+        return clean_id
 
     @staticmethod
     def _normalize_notion_id(raw_id: str) -> str:
@@ -283,9 +295,10 @@ class NotionConnector(BaseConnector):
         }
 
     def _fetch_target_item(self, target_id: str) -> Optional[Dict[str, Any]]:
-        clean_id = target_id.strip()
+        clean_id = (target_id or "").strip()
         if not clean_id:
             return None
+        clean_id = self._validate_notion_id(clean_id)
         for endpoint in (f"{self.base_url}/databases/{clean_id}", f"{self.base_url}/pages/{clean_id}"):
             res = self._request_with_retry("GET", endpoint, headers=self.headers)
             if res.status_code == 200:
@@ -302,7 +315,13 @@ class NotionConnector(BaseConnector):
         if not self.token:
             raise ConnectorError("Missing Notion token.")
 
-        normalized_targets = {self._normalize_notion_id(t) for t in (target_ids or []) if str(t).strip()}
+        validated_targets: List[str] = []
+        for raw_target in (target_ids or []):
+            stripped = str(raw_target).strip()
+            if stripped:
+                validated_targets.append(self._validate_notion_id(stripped))
+
+        normalized_targets = {self._normalize_notion_id(t) for t in validated_targets}
         records: List[Dict[str, Any]] = []
         seen_normalized: set[str] = set()
         since_dt = parse_iso_timestamp(since_iso)

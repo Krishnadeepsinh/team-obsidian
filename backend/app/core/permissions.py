@@ -109,9 +109,9 @@ def get_user_project_role(project: Project, user: User, db: Session) -> str:
     ws = db.query(Workspace).filter(Workspace.id == project.workspace_id).first()
     if ws and ws.owner_id == user.id:
         return "workspace_owner"
-    if user.org_id:
+    if user.org_id and ws and ws.org_id == user.org_id:
         org = db.query(Organization).filter(Organization.id == user.org_id).first()
-        if org and (org.owner_id == user.id or normalize_role(user.role) == "org_admin"):
+        if org and not getattr(org, "is_personal", False) and (org.owner_id == user.id or normalize_role(user.role) == "org_admin"):
             return "org_admin"
     return normalize_role(user.role)
 

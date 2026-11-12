@@ -4,17 +4,17 @@ from datetime import datetime
 
 
 class UserRegister(BaseModel):
-    name: str
-    email: str
-    password: str = Field(..., min_length=8)
+    name: str = Field(..., min_length=1, max_length=120)
+    email: str = Field(..., min_length=3, max_length=254)
+    password: str = Field(..., min_length=8, max_length=128)
     role: Optional[str] = "developer"
-    title: Optional[str] = "Software Engineer"
-    department: Optional[str] = "Engineering"
+    title: Optional[str] = Field(default="Software Engineer", max_length=120)
+    department: Optional[str] = Field(default="Engineering", max_length=120)
 
 
 class UserLogin(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=3, max_length=254)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class Token(BaseModel):
@@ -42,22 +42,22 @@ class UserResponse(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: str
+    email: str = Field(..., min_length=3, max_length=254)
 
 
 class ResetPasswordRequest(BaseModel):
-    email: str
-    reset_token: str
-    new_password: str = Field(..., min_length=8)
+    email: str = Field(..., min_length=3, max_length=254)
+    reset_token: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=8)
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class UserProfileUpdate(BaseModel):
-    name: Optional[str] = None
-    title: Optional[str] = None
-    department: Optional[str] = None
-    avatar_url: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    title: Optional[str] = Field(default=None, max_length=120)
+    department: Optional[str] = Field(default=None, max_length=120)
+    avatar_url: Optional[str] = Field(default=None, max_length=500)

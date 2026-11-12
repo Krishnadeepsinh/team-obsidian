@@ -141,13 +141,43 @@ def update_org_settings(
     if org.owner_id != current_user.id and normalize_role(current_user.role) != "org_admin":
         raise HTTPException(status_code=403, detail="Forbidden: Only organization admins can update org settings.")
 
-    if "org_name" in settings_in and isinstance(settings_in["org_name"], str) and settings_in["org_name"].strip():
-        org.name = settings_in["org_name"].strip()
+    if "org_name" in settings_in:
+        raw_name = settings_in["org_name"]
+        if not isinstance(raw_name, str) or not raw_name.strip() or len(raw_name.strip()) > 120:
+            raise HTTPException(status_code=400, detail="Organization name must be 1 to 120 characters.")
+        org.name = raw_name.strip()
 
     merged = dict(org.settings or {})
-    for allowed_key in ("evidence_verification_threshold", "require_security_approval", "notification_channels"):
-        if allowed_key in settings_in:
-            merged[allowed_key] = settings_in[allowed_key]
+    if "evidence_verification_threshold" in settings_in:
+        val = settings_in["evidence_verification_threshold"]
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or not (0.0 <= float(val) <= 1.0):
+            raise HTTPException(
+                status_code=400,
+                detail="evidence_verification_threshold must be a number between 0.0 and 1.0.",
+            )
+        merged["evidence_verification_threshold"] = round(float(val), 4)
+
+    if "require_security_approval" in settings_in:
+        val = settings_in["require_security_approval"]
+        if not isinstance(val, bool):
+            raise HTTPException(status_code=400, detail="require_security_approval must be a boolean.")
+        merged["require_security_approval"] = val
+
+    if "notification_channels" in settings_in:
+        channels = settings_in["notification_channels"]
+        if not isinstance(channels, dict):
+            raise HTTPException(status_code=400, detail="notification_channels must be an object.")
+        allowed_channels = {"slack", "email", "webhook"}
+        sanitized_channels = dict(merged.get("notification_channels") or {})
+        for ch_key, ch_val in channels.items():
+            if ch_key not in allowed_channels or not isinstance(ch_val, bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail="notification_channels supports boolean flags for slack, email, and webhook only.",
+                )
+            sanitized_channels[ch_key] = ch_val
+        merged["notification_channels"] = sanitized_channels
+
     org.settings = merged
 
     record_activity(

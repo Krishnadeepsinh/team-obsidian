@@ -87,7 +87,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       try {
         const parts = token.split(".")
         if (parts.length === 3) {
-          const payload = JSON.parse(atob(parts[1]))
+          const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+          const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), "=")
+          const payload = JSON.parse(atob(padded))
           if (payload.exp && payload.exp < Date.now() / 1000) {
             localStorage.removeItem("obsidian_token")
             localStorage.removeItem("obsidian_user")
@@ -98,6 +100,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } catch {}
     }
   }, [pathname, isPublic, router])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const onSessionExpired = () => {
+      if (!isPublic) {
+        router.push("/login")
+      }
+    }
+    window.addEventListener("obsidian_session_expired", onSessionExpired)
+    return () => window.removeEventListener("obsidian_session_expired", onSessionExpired)
+  }, [isPublic, router])
 
   useEffect(() => {
     setMobileNavOpen(false)

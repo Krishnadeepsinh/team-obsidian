@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -9,6 +10,8 @@ from app.services.connectors.base import (
     compute_sha256,
     parse_iso_timestamp,
 )
+
+_REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class GitHubConnector(BaseConnector):
@@ -242,8 +245,10 @@ class GitHubConnector(BaseConnector):
         """Sync PRs (with reviews & comments), commits, issues (with comments), releases, and branches."""
         if not self.token:
             raise ConnectorError("Missing GitHub access token.")
-        if not owner_repo or "/" not in owner_repo:
+        clean_repo = (owner_repo or "").strip()
+        if not _REPO_SLUG_RE.fullmatch(clean_repo) or ".." in clean_repo:
             raise ConnectorError("Invalid repository target. Expected 'owner/repo'.")
+        owner_repo = clean_repo
 
         records: List[Dict[str, Any]] = []
         since_dt = parse_iso_timestamp(since_iso)

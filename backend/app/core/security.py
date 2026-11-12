@@ -3,6 +3,8 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -119,14 +121,46 @@ def mask_credentials(creds: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return masked
 
 
+# Thread-safe bounded JWT JTI revocation store (handles immediate logout invalidation)
+_REVOKED_JTIS: Dict[str, float] = {}
+_REVOKED_LOCK = threading.Lock()
+
+
+def revoke_token_jti(jti: Optional[str], exp_ts: Optional[float] = None) -> None:
+    if not jti:
+        return
+    now = time.time()
+    expiry = float(exp_ts) if exp_ts else (now + settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    with _REVOKED_LOCK:
+        # Prune expired JTIs to keep store bounded
+        expired = [k for k, v in _REVOKED_JTIS.items() if v < now]
+        for k in expired:
+            _REVOKED_JTIS.pop(k, None)
+        _REVOKED_JTIS[jti] = expiry
+
+
+def is_token_jti_revoked(jti: Optional[str]) -> bool:
+    if not jti:
+        return False
+    now = time.time()
+    with _REVOKED_LOCK:
+        exp_ts = _REVOKED_JTIS.get(jti)
+        if exp_ts is None:
+            return False
+        if exp_ts < now:
+            _REVOKED_JTIS.pop(jti, None)
+            return False
+        return True
+
+
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-    """Create a signed JWT token using PyJWT."""
+    """Create a signed JWT token using PyJWT with sub-second precision iat."""
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.setdefault("token_type", "access")
     to_encode.update({
-        "iat": int(now.timestamp()),
+        "iat": round(now.timestamp(), 6),
         "exp": int(expire.timestamp()),
         "jti": str(uuid.uuid4()),
     })
@@ -187,6 +221,13 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if is_token_jti_revoked(payload.get("jti")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been signed out. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     user = db.query(User).filter(User.id == payload["sub"]).first()
     if not user or not user.is_active:
         raise HTTPException(
@@ -194,6 +235,23 @@ def get_current_user(
             detail="User account not found or has been deactivated.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    pw_updated = getattr(user, "password_updated_at", None)
+    if pw_updated is not None:
+        if pw_updated.tzinfo is None:
+            pw_updated = pw_updated.replace(tzinfo=timezone.utc)
+        pw_ts = pw_updated.timestamp()
+        tok_iat = payload.get("iat")
+        try:
+            tok_iat_f = float(tok_iat) if tok_iat is not None else 0.0
+        except (TypeError, ValueError):
+            tok_iat_f = 0.0
+        if tok_iat_f + 0.001 < pw_ts:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session invalidated after password update. Please log in again.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     set_rls_user_context(db, user.id)
     return user
