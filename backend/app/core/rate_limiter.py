@@ -1,55 +1,131 @@
+import logging
 import threading
 import time
 from collections import deque
 from typing import Deque, Dict, Optional
 
 from fastapi import HTTPException, Request, status
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.database import SessionLocal
+
+logger = logging.getLogger("obsidian.ratelimit")
 
 
 class SlidingWindowRateLimiter:
-    """Thread-safe in-memory sliding-window rate limiter with bounded bucket cleanup."""
+    """Thread-safe DB-backed sliding-window rate limiter with in-memory fallback."""
 
     def __init__(self, max_buckets: int = 10000):
         self._buckets: Dict[str, Deque[float]] = {}
         self._lock = threading.Lock()
         self._max_buckets = max_buckets
 
-    def clear(self) -> None:
+    def clear_memory_only(self) -> None:
+        """Clear only in-memory L1 buckets without removing persisted DB events."""
         with self._lock:
             self._buckets.clear()
 
+    def clear(self, clear_db: bool = True) -> None:
+        """Reset rate-limit state in memory and optionally purge persisted DB events."""
+        from app.models.workspace import RateLimitEvent
+
+        with self._lock:
+            self._buckets.clear()
+            if clear_db:
+                session = SessionLocal()
+                try:
+                    session.query(RateLimitEvent).delete(synchronize_session=False)
+                    session.commit()
+                except SQLAlchemyError as exc:
+                    logger.warning("Failed to clear rate_limit_events table: %s", exc)
+                    session.rollback()
+                finally:
+                    session.close()
+
+    def _record_memory_fallback(self, key: str, limit: int, window_seconds: int, now: float, detail: Optional[str]) -> None:
+        cutoff = now - window_seconds
+        if len(self._buckets) >= self._max_buckets:
+            stale_keys = [k for k, dq in self._buckets.items() if not dq or dq[-1] < cutoff]
+            for sk in stale_keys:
+                self._buckets.pop(sk, None)
+            if len(self._buckets) >= self._max_buckets:
+                self._buckets.clear()
+
+        dq = self._buckets.setdefault(key, deque())
+        while dq and dq[0] < cutoff:
+            dq.popleft()
+
+        if len(dq) >= limit:
+            retry_after = max(1, int(window_seconds - (now - dq[0])))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=detail or f"Too many requests. Please retry after {retry_after} seconds.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        dq.append(now)
+
     def check(self, key: str, limit: int, window_seconds: int, detail: Optional[str] = None) -> None:
-        now = time.monotonic()
+        from app.models.workspace import RateLimitEvent
+
+        now = time.time()
         cutoff = now - window_seconds
         with self._lock:
-            if len(self._buckets) >= self._max_buckets:
-                # Prune oldest expired keys so attacker IP rotation cannot exhaust RAM
-                stale_keys = [k for k, dq in self._buckets.items() if not dq or dq[-1] < cutoff]
-                for sk in stale_keys:
-                    self._buckets.pop(sk, None)
-                if len(self._buckets) >= self._max_buckets:
-                    self._buckets.clear()
+            session = SessionLocal()
+            try:
+                session.query(RateLimitEvent).filter(
+                    RateLimitEvent.bucket_key == key,
+                    RateLimitEvent.created_ts < cutoff,
+                ).delete(synchronize_session=False)
 
-            dq = self._buckets.get(key)
-            if dq is None:
-                dq = deque()
-                self._buckets[key] = dq
-
-            while dq and dq[0] < cutoff:
-                dq.popleft()
-
-            if len(dq) >= limit:
-                retry_after = max(1, int(window_seconds - (now - dq[0])))
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=detail or f"Too many requests. Please retry after {retry_after} seconds.",
-                    headers={"Retry-After": str(retry_after)},
+                active = (
+                    session.query(RateLimitEvent.created_ts)
+                    .filter(
+                        RateLimitEvent.bucket_key == key,
+                        RateLimitEvent.created_ts >= cutoff,
+                    )
+                    .order_by(RateLimitEvent.created_ts.asc())
+                    .all()
                 )
-            dq.append(now)
+                if len(active) >= limit:
+                    oldest = float(active[0][0])
+                    retry_after = max(1, int(window_seconds - (now - oldest)))
+                    session.commit()
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=detail or f"Too many requests. Please retry after {retry_after} seconds.",
+                        headers={"Retry-After": str(retry_after)},
+                    )
+
+                session.add(RateLimitEvent(bucket_key=key, created_ts=now))
+                session.commit()
+
+                dq = self._buckets.setdefault(key, deque())
+                while dq and dq[0] < cutoff:
+                    dq.popleft()
+                dq.append(now)
+            except HTTPException:
+                raise
+            except SQLAlchemyError as exc:
+                logger.warning("Falling back to in-memory rate limiter due to DB error: %s", exc)
+                session.rollback()
+                self._record_memory_fallback(key, limit, window_seconds, now, detail)
+            finally:
+                session.close()
 
     def reset_key(self, key: str) -> None:
+        from app.models.workspace import RateLimitEvent
+
         with self._lock:
             self._buckets.pop(key, None)
+            session = SessionLocal()
+            try:
+                session.query(RateLimitEvent).filter(RateLimitEvent.bucket_key == key).delete(synchronize_session=False)
+                session.commit()
+            except SQLAlchemyError as exc:
+                logger.warning("Failed to reset rate limit key '%s': %s", key, exc)
+                session.rollback()
+            finally:
+                session.close()
 
 
 rate_limiter = SlidingWindowRateLimiter()

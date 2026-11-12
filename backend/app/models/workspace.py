@@ -5,6 +5,7 @@ from sqlalchemy import (
     String,
     Text,
     DateTime,
+    Float,
     ForeignKey,
     Boolean,
     JSON,
@@ -168,3 +169,27 @@ class Notification(Base):
     link = Column(String(500), nullable=True)
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utc_now)
+
+
+class RevokedToken(Base):
+    """Persisted JWT JTI revocation store surviving worker restarts and multi-worker scaling."""
+
+    __tablename__ = "revoked_tokens"
+
+    jti = Column(String(64), primary_key=True)
+    expires_ts = Column(Float, nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class RateLimitEvent(Base):
+    """Persisted sliding-window rate-limit counter surviving worker restarts."""
+
+    __tablename__ = "rate_limit_events"
+    __table_args__ = (
+        Index("idx_ratelimit_bucket_ts", "bucket_key", "created_ts"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    bucket_key = Column(String(255), nullable=False, index=True)
+    created_ts = Column(Float, nullable=False, index=True)
+

@@ -217,7 +217,8 @@ def logout(
     if auth_header.lower().startswith("bearer "):
         payload = decode_access_token(auth_header[7:].strip())
         if payload:
-            revoke_token_jti(payload.get("jti"), payload.get("exp"))
+            revoke_token_jti(payload.get("jti"), payload.get("exp"), db=db)
+            db.commit()
     record_activity(
         db=db,
         action="auth.logout",
@@ -462,7 +463,8 @@ def change_password(
     if auth_header.lower().startswith("bearer "):
         payload = decode_access_token(auth_header[7:].strip())
         if payload:
-            revoke_token_jti(payload.get("jti"), payload.get("exp"))
+            revoke_token_jti(payload.get("jti"), payload.get("exp"), db=db)
+            db.commit()
 
     accessible_projects = get_user_accessible_projects(current_user, db)
     active_project_id = accessible_projects[0].id if accessible_projects else None

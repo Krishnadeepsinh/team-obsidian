@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -14,10 +15,13 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import get_db, set_rls_user_context
+from app.core.database import SessionLocal, get_db, set_rls_user_context
+
+logger = logging.getLogger("obsidian.security")
 
 # Argon2id password hasher (OWASP recommended parameters)
 _ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
@@ -121,36 +125,89 @@ def mask_credentials(creds: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return masked
 
 
-# Thread-safe bounded JWT JTI revocation store (handles immediate logout invalidation)
+# Thread-safe L1 cache + DB-persisted JWT JTI revocation store (survives worker restarts & multi-worker scaling)
 _REVOKED_JTIS: Dict[str, float] = {}
 _REVOKED_LOCK = threading.Lock()
 
 
-def revoke_token_jti(jti: Optional[str], exp_ts: Optional[float] = None) -> None:
+def clear_revoked_jti_cache() -> None:
+    """Clear only the in-memory L1 JTI revocation cache (DB rows remain enforced)."""
+    with _REVOKED_LOCK:
+        _REVOKED_JTIS.clear()
+
+
+def revoke_token_jti(
+    jti: Optional[str],
+    exp_ts: Optional[float] = None,
+    db: Optional[Session] = None,
+) -> None:
+    """Revoke a JWT JTI in L1 cache and persist it to the database until expiration."""
     if not jti:
         return
     now = time.time()
     expiry = float(exp_ts) if exp_ts else (now + settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     with _REVOKED_LOCK:
-        # Prune expired JTIs to keep store bounded
         expired = [k for k, v in _REVOKED_JTIS.items() if v < now]
         for k in expired:
             _REVOKED_JTIS.pop(k, None)
         _REVOKED_JTIS[jti] = expiry
 
+    from app.models.workspace import RevokedToken
 
-def is_token_jti_revoked(jti: Optional[str]) -> bool:
+    own_session = db is None
+    session = db if db is not None else SessionLocal()
+    try:
+        session.query(RevokedToken).filter(RevokedToken.expires_ts < now).delete(synchronize_session=False)
+        session.merge(RevokedToken(jti=jti, expires_ts=expiry))
+        if own_session:
+            session.commit()
+        else:
+            session.flush()
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to persist JTI revocation in database: %s", exc)
+        if own_session:
+            session.rollback()
+    finally:
+        if own_session:
+            session.close()
+
+
+def is_token_jti_revoked(jti: Optional[str], db: Optional[Session] = None) -> bool:
+    """Check whether a JWT JTI has been revoked (L1 cache with DB fallback)."""
     if not jti:
         return False
     now = time.time()
     with _REVOKED_LOCK:
         exp_ts = _REVOKED_JTIS.get(jti)
-        if exp_ts is None:
-            return False
-        if exp_ts < now:
+        if exp_ts is not None:
+            if exp_ts >= now:
+                return True
             _REVOKED_JTIS.pop(jti, None)
+
+    from app.models.workspace import RevokedToken
+
+    own_session = db is None
+    session = db if db is not None else SessionLocal()
+    try:
+        rec = session.query(RevokedToken).filter(RevokedToken.jti == jti).first()
+        if not rec:
             return False
+        if float(rec.expires_ts) < now:
+            session.delete(rec)
+            if own_session:
+                session.commit()
+            else:
+                session.flush()
+            return False
+        with _REVOKED_LOCK:
+            _REVOKED_JTIS[jti] = float(rec.expires_ts)
         return True
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to check JTI revocation in database: %s", exc)
+        return False
+    finally:
+        if own_session:
+            session.close()
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
@@ -221,7 +278,7 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if is_token_jti_revoked(payload.get("jti")):
+    if is_token_jti_revoked(payload.get("jti"), db=db):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session has been signed out. Please log in again.",

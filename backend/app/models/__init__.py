@@ -8,6 +8,8 @@ from app.models.workspace import (
     ProjectMember,
     ActivityLog,
     Notification,
+    RevokedToken,
+    RateLimitEvent,
 )
 from app.models.integration import (
     Integration,
@@ -50,6 +52,8 @@ __all__ = [
     "ProjectMember",
     "ActivityLog",
     "Notification",
+    "RevokedToken",
+    "RateLimitEvent",
     "Integration",
     "SourceRecord",
     "SourceEvent",
