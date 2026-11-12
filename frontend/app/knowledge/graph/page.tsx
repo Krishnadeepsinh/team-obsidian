@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useMemo } from "react"
 import {
   ReactFlow,
   Background,
@@ -29,6 +29,12 @@ import {
   ShieldCheck,
   Maximize2,
   X,
+  UserMinus,
+  UserPlus,
+  Copy,
+  Download,
+  EyeOff,
+  ArrowLeftRight,
 } from "lucide-react"
 
 const DEFAULT_ENTITY_TYPES = [
@@ -50,25 +56,47 @@ function CustomKnowledgeNode({ data, selected }: { data: any; selected?: boolean
   const badgeText = data?.textColor || "#0C4A6E"
   const isSpof = Boolean(data?.isSpof)
   const confidencePct = Math.round((data?.confidence ?? 0.75) * 100)
+  const isHorizontal = data?.layout === "horizontal"
+  const departureRole = data?.departureRole as "departing" | "orphaned_spof" | "impacted" | "dimmed" | undefined
+
+  const ringClass = selected
+    ? "ring-2 ring-violet-500 shadow-lg"
+    : departureRole === "departing" || departureRole === "orphaned_spof"
+    ? "ring-2 ring-rose-500 shadow-lg"
+    : departureRole === "impacted"
+    ? "ring-2 ring-amber-500 shadow-md"
+    : isSpof
+    ? "ring-2 ring-amber-400/80 shadow-md"
+    : "shadow-sm hover:shadow-md"
+
+  const borderColor = selected
+    ? "#7C3AED"
+    : departureRole === "departing" || departureRole === "orphaned_spof"
+    ? "#EF4444"
+    : departureRole === "impacted"
+    ? "#F59E0B"
+    : isSpof
+    ? "#F59E0B"
+    : accentColor
 
   return (
     <div
-      className={`w-[224px] rounded-2xl bg-white px-3.5 py-2.5 transition-all select-none ${
-        selected
-          ? "ring-2 ring-violet-500 shadow-lg"
-          : isSpof
-          ? "ring-2 ring-amber-400/80 shadow-md"
-          : "shadow-sm hover:shadow-md"
+      className={`w-[224px] rounded-2xl bg-white px-3.5 py-2.5 transition-all select-none ${ringClass} ${
+        departureRole === "dimmed" ? "opacity-30" : ""
       }`}
       style={{
-        border: `1.5px solid ${selected ? "#7C3AED" : isSpof ? "#F59E0B" : accentColor}`,
+        border: `1.5px solid ${borderColor}`,
       }}
     >
-      <Handle type="target" position={Position.Top} className="!w-2 !h-2 !bg-slate-400 !border-white" />
+      <Handle
+        type="target"
+        position={isHorizontal ? Position.Left : Position.Top}
+        className="!w-2 !h-2 !bg-slate-400 !border-white"
+      />
 
       <div className="flex items-center justify-between gap-1.5">
         <span
-          className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide truncate max-w-[130px]"
+          className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide truncate max-w-[115px]"
           style={{
             backgroundColor: badgeBg,
             color: badgeText,
@@ -77,7 +105,19 @@ function CustomKnowledgeNode({ data, selected }: { data: any; selected?: boolean
         >
           {String(data?.entityType || "entity").replace(/_/g, " ")}
         </span>
-        {isSpof ? (
+        {departureRole === "departing" ? (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-50 border border-rose-300 text-rose-800 text-[9px] font-bold">
+            DEPARTING
+          </span>
+        ) : departureRole === "orphaned_spof" ? (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-50 border border-rose-300 text-rose-800 text-[9px] font-bold">
+            ORPHANED
+          </span>
+        ) : departureRole === "impacted" ? (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-[9px] font-bold">
+            AT RISK
+          </span>
+        ) : isSpof ? (
           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-[9px] font-bold">
             <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
             SPOF
@@ -104,7 +144,11 @@ function CustomKnowledgeNode({ data, selected }: { data: any; selected?: boolean
         </span>
       </div>
 
-      <Handle type="source" position={Position.Bottom} className="!w-2 !h-2 !bg-slate-400 !border-white" />
+      <Handle
+        type="source"
+        position={isHorizontal ? Position.Right : Position.Bottom}
+        className="!w-2 !h-2 !bg-slate-400 !border-white"
+      />
     </div>
   )
 }
@@ -138,7 +182,13 @@ export default function KnowledgeGraphPage() {
   const [availableTypes, setAvailableTypes] = useState<string[]>(DEFAULT_ENTITY_TYPES)
   const [search, setSearch] = useState("")
   const [spofWarnings, setSpofWarnings] = useState<any[]>([])
+  const [peopleList, setPeopleList] = useState<any[]>([])
   const [stats, setStats] = useState<any>({})
+  const [layoutMode, setLayoutMode] = useState<"vertical" | "horizontal">("vertical")
+  const [hideIsolated, setHideIsolated] = useState(false)
+  const [simulatePersonId, setSimulatePersonId] = useState("")
+  const [departureImpact, setDepartureImpact] = useState<any>(null)
+  const [simulatingDeparture, setSimulatingDeparture] = useState(false)
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
   const [statusMsg, setStatusMsg] = useState("")
@@ -147,15 +197,33 @@ export default function KnowledgeGraphPage() {
   const [selectedNode, setSelectedNode] = useState<any>(null)
   const [blastRadius, setBlastRadius] = useState<any>(null)
   const [loadingBlast, setLoadingBlast] = useState(false)
+  const [backupOwnerName, setBackupOwnerName] = useState("")
+  const [backupRelationType, setBackupRelationType] = useState<"maintains" | "owns">("maintains")
+  const [assigningBackup, setAssigningBackup] = useState(false)
+  const [copiedMermaid, setCopiedMermaid] = useState(false)
 
-  const loadGraph = useCallback(async (pid?: string, etype?: string, q?: string) => {
+  const loadGraph = useCallback(async (
+    pid?: string,
+    etype?: string,
+    q?: string,
+    nextLayout?: "vertical" | "horizontal",
+    nextHideIsolated?: boolean
+  ) => {
     try {
       setLoading(true)
+      const useLayout = nextLayout ?? layoutMode
+      const useHideIso = nextHideIsolated ?? hideIsolated
       const allSelected = pid === undefined && isAllProjectsSelected()
       const storedPid = allSelected || pid === "" ? "" : pid !== undefined ? pid : getStoredProjectId()
       const [projs, graphResRaw] = await Promise.all([
         api.getProjects().catch(() => []),
-        api.getGraphReactFlow(storedPid || undefined, etype, q || undefined).catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} })),
+        api.getGraphReactFlow(storedPid || undefined, etype, q || undefined, useLayout, useHideIso).catch(() => ({
+          nodes: [],
+          edges: [],
+          spof_warnings: [],
+          people: [],
+          stats: {},
+        })),
       ])
       const projList = Array.isArray(projs) ? projs : []
       setProjects(projList)
@@ -165,8 +233,8 @@ export default function KnowledgeGraphPage() {
       let graphRes = graphResRaw
       if (resolvedPid && resolvedPid !== storedPid) {
         graphRes = await api
-          .getGraphReactFlow(resolvedPid, etype, q || undefined)
-          .catch(() => ({ nodes: [], edges: [], spof_warnings: [], stats: {} }))
+          .getGraphReactFlow(resolvedPid, etype, q || undefined, useLayout, useHideIso)
+          .catch(() => ({ nodes: [], edges: [], spof_warnings: [], people: [], stats: {} }))
       }
       const nextNodes = Array.isArray(graphRes.nodes) ? graphRes.nodes : []
       const nextEdges = (Array.isArray(graphRes.edges) ? graphRes.edges : []).map((edge: any) => ({
@@ -181,6 +249,7 @@ export default function KnowledgeGraphPage() {
       setNodes(nextNodes)
       setEdges(nextEdges)
       setSpofWarnings(graphRes.spof_warnings || [])
+      setPeopleList(Array.isArray(graphRes.people) ? graphRes.people : [])
       setStats(graphRes.stats || {})
 
       if (!etype || etype === "All") {
@@ -197,7 +266,7 @@ export default function KnowledgeGraphPage() {
     } finally {
       setLoading(false)
     }
-  }, [setEdges, setNodes])
+  }, [setEdges, setNodes, layoutMode, hideIsolated])
 
   useEffect(() => {
     loadGraph(undefined, "All", "")
@@ -261,6 +330,124 @@ export default function KnowledgeGraphPage() {
       rfInstance.fitView({ nodes: [{ id: nodeId }], padding: 0.8, maxZoom: 1.05, duration: 300 })
     }
   }
+
+  const handleSimulateDeparture = async (personId: string) => {
+    setSimulatePersonId(personId)
+    if (!personId) {
+      setDepartureImpact(null)
+      return
+    }
+    try {
+      setSimulatingDeparture(true)
+      setErrorMsg("")
+      const impact = await api.getDepartureImpact(personId)
+      setDepartureImpact(impact)
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to simulate departure impact.")
+      setDepartureImpact(null)
+    } finally {
+      setSimulatingDeparture(false)
+    }
+  }
+
+  const handleAssignBackup = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedNode || !backupOwnerName.trim()) return
+    try {
+      setAssigningBackup(true)
+      setErrorMsg("")
+      setStatusMsg("")
+      const res = await api.assignBackupOwner({
+        component_id: selectedNode.id,
+        backup_person_name: backupOwnerName.trim(),
+        relation_type: backupRelationType,
+      })
+      setBackupOwnerName("")
+      setStatusMsg(
+        res.is_still_spof
+          ? `Added relationship for ${res.backup_person_name} on ${res.component_name}.`
+          : `SPOF mitigated! ${res.backup_person_name} assigned as backup owner for ${res.component_name}.`
+      )
+      await loadGraph(activeProject, entityType, search, layoutMode, hideIsolated)
+      if (simulatePersonId) {
+        const refreshedImpact = await api.getDepartureImpact(simulatePersonId).catch(() => null)
+        setDepartureImpact(refreshedImpact)
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to assign backup owner.")
+    } finally {
+      setAssigningBackup(false)
+    }
+  }
+
+  const handleCopyOrDownloadMermaid = async (download: boolean) => {
+    try {
+      setErrorMsg("")
+      const res = await api.exportGraphMermaid(activeProject || undefined)
+      const diagram = res.mermaid || "flowchart TD\n"
+      if (download) {
+        const blob = new Blob([diagram], { type: "text/plain;charset=utf-8" })
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `team_obsidian_graph_${(activeProject || "workspace").slice(0, 12)}.mmd`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        window.URL.revokeObjectURL(url)
+        setStatusMsg("Downloaded Mermaid architecture diagram (.mmd).")
+      } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(diagram)
+        setCopiedMermaid(true)
+        setTimeout(() => setCopiedMermaid(false), 2000)
+        setStatusMsg("Copied Mermaid diagram to clipboard — paste directly into README or GitHub PRs.")
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to export Mermaid diagram.")
+    }
+  }
+
+  const renderedNodes = useMemo(() => {
+    if (!departureImpact) return nodes
+    const departingId = departureImpact.person_id
+    const orphanedIds = new Set<string>((departureImpact.orphaned_spofs || []).map((x: any) => x.id))
+    const affectedIds = new Set<string>(departureImpact.affected_node_ids || [])
+    return nodes.map((n: any) => {
+      const role =
+        n.id === departingId
+          ? "departing"
+          : orphanedIds.has(n.id)
+          ? "orphaned_spof"
+          : affectedIds.has(n.id)
+          ? "impacted"
+          : "dimmed"
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          departureRole: role,
+        },
+      }
+    })
+  }, [nodes, departureImpact])
+
+  const renderedEdges = useMemo(() => {
+    if (!departureImpact) return edges
+    const departingId = departureImpact.person_id
+    const affectedIds = new Set<string>(departureImpact.affected_node_ids || [])
+    return edges.map((edge: any) => {
+      const touchesBlast =
+        edge.source === departingId ||
+        (affectedIds.has(edge.source) && affectedIds.has(edge.target))
+      return {
+        ...edge,
+        animated: touchesBlast,
+        style: touchesBlast
+          ? { stroke: "#DC2626", strokeWidth: 2.5 }
+          : { ...(edge.style || {}), opacity: 0.16 },
+      }
+    })
+  }, [edges, departureImpact])
 
   return (
     <div className="p-4 sm:p-5 max-w-[1440px] mx-auto space-y-3.5">
@@ -342,18 +529,123 @@ export default function KnowledgeGraphPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 text-xs text-slate-500 flex-shrink-0">
-          <span className="font-semibold text-slate-700">{nodes.length} Nodes</span>
-          <span>•</span>
-          <span className="font-semibold text-slate-700">{edges.length} Relationships</span>
-          {stats?.density !== undefined && (
-            <>
-              <span>•</span>
-              <span>Density: {stats.density}</span>
-            </>
-          )}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 flex-shrink-0">
+          <div className="flex items-center gap-1.5 bg-rose-50/70 border border-rose-200 rounded-xl px-2 py-1">
+            <UserMinus className="w-3.5 h-3.5 text-rose-600 flex-shrink-0" />
+            <select
+              value={simulatePersonId}
+              onChange={(e) => handleSimulateDeparture(e.target.value)}
+              disabled={simulatingDeparture || peopleList.length === 0}
+              className="bg-transparent text-[11px] font-semibold text-rose-900 focus:outline-none max-w-[175px]"
+              aria-label="Simulate employee departure"
+            >
+              <option value="">
+                {peopleList.length > 0 ? "What-If Person Leaves..." : "No Person Nodes Yet"}
+              </option>
+              {peopleList.map((p: any) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.spof_count ?? 0} SPOFs)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const nextLayout = layoutMode === "vertical" ? "horizontal" : "vertical"
+              setLayoutMode(nextLayout)
+              loadGraph(activeProject, entityType, search, nextLayout, hideIsolated)
+            }}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700"
+            title="Switch layout direction"
+          >
+            <ArrowLeftRight className="w-3 h-3" />
+            <span>{layoutMode === "vertical" ? "Top-Down" : "Left-Right"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const nextHide = !hideIsolated
+              setHideIsolated(nextHide)
+              loadGraph(activeProject, entityType, search, layoutMode, nextHide)
+            }}
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold border transition-all ${
+              hideIsolated
+                ? "bg-violet-600 text-white border-violet-600"
+                : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
+            }`}
+            title="Hide isolated nodes with zero links"
+          >
+            <EyeOff className="w-3 h-3" />
+            <span>Hide Isolated</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleCopyOrDownloadMermaid(false)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700"
+            title="Copy Mermaid flowchart code"
+          >
+            <Copy className="w-3 h-3" />
+            <span>{copiedMermaid ? "Copied!" : "Mermaid"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleCopyOrDownloadMermaid(true)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700"
+            title="Download .mmd Mermaid file"
+          >
+            <Download className="w-3 h-3" />
+            <span>.mmd</span>
+          </button>
+
+          <span className="font-semibold text-slate-700 pl-1">
+            {nodes.length} Nodes • {edges.length} Links
+            {stats?.density !== undefined ? ` • Density ${stats.density}` : ""}
+          </span>
         </div>
       </div>
+
+      {/* Departure Simulation Impact Banner */}
+      {departureImpact && (
+        <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col lg:flex-row lg:items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 font-bold text-rose-900">
+              <UserMinus className="w-4 h-4 text-rose-600" />
+              Departure Impact: {departureImpact.person_name}
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[10px]">
+              Bus-Factor Risk: {departureImpact.bus_factor_risk_score}%
+            </span>
+            <span className="text-rose-800">
+              <strong>{departureImpact.orphaned_spofs?.length ?? 0}</strong> orphaned SPOFs •{" "}
+              <strong>{departureImpact.affected_entities?.length ?? 0}</strong> downstream impacted nodes
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(departureImpact.orphaned_spofs || []).slice(0, 4).map((item: any) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => focusNodeById(item.id)}
+                className="px-2 py-0.5 rounded-full bg-white border border-rose-300 text-rose-800 font-semibold text-[11px] hover:bg-rose-100"
+              >
+                {item.name} ({item.downstream_count} impact)
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => handleSimulateDeparture("")}
+              className="px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-semibold text-[11px] hover:bg-slate-100"
+            >
+              Clear Simulation
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* SPOF Warnings */}
       {spofWarnings.length > 0 && (
@@ -404,8 +696,8 @@ export default function KnowledgeGraphPage() {
           </div>
         ) : (
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={renderedNodes}
+            edges={renderedEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
@@ -420,7 +712,7 @@ export default function KnowledgeGraphPage() {
             zoomOnPinch
             zoomOnDoubleClick={false}
           >
-            <AutoFitView fitKey={`${activeProject}:${entityType}:${nodes.length}`} />
+            <AutoFitView fitKey={`${activeProject}:${entityType}:${layoutMode}:${hideIsolated}:${nodes.length}`} />
             <Background color="#CBD5E1" gap={18} />
             <Controls showInteractive={false} />
             <MiniMap zoomable pannable nodeColor="#7C3AED" />
@@ -529,6 +821,51 @@ export default function KnowledgeGraphPage() {
                   </div>
                 </div>
               ) : null}
+
+              {/* SPOF Mitigation: Assign Backup Owner */}
+              {(selectedNode.data?.entityType || "").toLowerCase() !== "person" && (
+                <form
+                  onSubmit={handleAssignBackup}
+                  className="p-3.5 rounded-xl bg-violet-50/70 border border-violet-200 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between text-xs font-bold text-violet-900">
+                    <span className="flex items-center gap-1.5">
+                      <UserPlus className="w-3.5 h-3.5 text-violet-600" />
+                      {selectedNode.data?.isSpof ? "Mitigate SPOF — Assign Backup" : "Assign Secondary Owner"}
+                    </span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      list="graph-people-suggestions"
+                      value={backupOwnerName}
+                      onChange={(e) => setBackupOwnerName(e.target.value)}
+                      placeholder="Backup engineer name..."
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-xs bg-white border border-violet-200 focus:outline-none focus:border-violet-500"
+                    />
+                    <datalist id="graph-people-suggestions">
+                      {peopleList.map((p: any) => (
+                        <option key={p.id} value={p.name} />
+                      ))}
+                    </datalist>
+                    <select
+                      value={backupRelationType}
+                      onChange={(e) => setBackupRelationType(e.target.value as "maintains" | "owns")}
+                      className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-white border border-violet-200 text-slate-700"
+                    >
+                      <option value="maintains">maintains</option>
+                      <option value="owns">owns</option>
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={assigningBackup || !backupOwnerName.trim()}
+                    className="w-full py-1.5 rounded-lg text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white transition-colors"
+                  >
+                    {assigningBackup ? "Assigning..." : "Assign Backup Owner"}
+                  </button>
+                </form>
+              )}
             </div>
 
             <div className="pt-4 border-t border-slate-100 mt-4">

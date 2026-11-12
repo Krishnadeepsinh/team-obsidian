@@ -314,20 +314,29 @@ def evaluate_simulation_submission(
             parsed = SimulationEvaluationBundle.model_validate_json(resp.text)
             overall_feedback = parsed.overall_feedback
             for g in parsed.grades:
-                graded_map[g.scenario_id] = g
+                graded_map[str(g.scenario_id).strip()] = g
         except Exception as exc:
             logger.warning("Gemini simulation grading fallback: %s", str(exc)[:140])
 
-    # Deterministic rubric scoring (used when Gemini unavailable or for any missing scenario grade)
+    # Deterministic + AI blended rubric scoring
     responses_out: List[Dict[str, Any]] = []
     total_score = 0.0
     for it in eval_items:
         sc_id = it["scenario_id"]
         ans = it["candidate_answer"]
         expected = [str(c) for c in it["expected_concepts"] if c]
+        lower_ans = ans.lower()
+        words = re.findall(r"[A-Za-z0-9_-]{3,}", lower_ans)
+        matched = [c for c in expected if c.lower() in lower_ans]
+        missed = [c for c in expected if c.lower() not in lower_ans]
+        concept_ratio = (len(matched) / max(1, len(expected))) if expected else 0.5
+
         if sc_id in graded_map:
             g = graded_map[sc_id]
             score = max(0.0, min(100.0, float(g.score)))
+            if len(words) >= 20 and expected and concept_ratio >= 0.75:
+                # Anchor AI rubric so substantive answers covering expected concepts are not penalized by variance
+                score = max(score, round(min(92.0, 40.0 + concept_ratio * 42.0 + min(15.0, len(words) * 0.25)), 1))
             responses_out.append({
                 "scenario_id": sc_id,
                 "title": it["title"],
@@ -338,15 +347,10 @@ def evaluate_simulation_submission(
                 "feedback": g.feedback,
             })
         else:
-            lower_ans = ans.lower()
-            words = re.findall(r"[A-Za-z0-9_-]{3,}", lower_ans)
-            matched = [c for c in expected if c.lower() in lower_ans]
-            missed = [c for c in expected if c.lower() not in lower_ans]
             if not ans:
                 score = 0.0
                 fb = "No response submitted."
             else:
-                concept_ratio = (len(matched) / max(1, len(expected))) if expected else 0.5
                 depth_bonus = min(40.0, len(words) * 1.4)
                 score = min(100.0, round(20.0 + concept_ratio * 45.0 + depth_bonus, 1))
                 fb = (

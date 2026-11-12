@@ -326,17 +326,40 @@ export const api = {
     if (employee) params.set("employee", employee)
     return fetchJson<any[]>(`/knowledge/explorer?${params.toString()}`)
   },
-  getGraphReactFlow: async (projectId?: string, entityType?: string, search?: string) => {
+  getGraphReactFlow: async (
+    projectId?: string,
+    entityType?: string,
+    search?: string,
+    layout: "vertical" | "horizontal" = "vertical",
+    hideIsolated: boolean = false
+  ) => {
     const params = new URLSearchParams()
     if (projectId) params.set("project_id", projectId)
     if (entityType && entityType !== "All") params.set("entity_type", entityType)
     if (search) params.set("search", search)
+    if (layout) params.set("layout", layout)
+    if (hideIsolated) params.set("hide_isolated", "true")
     const qs = params.toString()
-    return fetchJson<{ nodes: any[]; edges: any[]; spof_warnings?: any[]; stats: any }>(
+    return fetchJson<{ nodes: any[]; edges: any[]; spof_warnings?: any[]; people?: any[]; stats: any }>(
       `/graph/react-flow${qs ? `?${qs}` : ""}`
     )
   },
   getBlastRadius: async (nodeId: string) => fetchJson<any>(`/graph/blast-radius/${nodeId}`),
+  getDepartureImpact: async (personNodeId: string) =>
+    fetchJson<any>(`/graph/departure-impact/${personNodeId}`),
+  assignBackupOwner: async (data: {
+    component_id: string
+    backup_person_name: string
+    relation_type?: "owns" | "maintains"
+  }) =>
+    fetchJson<any>("/graph/assign-backup-owner", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  exportGraphMermaid: async (projectId?: string) => {
+    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
+    return fetchJson<{ mermaid: string; node_count: number; edge_count: number }>(`/graph/export/mermaid${q}`)
+  },
   extractKnowledgeGraph: async (projectId: string) =>
     fetchJson<any>(`/graph/extract/${projectId}`, { method: "POST" }),
   getDependencies: async (projectId?: string) => {
