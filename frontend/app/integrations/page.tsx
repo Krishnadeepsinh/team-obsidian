@@ -3,15 +3,8 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
+import { ProviderLogo } from "@/components/ProviderLogo"
 import {
-  Github,
-  GitBranch,
-  Kanban,
-  BookOpen,
-  Layers,
-  Bug,
-  MessageSquare,
-  FileText,
   RefreshCw,
   CheckCircle2,
   XCircle,
@@ -222,72 +215,72 @@ function ResourcePickerList({
 const PROVIDER_CARDS = [
   {
     key: "github",
-    title: "GitHub Repositories",
-    desc: "Ingest pull requests, commits, review threads, issues, and ADRs with verified SHA-256 links.",
-    icon: Github,
+    title: "GitHub",
+    category: "Code & PRs",
+    desc: "PRs, commits, issues, review threads & Python/TS AST graphs.",
     configLabel: "Repository (owner/repo)",
     configPlaceholder: "my-org/backend-service",
     tokenPlaceholder: "ghp_... or fine-grained PAT",
   },
   {
     key: "slack",
-    title: "Slack Channels",
-    desc: "Ingest architectural discussions, incident threads, workarounds, and escalation history.",
-    icon: MessageSquare,
+    title: "Slack",
+    category: "Team Messaging",
+    desc: "Architecture discussions, incident threads & escalation history.",
     configLabel: "Channel ID(s)",
     configPlaceholder: "C0123456789",
     tokenPlaceholder: "xoxb-...",
   },
   {
     key: "notion",
-    title: "Notion Workspaces",
-    desc: "Ingest technical specs, runbooks, onboarding docs, and decision databases.",
-    icon: FileText,
+    title: "Notion",
+    category: "Specs & Runbooks",
+    desc: "Technical specs, runbooks, onboarding docs & decision DBs.",
     configLabel: "Page ID / Database ID (optional)",
     configPlaceholder: "Notion UUID or leave empty for shared pages",
     tokenPlaceholder: "ntn_... or secret_...",
   },
   {
     key: "jira",
-    title: "Jira Cloud Projects",
-    desc: "Ingest sprint issues, epics, bug reports, blockers, and engineering comments via Atlassian OAuth or API token.",
-    icon: Kanban,
+    title: "Jira Cloud",
+    category: "Issue Tracking",
+    desc: "Sprint issues, epics, blockers & engineering ticket threads.",
     configLabel: "Project Key(s)",
     configPlaceholder: "ENG, PLATFORM",
     tokenPlaceholder: "ATATT... API Token",
   },
   {
     key: "confluence",
-    title: "Confluence Knowledge Base",
-    desc: "Ingest ADRs, architecture wikis, onboarding playbooks, and postmortems from Confluence Cloud spaces.",
-    icon: BookOpen,
+    title: "Confluence",
+    category: "Knowledge Base",
+    desc: "ADRs, architecture wikis, onboarding playbooks & postmortems.",
     configLabel: "Space ID(s)",
     configPlaceholder: "123456 or leave empty for all accessible spaces",
     tokenPlaceholder: "ATATT... API Token",
   },
   {
     key: "linear",
-    title: "Linear Teams & Issues",
-    desc: "Ingest engineering cycles, roadmaps, high-priority issues, and project leads via GraphQL.",
-    icon: Layers,
+    title: "Linear",
+    category: "Cycles & Roadmaps",
+    desc: "Engineering cycles, roadmaps, issues & project ownership.",
     configLabel: "Team Key(s)",
     configPlaceholder: "ENG, OPS",
     tokenPlaceholder: "lin_api_...",
   },
   {
     key: "gitlab",
-    title: "GitLab Repositories",
-    desc: "Ingest merge requests, issues, commits, and Python/TS AST architectural graphs.",
-    icon: GitBranch,
+    title: "GitLab",
+    category: "Code & Merge Requests",
+    desc: "Merge requests, commits, issues & AST dependency graphs.",
     configLabel: "Project Path (namespace/repo)",
     configPlaceholder: "my-group/core-api",
     tokenPlaceholder: "glpat-...",
   },
   {
     key: "sentry",
-    title: "Sentry Error Telemetry",
-    desc: "Ingest unresolved production error clusters, culprits, user impact counts, and regression alerts.",
-    icon: Bug,
+    title: "Sentry",
+    category: "Error Telemetry",
+    desc: "Unresolved production error clusters, culprits & regressions.",
     configLabel: "Project Slug (org/project)",
     configPlaceholder: "my-org/backend-api",
     tokenPlaceholder: "sntryu_...",
@@ -798,9 +791,8 @@ function IntegrationsContent() {
       )}
 
       {/* Provider Catalog */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {PROVIDER_CARDS.map((card) => {
-          const Icon = card.icon
           const matchingInteg = integrations.find(
             (i) =>
               i.provider === card.key &&
@@ -808,36 +800,48 @@ function IntegrationsContent() {
               (!activeProject || i.project_id === activeProject)
           )
           return (
-            <div key={card.key} className="apple-card p-5 flex flex-col justify-between gap-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="w-10 h-10 rounded-xl bg-violet-50 border border-violet-100 text-violet-600 flex items-center justify-center">
-                    <Icon className="w-5 h-5" />
+            <div
+              key={card.key}
+              className={`apple-card p-3.5 flex flex-col justify-between gap-2.5 transition-all hover:shadow-md ${
+                matchingInteg ? "ring-1 ring-emerald-200/80" : ""
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ProviderLogo provider={card.key} size="md" />
+                    <div className="min-w-0">
+                      <h2 className="text-[13px] font-bold text-slate-900 leading-tight truncate">{card.title}</h2>
+                      <p className="text-[10px] font-medium text-slate-400 truncate">{card.category}</p>
+                    </div>
                   </div>
                   {matchingInteg && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Connected{matchingInteg.connected_account ? ` (@${matchingInteg.connected_account})` : ""}
+                    <span
+                      title={matchingInteg.connected_account ? `Connected as ${matchingInteg.connected_account}` : "Connected"}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-semibold flex-shrink-0"
+                    >
+                      <CheckCircle2 className="w-2.5 h-2.5" />
+                      Live
                     </span>
                   )}
                 </div>
-                <h2 className="text-sm font-bold text-slate-900">{card.title}</h2>
-                <p className="text-xs text-slate-500 leading-relaxed">{card.desc}</p>
+                <p className="text-[11px] text-slate-500 leading-snug line-clamp-2">{card.desc}</p>
               </div>
-              <div className="flex flex-wrap gap-2 pt-2">
+              <div className="flex items-center gap-1.5 pt-1">
                 {matchingInteg ? (
                   <>
                     <button
                       onClick={() => openConfigModal(matchingInteg)}
-                      className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                      className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm truncate"
                     >
-                      Select {resourceNoun(card.key)}
+                      Pick {resourceNoun(card.key).split(" ")[0]}
                     </button>
                     <button
                       onClick={() => openTokenConnect(card.key)}
-                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+                      title="Add API Token"
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1 flex-shrink-0"
                     >
-                      <KeyRound className="w-3.5 h-3.5" /> Add Token
+                      <KeyRound className="w-3 h-3" /> Token
                     </button>
                   </>
                 ) : (
@@ -845,23 +849,24 @@ function IntegrationsContent() {
                     {oauthProviders[card.key] === false && card.key === "sentry" ? (
                       <button
                         onClick={() => openTokenConnect(card.key)}
-                        className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center justify-center gap-1.5"
+                        className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center justify-center gap-1"
                       >
-                        <KeyRound className="w-3.5 h-3.5" /> Connect Auth Token
+                        <KeyRound className="w-3 h-3" /> Connect Token
                       </button>
                     ) : (
                       <>
                         <button
                           onClick={() => handleOAuthConnect(card.key)}
-                          className="flex-1 px-3 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                          className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm truncate"
                         >
-                          {oauthProviders[card.key] === false ? "OAuth Setup Required" : "OAuth Connect"}
+                          {oauthProviders[card.key] === false ? "OAuth Setup" : "OAuth"}
                         </button>
                         <button
                           onClick={() => openTokenConnect(card.key)}
-                          className="px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+                          title="Connect with API Token"
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1 flex-shrink-0"
                         >
-                          <KeyRound className="w-3.5 h-3.5" /> Connect Integration
+                          <KeyRound className="w-3 h-3" /> Token
                         </button>
                       </>
                     )}
@@ -893,26 +898,29 @@ function IntegrationsContent() {
               return (
                 <div key={integ.id} className="apple-card p-5 space-y-3.5">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold uppercase">
-                          {integ.provider}
-                        </span>
-                        <span
-                          className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
-                            isConn
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              : "bg-rose-50 text-rose-700 border-rose-200"
-                          }`}
-                        >
-                          {isConn ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                          {integ.status}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 font-semibold">
-                          Auth: {integ.auth_status || "unverified"}
-                        </span>
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <ProviderLogo provider={integ.provider} size="sm" className="mt-0.5" />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                          <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold uppercase">
+                            {integ.provider}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                              isConn
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : "bg-rose-50 text-rose-700 border-rose-200"
+                            }`}
+                          >
+                            {isConn ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                            {integ.status}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 font-semibold">
+                            Auth: {integ.auth_status || "unverified"}
+                          </span>
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-900 truncate">{integ.name}</h3>
                       </div>
-                      <h3 className="text-sm font-bold text-slate-900">{integ.name}</h3>
                     </div>
 
                     <div className="text-right text-[11px] text-slate-500">
@@ -1046,9 +1054,12 @@ function IntegrationsContent() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
           <div className="apple-card max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900 uppercase">
-                {reconnectTargetId ? `Reconnect ${connectProvider}` : `Connect ${connectProvider}`}
-              </h3>
+              <div className="flex items-center gap-2.5">
+                <ProviderLogo provider={connectProvider} size="sm" />
+                <h3 className="text-base font-bold text-slate-900 uppercase">
+                  {reconnectTargetId ? `Reconnect ${connectProvider}` : `Connect ${connectProvider}`}
+                </h3>
+              </div>
               <button
                 onClick={() => {
                   setConnectProvider(null)
