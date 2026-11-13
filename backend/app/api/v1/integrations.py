@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_user_accessible_project_ids, verify_project_access
 from app.core.pipeline_tracker import pipeline_tracker
+from app.core.rate_limiter import get_client_ip, rate_limiter
 from app.core.security import (
     create_oauth_state_token,
     decode_access_token,
@@ -630,9 +631,23 @@ def create_integration(
 @router.post("/discover-resources")
 def discover_resources_with_token(
     req: DiscoverResourcesRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     """Discover selectable repositories, Slack channels, or Notion pages/databases using a candidate token before saving."""
+    rate_limiter.check(
+        key=f"discover_resources:user:{current_user.id}",
+        limit=20,
+        window_seconds=60,
+        detail="Rate limit exceeded for resource discovery. Please wait before making more requests.",
+    )
+    client_ip = get_client_ip(request)
+    rate_limiter.check(
+        key=f"discover_resources:ip:{client_ip}",
+        limit=40,
+        window_seconds=60,
+        detail="Rate limit exceeded for resource discovery from this IP.",
+    )
     token = (req.token or _token_from_dict(req.credentials) or "").strip()
     if not token:
         raise HTTPException(

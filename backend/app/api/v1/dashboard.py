@@ -232,8 +232,8 @@ def get_dashboard_stats(
                 "incoming_employee": None,
                 "status": "active",
                 "target_date": getattr(latest_project, "target_handover_date", None),
-                "completion_progress": 0.0,
-                "confidence": 0.0,
+                "completion_progress": None,
+                "confidence": None,
             }
 
     return {

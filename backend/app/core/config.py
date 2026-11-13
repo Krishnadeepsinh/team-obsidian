@@ -33,7 +33,10 @@ class Settings:
     # Database: PostgreSQL (Supabase Session Pooler) in live/staging, SQLite fallback for isolated local dev/tests
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./obsidian.db")
 
-    # AI Engine: Gemini 3.5 Flash / Flash-Lite + local BAAI/bge-small-en-v1.5 embeddings
+    # AI Engine: Groq central inference provider + Gemini fallback + local BAAI/bge-small-en-v1.5 embeddings
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_PRIMARY_MODEL: str = os.getenv("GROQ_PRIMARY_MODEL", "llama-3.3-70b-versatile")
+    GROQ_SECONDARY_MODEL: str = os.getenv("GROQ_SECONDARY_MODEL", "llama-3.1-8b-instant")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     PRIMARY_LLM: str = os.getenv("PRIMARY_LLM", "gemini-3.5-flash")
     SECONDARY_LLM: str = os.getenv("SECONDARY_LLM", "gemini-3.5-flash-lite")
@@ -60,7 +63,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
     PASSWORD_RESET_EXPIRE_MINUTES: int = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
     AUTH_COOKIE_NAME: str = os.getenv("AUTH_COOKIE_NAME", "obsidian_session")
-    AUTH_COOKIE_ENABLED: bool = os.getenv("AUTH_COOKIE_ENABLED", "false").lower() == "true"
+    AUTH_COOKIE_ENABLED: bool = os.getenv("AUTH_COOKIE_ENABLED", "true").lower() == "true"
     COOKIE_SAMESITE: str = (
         os.getenv("COOKIE_SAMESITE", "none" if APP_ENV == "production" else "lax").strip().lower()
     )
@@ -69,6 +72,11 @@ class Settings:
         or COOKIE_SAMESITE == "none"
     )
     TRUSTED_PROXY_HOPS: int = max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "1")))
+    TRUSTED_PROXIES: List[str] = [
+        p.strip()
+        for p in os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1,localhost,testclient,10.0.0.2").split(",")
+        if p.strip()
+    ]
 
     # Deployment URLs & Restricted CORS (supports localhost + configured production Vercel/custom domains)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
@@ -122,6 +130,10 @@ class Settings:
     SENTRY_CLIENT_SECRET: str = os.getenv("SENTRY_CLIENT_SECRET", "")
     SENTRY_AUTH_TOKEN: str = os.getenv("SENTRY_AUTH_TOKEN", "")
     SENTRY_ORG_SLUG: str = os.getenv("SENTRY_ORG_SLUG", "")
+
+    GOOGLE_DRIVE_CLIENT_ID: str = os.getenv("GOOGLE_DRIVE_CLIENT_ID", "")
+    GOOGLE_DRIVE_CLIENT_SECRET: str = os.getenv("GOOGLE_DRIVE_CLIENT_SECRET", "")
+    GOOGLE_DRIVE_API_KEY: str = os.getenv("GOOGLE_DRIVE_API_KEY", "")
 
     # Email Delivery (Password Reset & Invitations)
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")

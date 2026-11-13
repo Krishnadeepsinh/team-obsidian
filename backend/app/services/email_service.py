@@ -1,3 +1,4 @@
+import html
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -139,6 +140,8 @@ class EmailService:
         query = urlencode({"token": reset_token, "email": to_email})
         reset_link = f"{settings.FRONTEND_URL}/forgot-password?{query}"
         greeting = f"Hi {user_name}," if user_name else "Hello,"
+        escaped_user_name = html.escape(user_name, quote=True) if user_name else None
+        html_greeting = f"Hi {escaped_user_name}," if escaped_user_name else "Hello,"
         text_body = (
             f"{greeting}\n\n"
             "We received a request to reset your TEAM OBSIDIAN password.\n"
@@ -148,7 +151,7 @@ class EmailService:
             "If you did not request this, you can safely ignore this email."
         )
         html_body = (
-            f"<p>{greeting}</p>"
+            f"<p>{html_greeting}</p>"
             "<p>We received a request to reset your <strong>TEAM OBSIDIAN</strong> password.</p>"
             f"<p><a href=\"{reset_link}\">Reset Password</a> (expires in {settings.PASSWORD_RESET_EXPIRE_MINUTES} minutes)</p>"
             "<p>If you did not request this, you can safely ignore this email.</p>"
@@ -175,10 +178,14 @@ class EmailService:
             f"for project '{project_name}' as {role}.\n\n"
             f"Review & Sign Off: {approvals_url}\n"
         )
+        esc_reviewer = html.escape(str(reviewer_name or ""), quote=True)
+        esc_title = html.escape(str(handover_title or ""), quote=True)
+        esc_project = html.escape(str(project_name or ""), quote=True)
+        esc_role = html.escape(str(role or ""), quote=True)
         html_body = (
-            f"<p>Hi {reviewer_name},</p>"
+            f"<p>Hi {esc_reviewer},</p>"
             f"<p>You have been requested to review and sign off on handover dossier "
-            f"<strong>{handover_title}</strong> for project <strong>{project_name}</strong> as <em>{role}</em>.</p>"
+            f"<strong>{esc_title}</strong> for project <strong>{esc_project}</strong> as <em>{esc_role}</em>.</p>"
             f"<p><a href=\"{approvals_url}\">Open Handover Approvals</a></p>"
         )
         return self.send_email(
@@ -205,10 +212,15 @@ class EmailService:
             f"Details: {drift_summary}\n\n"
             f"Audit in Evidence Center: {evidence_url}\n"
         )
+        esc_recipient = html.escape(str(recipient_name or ""), quote=True)
+        esc_project = html.escape(str(project_name or ""), quote=True)
+        esc_target = html.escape(str(target_title or ""), quote=True)
+        esc_drift = html.escape(str(drift_summary or ""), quote=True)
+        esc_severity = html.escape(str(severity or "high"), quote=True)
         html_body = (
-            f"<p>Hi {recipient_name},</p>"
-            f"<p><strong>[{severity.upper()} KNOWLEDGE DRIFT]</strong> Detected in project <strong>{project_name}</strong>:</p>"
-            f"<p><strong>Target:</strong> {target_title}<br/><strong>Details:</strong> {drift_summary}</p>"
+            f"<p>Hi {esc_recipient},</p>"
+            f"<p><strong>[{esc_severity.upper()} KNOWLEDGE DRIFT]</strong> Detected in project <strong>{esc_project}</strong>:</p>"
+            f"<p><strong>Target:</strong> {esc_target}<br/><strong>Details:</strong> {esc_drift}</p>"
             f"<p><a href=\"{evidence_url}\">Inspect Drift in Evidence Center</a></p>"
         )
         return self.send_email(

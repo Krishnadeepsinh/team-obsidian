@@ -9,7 +9,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@emotion/is-prop-valid": "latest",
+    "@emotion/is-prop-valid": "1.4.0",
     "@hookform/resolvers": "^3.10.0",
     "@icons-pack/react-simple-icons": "^13.11.1",
     "@lobehub/icons": "^5.10.1",

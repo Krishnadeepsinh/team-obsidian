@@ -20,6 +20,7 @@ from app.services.code_ast_indexer import (
     persist_ast_graph_facts,
     summarize_repository_ast,
 )
+from app.services.connectors.github_connector import GitHubConnector
 from app.services.email_service import email_service
 from app.services.storage_service import storage_service
 
@@ -197,8 +198,9 @@ def test_signed_webhooks_and_automated_knowledge_drift():
             db.close()
 
         # Connect GitHub integration & generate webhook signing secret
-        with patch(
-            "app.services.connectors.github_connector.GitHubConnector.check_connection",
+        with patch.object(
+            GitHubConnector,
+            "check_connection",
             return_value={"status": "connected", "login": "acme-bot", "connected_account": "acme-bot"},
         ):
             r_int = client.post(

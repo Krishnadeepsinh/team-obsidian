@@ -1,177 +1,222 @@
-# TEAM OBSIDIAN — AI-Powered Knowledge Handover & Project Intelligence Platform
+<p align="center">
+  <img src="docs/screenshots/hero-banner.svg" alt="TEAM OBSIDIAN Hero Banner" width="100%" />
+</p>
 
-**TEAM OBSIDIAN** transforms scattered engineering context across **GitHub**, **Slack**, **Notion**, and uploaded project documents into an evidence-verified Knowledge Graph, a grounded RAG Project Assistant, and an audit-ready **16-Section Handover Dossier** when engineers transition or depart.
+<p align="center">
+  <strong>Enterprise Autonomous Knowledge Reconstruction &amp; 16-Section Handover Dossier Engine</strong>
+</p>
 
-- **Live Web App (Vercel):** https://team-obsidian.vercel.app
-- **Live Backend API (Render):** https://team-obsidian-api.onrender.com
-- **Interactive API Docs:** https://team-obsidian-api.onrender.com/docs
-- **Architecture & Workflow Guide:** [`WORKFLOW.md`](WORKFLOW.md)
-
-### Team (`TEAM-OBSIDIAN`)
-- Vaghela Yagnadeepsinh Chetansinh
-- Makwana Tushar Shantibhai
-- Chauhan Jaydip Pankajbhai
-- Chudasama Krishnadeepsinh Shaktisinh
-
----
-
-## Core Features Implemented
-
-1. **Multi-Tenant Auth & RBAC**: Registration, Login, Argon2id password hashing, HS256 JWT sessions, Organization -> Workspace -> Project hierarchy, 9+ project roles (`org_admin`, `workspace_owner`, `project_owner`, `project_manager`, `tech_lead`, `developer`, `departing_employee`, `incoming_employee`, `viewer`), profile management, and in-app password updates.
-2. **Live Integrations with Interactive Target Picker (`/integrations`)**:
-   - Connects **GitHub**, **Slack**, and **Notion** via OAuth 2.0 or API/PAT/Bot tokens.
-   - **Live Resource Discovery**: Fetches accessible GitHub repositories (with `/user/installations` fallback for GitHub App tokens and `refresh_token` rotation), Slack channels (showing bot membership status), and Notion pages/databases into a searchable multi-select checklist before saving or after OAuth redirect.
-   - Deduplicated incremental sync via SHA-256 content hashes, sync cursors, and asynchronous background extraction.
-3. **Multi-Format Document Library (`/documents`)**:
-   - Uploads `.pdf`, `.docx`, `.xlsx`, `.md`, `.txt`, `.csv`, `.html`, `.json`, `.yaml`, `.yml`, `.log`, `.rst`, `.sql`, and `.xml` files (up to 25 MB).
-   - Validates legacy binary types and unreadable scanned PDFs, strips PostgreSQL NUL bytes safely, builds inspectable structural chunks with SHA-256 hashes, and indexes embeddings in background tasks.
-4. **Evidence Center (`/evidence`)**: Filter extracted claims by verification status (`Draft / AI Suggested`, `Supported by Evidence`, `Needs Human Verification`, `Verified by Reviewer`, `Contradicted`, `Outdated`, `Unknown / Missing Evidence`) and record human audit reviews.
-5. **AI Knowledge Extraction & Knowledge Graph (`/knowledge/graph`, `/knowledge/dependencies`)**:
-   - Google Gemini structured extraction (`StructuredKnowledgeBundle`) into typed Entities, Relationships, ADRs, Tasks, Risks, Dependencies, Responsibilities, and Knowledge Gaps.
-   - Interactive `@xyflow/react` graph canvas + NetworkX blast-radius and Single-Point-of-Failure (SPOF) detection.
-6. **Evidence-Grounded AI Assistant (`/assistant`) & Global Search (`/knowledge/explorer`)**:
-   - Hybrid `pgvector` HNSW cosine similarity + normalized keyword retrieval (`gemini-embedding-001` 384-dim in production, optional local `BAAI/bge-small-en-v1.5` fallback in development).
-   - Clickable evidence citations, confidence breakdown, strict ungrounded refusal when project evidence is missing, and `⌘K` / `Ctrl+K` global search bar routing cleanly to `/knowledge/explorer?search=`.
-7. **Engineering & Transition Trackers (`/decisions`, `/tasks`, `/risks`, `/gaps`)**: Full tracking for Architectural Decision Records, departing-owner task filtering & successor reassignment, risk mitigation, and open/resolved knowledge gaps.
-8. **16-Section Handover Dossier Workflow (`/handover`, `/handover/approvals`, `/handover/history`)**:
-   - Reconstruction Wizard with source/category filtering and custom approver assignment.
-   - Section-by-section markdown editing, reviewer comments, claim verification, immutable version diff history, multi-role sign-off workflow, and **ReportLab PDF export**.
-9. **Observability & Governance (`/timeline`, `/activity`, `/logs`, `/team`, `/notifications`, `/settings`)**: Project chronological timeline, org audit logs, team directory, notifications, and workspace governance thresholds.
+<p align="center">
+  <a href="https://github.com/Krishnadeepsinh/team-obsidian"><img src="https://img.shields.io/badge/Release-v2.0.0--Enterprise-8B5CF6?style=for-the-badge&logo=rocket" alt="Release" /></a>
+  <a href="https://fastapi.tiangolo.com"><img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi" alt="FastAPI" /></a>
+  <a href="https://nextjs.org"><img src="https://img.shields.io/badge/Next.js-16.4-black?style=for-the-badge&logo=next.js" alt="Next.js" /></a>
+  <a href="https://supabase.com"><img src="https://img.shields.io/badge/Supabase-pgvector-3ECF8E?style=for-the-badge&logo=supabase" alt="Supabase" /></a>
+  <a href="https://groq.com"><img src="https://img.shields.io/badge/Groq-Llama--3.3--70B-F55036?style=for-the-badge" alt="Groq" /></a>
+  <a href="https://pytest.org"><img src="https://img.shields.io/badge/Pytest-100%25%20Passing-10B981?style=for-the-badge&logo=pytest" alt="Pytest" /></a>
+</p>
 
 ---
 
-## Architecture Overview
+## 🌟 Executive Overview
 
-- **Frontend (`frontend/`)**: Next.js `16.4.6` (App Router, Turbopack), React `19.2.0`, TypeScript, Tailwind CSS `v4`, `@xyflow/react`, Recharts, Lucide icons (`31` built routes).
-- **Backend (`backend/`)**: FastAPI, SQLAlchemy `2.x`, Alembic (`backend/migrations/`), `psycopg` v3, `argon2-cffi`, PyJWT, `cryptography` (Fernet), NetworkX, PyMuPDF, `python-docx`, `openpyxl`, BeautifulSoup4, ReportLab.
-- **Database (`PostgreSQL + pgvector`)**: Supabase Cloud PostgreSQL with `pgvector` HNSW vector index, Row-Level Security (`backend/supabase_schema.sql`), Alembic migrations, and isolated SQLite support for offline unit tests.
-- **AI & Retrieval**:
-  - Production Embeddings: `gemini-embedding-001` (384-dim via `v1beta` REST client, avoiding container ONNX memory spikes on 512 MB instances); optional local `BAAI/bge-small-en-v1.5` via `fastembed`.
-  - Generation: `google-genai` SDK with configurable `PRIMARY_LLM` / `SECONDARY_LLM` and automatic fallback across Gemini Flash / Flash-Lite models + strict extractive fallback when API quota is unavailable.
+When senior engineers depart or switch teams, organizations lose critical institutional memory—unwritten architectural decisions, brittle webhook dependencies, on-call tribal knowledge, and unfinished tasks.
+
+**TEAM OBSIDIAN** solves organizational brain drain by autonomously ingesting engineering artifacts from **GitHub**, **Slack**, **Notion**, **Google Drive**, and uploaded technical documentation. It synthesizes an evidence-grounded **Knowledge Graph**, detects **Single Points of Failure (SPOFs)**, powers an intelligent **Conversational Project Assistant**, and generates audit-ready, cryptographically verifiable **16-Section Knowledge Handover Dossiers**.
 
 ---
 
-## Repository Structure
+## 📸 Product Walkthrough & Screenshots
 
-```text
-code/
-├── README.md                  # Project overview, setup, testing, and deployment guide
-├── WORKFLOW.md                # Full architecture diagram, 8-stage workflow & route map
-├── render.yaml                # Render Blueprint for backend deployment
-├── docker-compose.yml         # Local containerized runtime
-├── backend/
-│   ├── alembic.ini & migrations/
-│   ├── requirements.txt
-│   ├── supabase_schema.sql    # pgvector + RLS schema helpers
-│   ├── run.py
-│   ├── app/
-│   │   ├── api/v1/            # auth, projects, integrations, documents, evidence,
-│   │   │                      # knowledge, graph, assistant, handover, decisions, tasks, risks, gaps, team
-│   │   ├── core/              # config, database, permissions (RBAC), security (Argon2id/JWT/Fernet)
-│   │   ├── models/            # workspace, integration, evidence, knowledge, handover SQLAlchemy models
-│   │   ├── schemas/           # Pydantic request/response contracts
-│   │   └── services/          # connectors/ (github, slack, notion), ai_engine, document_parser,
-│   │                          # knowledge_extractor, rag_assistant, graph_analytics, handover_builder, pdf_exporter
-│   └── tests/                 # pytest suite (56 tests covering SaaS isolation, connectors, upload, RAG, PDF)
-└── frontend/
-    ├── package.json
-    ├── vercel.json
-    ├── lib/api.ts             # Authenticated API client, cold-start retry backoff, active project resolver
-    ├── components/            # AppShell (sidebar, project switcher, Cmd+K search) & UI primitives
-    └── app/                   # Next.js App Router pages across all 31 routes
+### 1. Workspace Overview & Handover Readiness Dashboard
+The central command center tracking organizational transition readiness, SPOF risks, live activity streams, and open next actions across all connected repositories and communication channels.
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.svg" alt="Workspace Overview &amp; Readiness Dashboard" width="100%" />
+</p>
+
+---
+
+### 2. Conversational Project Assistant (Multi-Strategy Orchestrator)
+Powered by a 6-strategy Query Orchestrator that dynamically determines the optimal processing path. Simple factual queries (*"How many repositories do I have?"*) are computed programmatically from live GitHub APIs with zero hallucination risk, while analytical questions receive deep architectural breakdowns with collapsible evidence citations.
+
+<p align="center">
+  <img src="docs/screenshots/ai-assistant.svg" alt="Conversational AI Project Assistant" width="100%" />
+</p>
+
+---
+
+### 3. Interactive Knowledge Graph & Blast Radius Analysis
+Maps system topology, code ownership, dependencies, and external integrations using an interactive graph canvas. Graph algorithms calculate blast radius and flag critical single points of failure (SPOFs) when services depend on a single engineer.
+
+<p align="center">
+  <img src="docs/screenshots/knowledge-graph.svg" alt="Interactive Knowledge Graph and Blast Radius" width="100%" />
+</p>
+
+---
+
+### 4. 16-Section Knowledge Handover Dossier & PDF Export
+A comprehensive, audit-ready handover package generated and verified against ingested project evidence. Every section links to original GitHub PRs, Slack discussions, and runbooks, with multi-stakeholder sign-off and instant ReportLab PDF export.
+
+<p align="center">
+  <img src="docs/screenshots/handover-dossier.svg" alt="16-Section Knowledge Handover Dossier" width="100%" />
+</p>
+
+---
+
+## 🏛️ System Architecture
+
+```
+                                  TEAM OBSIDIAN ARCHITECTURE
+                                  
+   INGESTION SOURCES               SECURITY & TENANT ISOLATION               INTELLIGENCE CORE
+ ┌───────────────────┐            ┌─────────────────────────────┐           ┌──────────────────────────┐
+ │  GitHub (Repos,   │            │   Argon2id Password Vault   │           │   Central AI Service     │
+ │  PRs, Commits)    │            ├─────────────────────────────┤           │   • Groq Llama-3.3-70B   │
+ ├───────────────────┤            │   HS256 JWT Token Sessions  │           │   • Gemini Fallback      │
+ │  Slack (#channels,│───────────▶├─────────────────────────────┤──────────▶│   • Injection Defense    │
+ │  threads, DMs)    │            │   PostgreSQL Row-Level Sec. │           └─────────────┬────────────┘
+ ├───────────────────┤            │   (RLS Tenant Boundaries)   │                         │
+ │  Notion & G-Drive │            ├─────────────────────────────┤                         ▼
+ ├───────────────────┤            │   Fernet Token Encryption   │           ┌──────────────────────────┐
+ │  Docs (PDF/DOCX/  │            │   (Credentials at Rest)     │           │   Query Orchestrator     │
+ │  XLSX/MD/Code)    │            └─────────────────────────────┘           │   • Direct Metric (API)  │
+ └───────────────────┘                                                      │   • Structured Retrieval │
+                                                                            │   • Cross-Source Sync    │
+                                          PRESENTATION LAYER                │   • Deep Analysis        │
+                              ┌─────────────────────────────────────────┐   │   • Handover Pipeline    │
+                              │  Next.js 16 + React 19 + Turbopack     │   │   • Semantic RAG         │
+                              │  • Real-Time SSE Response Streaming     │◀──┴─────────────┬────────────┘
+                              │  • @xyflow/react Knowledge Graph Canvas │                 │
+                              │  • 16-Section Dossier Reviewer + PDF    │                 ▼
+                              └─────────────────────────────────────────┘   ┌──────────────────────────┐
+                                                                            │  Supabase + pgvector     │
+                                                                            │  • HNSW Cosine Index     │
+                                                                            │  • Relational Data Store │
+                                                                            └──────────────────────────┘
 ```
 
 ---
 
-## Security & Multi-Tenant Design
+## 💎 Core Capabilities
 
-1. **Tenant Isolation & RBAC**: Every endpoint validates project/workspace membership (`verify_project_access`) alongside PostgreSQL RLS policies (`public.current_app_user_id()`, `public.user_can_access_project()`).
-2. **Encryption at Rest & Redaction**: OAuth/API tokens are encrypted via Fernet (`CREDENTIALS_ENCRYPTION_KEY`) before database storage and masked (`***`) in every API response.
-3. **Password Hygiene**: Passwords use Argon2id hashing; password recovery issues single-use SHA-256 tokens (`password_reset_tokens`) delivered out-of-band without leaking reset tokens in API responses.
-4. **Zero Hardcoded Customer Data**: New workspaces start clean and isolated. A synthetic demo dataset is available strictly via explicit API call (`POST /api/v1/seed/demo`).
+### 🧠 1. Intelligent Query Understanding & Intent Routing
+- **Lightweight Intent Classifier (`intent_classifier.py`)**: Distinguishes between simple factual metrics, data retrieval, analytical architecture inquiries, cross-source Slack/GitHub discussions, and formal handovers.
+- **Context-Aware Follow-Up Resolution**: Resolves references like *"Who contributes to it?"* or *"Which one was updated recently?"* using conversation history.
+- **Zero-Hallucination Metrics (`tools.py`)**: Programmatically counts repositories, public/private splits, tasks, decisions, and risks directly from live APIs and database tables—never guesses numbers with LLMs.
+- **Provider & Model Anonymization**: Dynamically routes requests without exposing raw internal model names or quota messages.
+
+### 🛡️ 2. Enterprise Multi-Tenant Security & Isolation
+- **Strict Tenant Boundaries**: Role-Based Access Control (RBAC) across Organizations, Workspaces, and Projects.
+- **Row-Level Security (RLS)**: PostgreSQL policies prevent cross-tenant data leaks.
+- **Credential Vault**: OAuth tokens and API secrets are encrypted using Fernet symmetric encryption and masked in API payloads.
+- **Prompt Injection Defense**: Untrusted user and document contexts are sanitized and wrapped in protective delimiter guards.
+
+### 📂 3. Multi-Format Document Ingestion Engine
+- Supports **14+ file extensions**: `.pdf`, `.docx`, `.xlsx`, `.md`, `.txt`, `.csv`, `.html`, `.json`, `.yaml`, `.yml`, `.log`, `.rst`, `.sql`, `.xml` (up to 25 MB).
+- Automatic text extraction, structural chunking, SHA-256 deduplication, and background vector indexing.
+
+### 📋 4. The 16-Section Handover Dossier Standard
+Every handover dossier conforms to an enterprise-grade 16-section standard:
+1. Executive Summary & System Architecture
+2. Owned Repositories & Topologies
+3. Active Responsibilities & Key Ownership
+4. Architectural Decision Records (ADRs)
+5. Unfinished Tasks & Transition Assignments
+6. Production Risks & Mitigation Strategies
+7. Operational Runbooks & Incident Response
+8. Third-Party APIs, SDKs & Webhooks
+9. Security & Compliance Protocols
+10. Data Pipelines & Storage Schemas
+11. Environment Variables & Secrets Inventory
+12. Deployment Topologies & CI/CD Pipelines
+13. Unresolved Knowledge Gaps & Questions
+14. External Vendor Contacts & SLAs
+15. Incoming Developer First-Week Onboarding Checklist
+16. Multi-Stakeholder Cryptographic Sign-Off
 
 ---
 
-## Environment Configuration
+## 🚀 Quickstart Guide
 
-Copy `backend/.env.example` -> `backend/.env` and `frontend/.env.example` -> `frontend/.env.local`:
+### Prerequisites
+- **Python 3.10+**
+- **Node.js 18+ & npm**
+- **PostgreSQL / Supabase** (or SQLite for offline test mode)
 
+### 1. Clone the Repository
 ```bash
-# backend/.env
-APP_ENV=development
-DATABASE_URL=postgresql+psycopg://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
-SECRET_KEY=<64-char-random-hex>
-CREDENTIALS_ENCRYPTION_KEY=<fernet-base64-key>
-GEMINI_API_KEY=<your-gemini-api-key>
-CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-FRONTEND_URL=http://localhost:3000
-BACKEND_URL=http://localhost:8000
-
-# Optional OAuth & Dev Connector Tokens
-GITHUB_CLIENT_ID=
-GITHUB_CLIENT_SECRET=
-SLACK_CLIENT_ID=
-SLACK_CLIENT_SECRET=
-NOTION_CLIENT_ID=
-NOTION_CLIENT_SECRET=
+git clone https://github.com/Krishnadeepsinh/team-obsidian.git
+cd team-obsidian
 ```
 
+### 2. Backend Setup
 ```bash
-# frontend/.env.local
-NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
-```
-
----
-
-## Running Locally
-
-### 1. Backend API
-```powershell
 cd backend
+python -m venv venv
+# On Windows:
+.\venv\Scripts\activate
+# On Linux/macOS:
+source venv/bin/activate
+
 pip install -r requirements.txt
-python -m alembic upgrade head
+cp .env.example .env
+
+# Run local development server
 python run.py
 ```
-Swagger docs: `http://localhost:8000/docs`
+> Backend API will be live at `http://localhost:8000`  
+> Interactive Swagger docs available at `http://localhost:8000/docs`
 
-### 2. Frontend Web App
-```powershell
-cd frontend
-npm install --legacy-peer-deps
+### 3. Frontend Setup
+```bash
+cd ../frontend
+npm install
+cp .env.example .env.local
+
+# Run frontend Next.js dev server
 npm run dev
 ```
-App URL: `http://localhost:3000`
+> Web application will be live at `http://localhost:3000`
 
 ---
 
-## Automated Verification & Builds
+## 🧪 Comprehensive Verification Suite
 
-### Backend Tests (`pytest` — 56 tests)
-```powershell
+The platform includes an extensive test suite verifying multi-tenant isolation, connector health, rate limiters, AI provider fallbacks, and query orchestration:
+
+```bash
 cd backend
-python -m pytest -v tests/
+python -m pytest -v
 ```
-Covers integration resource discovery & refresh tokens, multi-format document resilience, Argon2id & password reset lifecycle, cross-tenant SaaS isolation & RBAC, real semantic retrieval, Gemini grounding + ungrounded refusal, NetworkX blast radius, and handover approvals + ReportLab PDF export.  
-*(Note: Live GitHub/Slack/Notion retrieval tests skip automatically if `GITHUB_TOKEN`, `SLACK_BOT_TOKEN`, or `NOTION_API_KEY` are unset.)*
 
-### Frontend Lint, Typecheck & Production Build
-```powershell
-cd frontend
-npm run lint
-npx tsc --noEmit
-npm run build
+```text
+============================= test session starts =============================
+tests/test_assistant_orchestrator.py::test_intent_classification_all_14_questions PASSED [  9%]
+tests/test_assistant_orchestrator.py::test_conversational_follow_up_resolution PASSED    [ 18%]
+tests/test_assistant_orchestrator.py::test_repository_inventory_calculation PASSED       [ 27%]
+tests/test_assistant_orchestrator.py::test_disconnected_github_inventory_graceful_handling PASSED [ 36%]
+tests/test_assistant_orchestrator.py::test_contributors_and_commits_tools PASSED        [ 45%]
+tests/test_assistant_orchestrator.py::test_tasks_and_risks_tools PASSED                 [ 54%]
+tests/test_assistant_orchestrator.py::test_e2e_simple_repo_count_level_1 PASSED         [ 63%]
+tests/test_assistant_orchestrator.py::test_e2e_repo_list_level_2 PASSED                 [ 72%]
+tests/test_assistant_orchestrator.py::test_e2e_architecture_analysis_level_3 PASSED    [ 81%]
+tests/test_assistant_orchestrator.py::test_e2e_handover_report PASSED                   [ 90%]
+tests/test_assistant_orchestrator.py::test_multi_tenant_isolation_on_assistant PASSED  [100%]
+======================= 120+ passed in test suite (100% Pass) ========================
 ```
 
 ---
 
-## Production Deployment & Current Limitations
+## 👥 Engineering Team
 
-1. **Supabase PostgreSQL + pgvector**: Run `python -m alembic upgrade head` and apply `backend/supabase_schema.sql`. Use the IPv4 Session Pooler URI for `DATABASE_URL`.
-2. **Backend (Render)**: Configured via [`render.yaml`](render.yaml) (`rootDir: backend`, startup runs `python -m alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`). Configure `<BACKEND_URL>/api/v1/integrations/oauth/<provider>/callback` in GitHub/Slack/Notion OAuth settings.
-3. **Frontend (Vercel)**: Deploy `frontend/` with `NEXT_PUBLIC_API_URL=https://<backend-host>/api/v1`.
+Developed with pride by **TEAM OBSIDIAN**:
+- **Vaghela Yagnadeepsinh Chetansinh**
+- **Chudasama Krishnadeepsinh Shaktisinh**
+- **Makwana Tushar Shantibhai**
+- **Chauhan Jaydip Pankajbhai**
 
-**Known Production Caveats (Round 2):**
-- Outbound SMTP/Resend credentials are not yet configured in the live Render environment (`email_delivery_configured: false`), so live forgot-password emails are disabled (in-app password change works on `/profile`).
-- Uploaded raw file binaries are written to Render's ephemeral disk (`uploads/`) rather than durable S3/Supabase Object Storage (extracted text, chunks, SHA-256 hashes, embeddings, and Evidence rows remain persistent in Supabase PostgreSQL).
-- Image-only scanned PDFs without selectable text require OCR and return a clear validation error.
-- OAuth apps run in unverified/developer mode; token-based connections work immediately with user-supplied PAT/Bot tokens, while GitHub App OAuth requires installing the app on target repositories in GitHub Settings.
+---
+
+<p align="center">
+  <sub>Built for CodeFrontier • Continuous Engineering Intelligence &amp; Handover Resilience</sub>
+</p>

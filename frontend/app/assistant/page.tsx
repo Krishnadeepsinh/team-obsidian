@@ -104,6 +104,7 @@ export default function AssistantPage() {
           is_grounded: m.is_grounded,
           model_used: m.model_used,
           suggested_followups: m.suggested_followups || [],
+          response_level: m.response_level,
         }))
       )
     } catch (err: any) {
@@ -190,6 +191,7 @@ export default function AssistantPage() {
                 is_grounded: res?.is_grounded,
                 model_used: res?.model_used,
                 suggested_followups: res?.suggested_followups || [],
+                response_level: res?.response_level,
                 streaming: false,
               }
             : m
@@ -390,6 +392,11 @@ export default function AssistantPage() {
             ) : (
               messages.map((m, idx) => {
                 const msgId = m.id || String(idx)
+                const isSimple = m.response_level === 1 || (
+                  m.citations && m.citations.length <= 1 && 
+                  (m.citations[0]?.source_type?.includes("INTEGRATION") || m.citations[0]?.source_type?.includes("REGISTRY"))
+                )
+
                 return (
                   <div key={msgId} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                     {m.role === "user" ? (
@@ -399,155 +406,173 @@ export default function AssistantPage() {
                     ) : (
                       <div className="bg-slate-50 border border-slate-200 rounded-2xl rounded-bl-sm p-5 max-w-[92%] space-y-4 shadow-sm w-full">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            {m.streaming ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full animate-pulse">
-                                <Sparkles className="w-3.5 h-3.5" /> Streaming grounded answer...
-                              </span>
-                            ) : m.is_grounded ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                                <ShieldCheck className="w-3.5 h-3.5" /> Evidence Grounded ({Math.round((m.confidence || 0) * 100)}%)
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
-                                <AlertTriangle className="w-3.5 h-3.5" /> Insufficient Project Evidence
-                              </span>
-                            )}
-                            {m.model_used && <span className="text-[10px] text-slate-400 font-mono">{m.model_used}</span>}
-                          </div>
-
-                          {!m.streaming && m.content && (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                disabled={Boolean(promotingKey)}
-                                onClick={() => handlePromote(m, "decision", idx)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-violet-300 hover:bg-violet-50 text-[10px] font-semibold text-slate-700 transition-colors"
-                              >
-                                <Scale className="w-3 h-3 text-violet-600" />
-                                {promotingKey === `${msgId}-decision` ? "Saving..." : "Save as ADR"}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={Boolean(promotingKey)}
-                                onClick={() => handlePromote(m, "gap", idx)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-[10px] font-semibold text-slate-700 transition-colors"
-                              >
-                                <HelpCircle className="w-3 h-3 text-amber-600" />
-                                {promotingKey === `${msgId}-gap` ? "Logging..." : "Log Gap"}
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {m.content ? (
-                          <FormattedMarkdown content={m.content} />
-                        ) : (
-                          <div className="text-sm text-slate-500 italic leading-relaxed">
-                            {m.streaming ? "Searching project evidence..." : ""}
-                          </div>
-                        )}
-
-                        {promotedNotice && promotedNotice.msgId === msgId && (
-                          <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] flex items-center justify-between gap-2">
-                            <span className="flex items-center gap-1.5 font-medium">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              Saved as {promotedNotice.type === "decision" ? "Decision (ADR)" : "Knowledge Gap"}: &ldquo;{promotedNotice.title}&rdquo;
-                            </span>
-                            <Link
-                              href={promotedNotice.type === "decision" ? "/decisions" : "/gaps"}
-                              className="font-bold underline hover:text-emerald-950 flex-shrink-0"
-                            >
-                              View {promotedNotice.type === "decision" ? "Decisions" : "Gaps"}
-                            </Link>
-                          </div>
-                        )}
-
-                        {m.confidence_breakdown && !m.streaming && (
-                          <div className="p-3 rounded-xl bg-white border border-slate-200 text-[11px] text-slate-600 space-y-1">
-                            <div className="flex flex-wrap items-center gap-4">
-                              <span className="font-semibold text-slate-700 flex items-center gap-1">
-                                <Info className="w-3.5 h-3.5 text-violet-500" /> Confidence Breakdown:
-                              </span>
-                              <span>
-                                Citations:{" "}
-                                <strong>
-                                  {m.confidence_breakdown.total_citations ?? m.citations?.length ?? 0}
-                                </strong>
-                              </span>
-                              <span>
-                                Verified:{" "}
-                                <strong>
-                                  {m.confidence_breakdown.verified_citations ??
-                                    Math.round(
-                                      (m.confidence_breakdown.verified_ratio ?? 0) *
-                                        (m.citations?.length ?? 0)
-                                    )}
-                                </strong>
-                              </span>
-                              <span>
-                                Sources:{" "}
-                                <strong>
-                                  {m.confidence_breakdown.independent_sources ??
-                                    m.confidence_breakdown.distinct_sources ??
-                                    0}
-                                </strong>
-                              </span>
-                              {typeof m.confidence_breakdown.avg_relevance === "number" && (
-                                <span>
-                                  Avg Match:{" "}
-                                  <strong>{Math.round(m.confidence_breakdown.avg_relevance * 100)}%</strong>
+                              <div className="flex items-center gap-2">
+                                {m.streaming ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full animate-pulse">
+                                    <Sparkles className="w-3.5 h-3.5" /> Streaming grounded answer...
+                                  </span>
+                                ) : isSimple ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Direct Source Verified
+                                  </span>
+                                ) : m.is_grounded ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                    <ShieldCheck className="w-3.5 h-3.5" /> Evidence Grounded ({Math.round((m.confidence || 0) * 100)}%)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                                    <AlertTriangle className="w-3.5 h-3.5" /> Insufficient Project Evidence
+                                  </span>
+                                )}
+                                <span className="text-[10px] text-slate-500 font-medium flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3 text-violet-500" /> Obsidian Intelligence
                                 </span>
+                              </div>
+
+                              {!m.streaming && m.content && (
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(promotingKey)}
+                                    onClick={() => handlePromote(m, "decision", idx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-violet-300 hover:bg-violet-50 text-[10px] font-semibold text-slate-700 transition-colors"
+                                  >
+                                    <Scale className="w-3 h-3 text-violet-600" />
+                                    {promotingKey === `${msgId}-decision` ? "Saving..." : "Save as ADR"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(promotingKey)}
+                                    onClick={() => handlePromote(m, "gap", idx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-[10px] font-semibold text-slate-700 transition-colors"
+                                  >
+                                    <HelpCircle className="w-3 h-3 text-amber-600" />
+                                    {promotingKey === `${msgId}-gap` ? "Logging..." : "Log Gap"}
+                                  </button>
+                                </div>
                               )}
                             </div>
-                            {m.confidence_breakdown.explanation && (
-                              <p className="text-[10px] text-slate-500">{m.confidence_breakdown.explanation}</p>
-                            )}
-                          </div>
-                        )}
 
-                        {m.citations && m.citations.length > 0 && !m.streaming && (
-                          <div className="pt-3 border-t border-slate-200 space-y-2">
-                            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                              Supporting Evidence Citations ({m.citations.length})
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                              {m.citations.map((c: any, cIdx: number) => {
-                                const safeCitationUrl = safeHref(c.source_url)
-                                return (
-                                  <div key={cIdx} className="p-3 rounded-xl bg-white border border-slate-200 text-xs space-y-1.5">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="font-semibold text-slate-800 truncate">
-                                        [Evidence {cIdx + 1}] {c.source_title}
-                                      </span>
-                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold uppercase flex-shrink-0">
-                                        {c.source_type}
-                                      </span>
-                                    </div>
-                                    <p className="text-[11px] text-slate-600 line-clamp-2">&ldquo;{c.excerpt}&rdquo;</p>
-                                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
-                                      <span className="flex items-center gap-1">
-                                        <User className="w-3 h-3" /> {c.source_author || "Unknown"}
-                                      </span>
-                                      <span className="flex items-center gap-1">
-                                        <Clock className="w-3 h-3" /> {c.source_timestamp ? String(c.source_timestamp).slice(0, 10) : ""}
-                                      </span>
-                                      {safeCitationUrl ? (
-                                        <a href={safeCitationUrl} target="_blank" rel="noreferrer" className="text-violet-600 hover:underline flex items-center gap-0.5">
-                                          Source <ExternalLink className="w-2.5 h-2.5" />
-                                        </a>
-                                      ) : (
-                                        <Link href={`/evidence?search=${encodeURIComponent(c.source_title)}`} className="text-violet-600 hover:underline">
-                                          Inspect
-                                        </Link>
-                                      )}
-                                    </div>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )}
+                            {m.content ? (
+                              <FormattedMarkdown content={m.content} />
+                            ) : (
+                              <div className="text-sm text-slate-500 italic leading-relaxed">
+                                {m.streaming ? "Searching project evidence..." : ""}
+                              </div>
+                            )}
+
+                            {promotedNotice && promotedNotice.msgId === msgId && (
+                              <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] flex items-center justify-between gap-2">
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  Saved as {promotedNotice.type === "decision" ? "Decision (ADR)" : "Knowledge Gap"}: &ldquo;{promotedNotice.title}&rdquo;
+                                </span>
+                                <Link
+                                  href={promotedNotice.type === "decision" ? "/decisions" : "/gaps"}
+                                  className="font-bold underline hover:text-emerald-950 flex-shrink-0"
+                                >
+                                  View {promotedNotice.type === "decision" ? "Decisions" : "Gaps"}
+                                </Link>
+                              </div>
+                            )}
+
+                            {!isSimple && m.confidence_breakdown && !m.streaming && m.response_level === 3 && (
+                              <div className="p-3 rounded-xl bg-white border border-slate-200 text-[11px] text-slate-600 space-y-1">
+                                <div className="flex flex-wrap items-center gap-4">
+                                  <span className="font-semibold text-slate-700 flex items-center gap-1">
+                                    <Info className="w-3.5 h-3.5 text-violet-500" /> Confidence Breakdown:
+                                  </span>
+                                  <span>
+                                    Citations:{" "}
+                                    <strong>
+                                      {m.confidence_breakdown.total_citations ?? m.citations?.length ?? 0}
+                                    </strong>
+                                  </span>
+                                  <span>
+                                    Verified:{" "}
+                                    <strong>
+                                      {m.confidence_breakdown.verified_citations ??
+                                        Math.round(
+                                          (m.confidence_breakdown.verified_ratio ?? 0) *
+                                            (m.citations?.length ?? 0)
+                                        )}
+                                    </strong>
+                                  </span>
+                                  <span>
+                                    Sources:{" "}
+                                    <strong>
+                                      {m.confidence_breakdown.independent_sources ??
+                                        m.confidence_breakdown.distinct_sources ??
+                                        0}
+                                    </strong>
+                                  </span>
+                                  {typeof m.confidence_breakdown.avg_relevance === "number" && (
+                                    <span>
+                                      Avg Match:{" "}
+                                      <strong>{Math.round(m.confidence_breakdown.avg_relevance * 100)}%</strong>
+                                    </span>
+                                  )}
+                                </div>
+                                {m.confidence_breakdown.explanation && (
+                                  <p className="text-[10px] text-slate-500">{m.confidence_breakdown.explanation}</p>
+                                )}
+                              </div>
+                            )}
+
+                            {isSimple && m.citations && m.citations.length > 0 && !m.streaming && (
+                              <div className="pt-2 text-[11px] text-slate-500 flex items-center gap-1.5 border-t border-slate-100">
+                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Source: <strong>{m.citations[0].source_title}</strong></span>
+                              </div>
+                            )}
+
+                            {!isSimple && m.citations && m.citations.length > 0 && !m.streaming && (
+                              <details className="pt-3 border-t border-slate-200 group text-xs">
+                                <summary className="cursor-pointer select-none text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between hover:text-slate-900 transition-colors py-1">
+                                  <span className="flex items-center gap-1.5">
+                                    <ShieldCheck className="w-3.5 h-3.5 text-violet-600" />
+                                    Supporting Evidence Citations ({m.citations.length})
+                                  </span>
+                                  <span className="text-[10px] text-violet-600 font-medium group-open:hidden">View Sources ▾</span>
+                                  <span className="text-[10px] text-slate-400 font-medium hidden group-open:inline">Hide Sources ▴</span>
+                                </summary>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mt-2.5">
+                                  {m.citations.map((c: any, cIdx: number) => {
+                                    const safeCitationUrl = safeHref(c.source_url)
+                                    return (
+                                      <div key={cIdx} className="p-3 rounded-xl bg-white border border-slate-200 text-xs space-y-1.5">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-semibold text-slate-800 truncate">
+                                            [Evidence {cIdx + 1}] {c.source_title}
+                                          </span>
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold uppercase flex-shrink-0">
+                                            {c.source_type}
+                                          </span>
+                                        </div>
+                                        <p className="text-[11px] text-slate-600 line-clamp-2">&ldquo;{c.excerpt}&rdquo;</p>
+                                        <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+                                          <span className="flex items-center gap-1">
+                                            <User className="w-3 h-3" /> {c.source_author || "Unknown"}
+                                          </span>
+                                          <span className="flex items-center gap-1">
+                                            <Clock className="w-3 h-3" /> {c.source_timestamp ? String(c.source_timestamp).slice(0, 10) : ""}
+                                          </span>
+                                          {safeCitationUrl ? (
+                                            <a href={safeCitationUrl} target="_blank" rel="noreferrer" className="text-violet-600 hover:underline flex items-center gap-0.5">
+                                              Source <ExternalLink className="w-2.5 h-2.5" />
+                                            </a>
+                                          ) : (
+                                            <Link href={`/evidence?search=${encodeURIComponent(c.source_title)}`} className="text-violet-600 hover:underline">
+                                              Inspect
+                                            </Link>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              </details>
+                            )}
 
                         {m.suggested_followups && m.suggested_followups.length > 0 && !m.streaming && (
                           <div className="flex flex-wrap gap-2 pt-2">

@@ -80,25 +80,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isPublic && typeof window !== "undefined") {
-      const token = localStorage.getItem("obsidian_token")
-      if (!token) {
-        router.push("/login")
-        return
-      }
-      try {
-        const parts = token.split(".")
-        if (parts.length === 3) {
-          const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/")
-          const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), "=")
-          const payload = JSON.parse(atob(padded))
-          if (payload.exp && payload.exp < Date.now() / 1000) {
-            localStorage.removeItem("obsidian_token")
-            localStorage.removeItem("obsidian_user")
+      const user = localStorage.getItem("obsidian_user")
+      if (!user) {
+        api.getUserContext().then((ctx) => {
+          if (!ctx?.user) {
             router.push("/login")
-            return
           }
-        }
-      } catch {}
+        }).catch(() => {
+          router.push("/login")
+        })
+      }
     }
   }, [pathname, isPublic, router])
 
@@ -141,8 +132,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isPublic || typeof window === "undefined") return
-    const token = localStorage.getItem("obsidian_token")
-    if (!token) return
 
     const stored = localStorage.getItem("obsidian_user")
     if (stored) {
@@ -249,7 +238,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setMobileNavOpen(false)
     await api.logout()
     if (typeof window !== "undefined") {
-      localStorage.removeItem("obsidian_token")
       localStorage.removeItem("obsidian_user")
       localStorage.removeItem("obsidian_active_project_id")
       localStorage.removeItem("obsidian_active_project")

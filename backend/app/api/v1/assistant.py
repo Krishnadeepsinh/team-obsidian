@@ -28,6 +28,7 @@ from app.schemas.knowledge import (
     AssistantQueryResponse,
 )
 from app.services.ai_engine import ai_engine
+from app.services.assistant.orchestrator import query_orchestrator
 from app.services.audit_service import record_activity
 from app.services.retrieval_service import retrieve_hybrid_graph_context
 
@@ -136,34 +137,14 @@ def _execute_assistant_turn(
     db.flush()
 
     all_evidences = db.query(Evidence).filter(Evidence.project_id == project_id).all()
-    top_context = _retrieve_hybrid_context(
-        project_id=project_id,
+    result = query_orchestrator.process_query(
         question=req.question,
+        current_user=current_user,
+        project_id=project_id,
         departing_focus=req.departing_focus,
-        all_evidences=all_evidences,
+        conversation_history=prior_turns,
         db=db,
     )
-    if not top_context and not all_evidences:
-        result: Dict[str, Any] = {
-            "answer": "No supporting evidence found in the connected project repositories, documents, or communication channels to answer this question. Please ensure sources are connected and synchronized.",
-            "citations": [],
-            "confidence": 0.0,
-            "confidence_breakdown": None,
-            "is_grounded": False,
-            "model_used": ai_engine.primary_model_name,
-            "suggested_followups": [
-                "What documents are currently ingested?",
-                "What tasks are currently open?",
-                "Who are the team members on this project?",
-            ],
-        }
-    else:
-        result = ai_engine.answer_question(
-            question=req.question,
-            context_docs=top_context,
-            departing_name=req.departing_focus,
-            conversation_history=prior_turns,
-        )
 
     assistant_msg = AssistantMessage(
         conversation_id=conv.id,
@@ -189,6 +170,7 @@ def _execute_assistant_turn(
         is_grounded=result["is_grounded"],
         model_used=result["model_used"],
         suggested_followups=result["suggested_followups"],
+        response_level=result.get("response_level", 2),
         conversation_id=conv.id,
         message_id=assistant_msg.id,
     )

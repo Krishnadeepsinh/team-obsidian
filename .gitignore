@@ -10,6 +10,7 @@
 *.sqlite
 *.sqlite3
 *.pdf
+*.log
 backend/uploads/
 uploads/
 backend/generated_reports/

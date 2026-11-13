@@ -37,6 +37,8 @@ export function ProviderLogo({
     linear: "bg-indigo-50/70 border-indigo-200/70",
     gitlab: "bg-orange-50/70 border-orange-200/70",
     sentry: "bg-purple-50/70 border-purple-200/70",
+    google_drive: "bg-amber-50/70 border-amber-200/70",
+    drive: "bg-amber-50/70 border-amber-200/70",
   }
 
   const boxStyle = bgMap[key] || "bg-slate-50 border-slate-200"
@@ -182,6 +184,16 @@ export function ProviderLogo({
         return (
           <svg viewBox="0 0 24 24" className={svgSizes} fill="#362D59" aria-hidden="true">
             <path d="M13.91 2.13c-.86-1.49-3-1.49-3.85 0L.22 19.16a2.21 2.21 0 0 0 1.92 3.32h4.1v-2.21H2.14l8.84-15.3c.27-.47.96-.47 1.23 0l1.97 3.41a10.48 10.48 0 0 0-4.96 8.35H7.22v2.21h4.18v1.54a2.21 2.21 0 0 0 2.21 2.21h8.25a2.21 2.21 0 0 0 1.92-3.32L13.91 2.13zm-2.36 16.6A8.29 8.29 0 0 1 15.27 12l2.14 3.7a12.43 12.43 0 0 0-3.8 4.57h-2.06zm4.32 1.54a10.22 10.22 0 0 1 2.91-3.44l3.08 5.34H15.87v-1.9z" />
+          </svg>
+        )
+
+      case "google_drive":
+      case "drive":
+        return (
+          <svg viewBox="0 0 24 24" className={svgSizes} fill="none" aria-hidden="true">
+            <path d="M8.2 3.5h7.6L22.5 15H14.9L8.2 3.5z" fill="#0066DA" />
+            <path d="M1.5 15l3.8-6.5L12 20.5H4.4L1.5 15z" fill="#00AC47" />
+            <path d="M9.7 15l2.8 5.5h9.5L19.2 15H9.7z" fill="#EA4335" />
           </svg>
         )
 

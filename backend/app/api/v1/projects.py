@@ -19,7 +19,7 @@ from app.core.security import get_current_user
 from app.models.evidence import Evidence
 from app.models.integration import SourceRecord
 from app.models.knowledge import Decision, RiskItem, TaskItem
-from app.models.workspace import Project, ProjectMember, User, Workspace
+from app.models.workspace import Organization, Project, ProjectMember, User, Workspace
 from app.schemas.workspace import (
     ProjectCreate,
     ProjectMemberAdd,
@@ -315,22 +315,38 @@ def add_project_member(
     if not target_user:
         raise HTTPException(status_code=404, detail="User to add/invite was not found.")
 
+    ws = db.query(Workspace).filter(Workspace.id == p.workspace_id).first()
+    org = db.query(Organization).filter(Organization.id == ws.org_id).first() if ws else None
+    is_non_personal_org = bool(org and not getattr(org, "is_personal", False))
+    is_same_org = bool(is_non_personal_org and target_user and target_user.org_id == org.id)
+
     existing = (
         db.query(ProjectMember)
         .filter(ProjectMember.project_id == project_id, ProjectMember.user_id == target_user.id)
         .first()
     )
 
+    # Restrict direct active addition to members of the same non-personal organization;
+    # cross-org additions are converted to pending invitations requiring user acceptance.
+    if is_same_org:
+        assigned_status = member_in.status or "active"
+        revealed_name = target_user.name
+        revealed_email = target_user.email
+    else:
+        assigned_status = "invited" if not existing or existing.status in ("invited", "pending") else existing.status
+        revealed_name = None if assigned_status in ("invited", "pending") else target_user.name
+        revealed_email = (member_in.email or None) if assigned_status in ("invited", "pending") else target_user.email
+
     if existing:
         existing.project_role = normalized_member_role
-        existing.status = member_in.status
+        existing.status = assigned_status
         pm = existing
     else:
         pm = ProjectMember(
             project_id=project_id,
             user_id=target_user.id,
             project_role=normalized_member_role,
-            status=member_in.status,
+            status=assigned_status,
         )
         db.add(pm)
 
@@ -361,8 +377,51 @@ def add_project_member(
         user_id=pm.user_id,
         project_role=pm.project_role,
         status=pm.status,
-        user_name=target_user.name,
-        user_email=target_user.email,
+        user_name=revealed_name,
+        user_email=revealed_email,
+        joined_at=pm.joined_at,
+    )
+
+
+@router.post("/{project_id}/members/accept", response_model=ProjectMemberResponse)
+def accept_project_invitation(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Accept a pending cross-organization project invitation to activate membership and gain access."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    pm = (
+        db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id, ProjectMember.user_id == current_user.id)
+        .first()
+    )
+    if not pm or pm.status not in ("invited", "pending"):
+        raise HTTPException(status_code=400, detail="No pending invitation found for this project.")
+
+    pm.status = "active"
+    record_activity(
+        db=db,
+        action="project.invitation_accepted",
+        entity_type="project_member",
+        entity_id=current_user.id,
+        user_id=current_user.id,
+        project_id=p.id,
+        actor_email=current_user.email,
+        details={"message": f"User {current_user.email} accepted invitation to project {p.name}"},
+    )
+    db.commit()
+    db.refresh(pm)
+    return ProjectMemberResponse(
+        id=pm.id,
+        project_id=pm.project_id,
+        user_id=pm.user_id,
+        project_role=pm.project_role,
+        status=pm.status,
+        user_name=current_user.name,
+        user_email=current_user.email,
         joined_at=pm.joined_at,
     )
 

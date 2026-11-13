@@ -515,6 +515,7 @@ def test_auth_registration_login_session_expiry():
     assert me_res.json()["email"] == test_email
 
     # 6. Access protected route without token (must return 401)
+    client.cookies.clear()
     unauth_res = client.get("/api/v1/auth/me")
     assert unauth_res.status_code == 401
 

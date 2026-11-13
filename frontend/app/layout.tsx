@@ -6,6 +6,11 @@ export const metadata: Metadata = {
   title: 'TEAM OBSIDIAN — AI-Powered Knowledge Handover Platform',
   description:
     'Enterprise AI platform preventing organizational brain drain. Reconstructs, verifies, and generates evidence-backed 16-section knowledge handover dossiers.',
+  icons: {
+    icon: '/favicon.svg',
+    shortcut: '/favicon.ico',
+    apple: '/apple-icon.png',
+  },
 }
 
 export default function RootLayout({

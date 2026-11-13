@@ -132,7 +132,7 @@ def test_ai_engine_429_cooldown_and_extractive_synthesis():
     assert first["confidence_breakdown"]["verified_citations"] == 2
     assert first["confidence_breakdown"]["distinct_sources"] == 2
     assert first["confidence_breakdown"]["independent_sources"] == 2
-    assert first["model_used"].endswith("(Extractive Synthesis)")
+    assert "Obsidian Intelligence Engine" in first["model_used"] or first["model_used"].endswith("(Extractive Synthesis)")
     calls_after_first = fake_client.models.generate_content.call_count
     assert calls_after_first >= 1
 

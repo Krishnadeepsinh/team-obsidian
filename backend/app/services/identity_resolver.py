@@ -62,7 +62,8 @@ def _extract_keys_from_raw(raw: str) -> Tuple[Set[str], Optional[str], Optional[
         elif words:
             keys.add(f"handle:{words[0]}")
         if handle_base != norm:
-            keys.add(f"handle:{re.sub(r'[._\-]+', '', handle_base)}")
+            clean_handle_base = re.sub(r"[._\-]+", "", handle_base)
+            keys.add(f"handle:{clean_handle_base}")
             keys.add(f"handle:{norm}")
 
     display = name_part if name_part and "@" not in name_part else None

@@ -166,6 +166,7 @@ class AssistantQueryResponse(BaseModel):
     suggested_followups: List[str]
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
+    response_level: Optional[int] = None
 
 
 class AssistantMessageOut(BaseModel):
@@ -179,6 +180,7 @@ class AssistantMessageOut(BaseModel):
     is_grounded: bool = True
     model_used: Optional[str] = None
     suggested_followups: List[str] = []
+    response_level: Optional[int] = None
     created_at: datetime
 
 

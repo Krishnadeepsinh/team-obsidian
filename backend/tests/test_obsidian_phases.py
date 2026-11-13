@@ -325,6 +325,7 @@ def test_document_upload_chunking_handover_lifecycle_and_rbac():
     )
     assert inv_res.status_code == 200
     v_headers = {"Authorization": f"Bearer {viewer['access_token']}"}
+    client.post(f"/api/v1/projects/{pid}/members/accept", headers=v_headers)
     v_get = client.get(f"/api/v1/handovers/{ho['id']}", headers=v_headers)
     assert v_get.status_code == 200
     v_edit = client.put(

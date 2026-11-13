@@ -14,8 +14,8 @@ import {
 export default function LandingPage() {
   const router = useRouter()
   const goProtected = (path: string) => {
-    const hasToken = typeof window !== "undefined" && Boolean(localStorage.getItem("obsidian_token"))
-    router.push(hasToken ? path : "/login")
+    const hasUser = typeof window !== "undefined" && Boolean(localStorage.getItem("obsidian_user"))
+    router.push(hasUser ? path : "/login")
   }
 
   return (

@@ -137,7 +137,7 @@ class TestMultiUserMultiTenantSaaS:
         assert bad_res.status_code == 400
 
         with patch(
-            "app.services.connectors.github_connector.GitHubConnector.check_connection",
+            "app.services.connectors.GitHubConnector.check_connection",
             return_value={"status": "connected", "connected_account": "alice-gh", "scopes": ["repo", "read:user"]},
         ):
             res = client.post(
@@ -185,7 +185,7 @@ class TestMultiUserMultiTenantSaaS:
 
         # Reconnect with controlled mock auth verification
         with patch(
-            "app.services.connectors.github_connector.GitHubConnector.check_connection",
+            "app.services.connectors.GitHubConnector.check_connection",
             return_value={"status": "connected", "connected_account": "alice-gh", "scopes": ["repo"]},
         ):
             res_rec = client.post(
@@ -328,6 +328,10 @@ class TestMultiUserMultiTenantSaaS:
             }
         )
         assert res_inv.status_code == 200, res_inv.text
+
+        # User B accepts the project invitation
+        res_acc = client.post(f"/api/v1/projects/{self.project_a2_id}/members/accept", headers=headers_b)
+        assert res_acc.status_code == 200, res_acc.text
 
         # Now User B CAN access Project A2
         res_p2_b = client.get(f"/api/v1/projects/{self.project_a2_id}", headers=headers_b)

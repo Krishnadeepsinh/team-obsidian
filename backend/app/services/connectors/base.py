@@ -46,8 +46,9 @@ class BaseConnector(ABC):
         data: Optional[Dict[str, Any]] = None,
         timeout: int = 12,
         max_retries: int = 3,
+        allow_redirects: bool = False,
     ) -> requests.Response:
-        """Perform HTTP call with rate-limit (429 / X-RateLimit-Reset) and transient 5xx retries."""
+        """Perform HTTP call with rate-limit (429 / X-RateLimit-Reset) and transient 5xx retries, preventing SSRF redirects."""
         last_exc: Optional[Exception] = None
         for attempt in range(max_retries):
             try:
@@ -59,6 +60,7 @@ class BaseConnector(ABC):
                     json=json_body,
                     data=data,
                     timeout=timeout,
+                    allow_redirects=allow_redirects,
                 )
                 if res.status_code == 429 or (
                     res.status_code == 403 and res.headers.get("X-RateLimit-Remaining") == "0"
@@ -94,6 +96,30 @@ class BaseConnector(ABC):
         sync_cursor: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Retrieve normalized records and return (records, updated_sync_cursor)."""
+
+    def extract_data(
+        self,
+        resource_type: str,
+        resource_id: str,
+        cursor: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Granular data extraction with pagination for specific resource types. Default implementation delegates to sync."""
+        records, next_cur = self.sync(config={"resource_type": resource_type, "resource_id": resource_id, "limit": limit})
+        return {
+            "records": records,
+            "next_cursor": next_cur.get("cursor") or next_cur.get("last_sync_at"),
+            "has_more": bool(next_cur.get("has_more", False)),
+        }
+
+    def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
+        """Refresh expired OAuth2 access token. Default raises if not applicable."""
+        raise ConnectorError(f"Token refresh is not supported or configured for {self.provider_name}.")
+
+    def disconnect(self) -> Dict[str, Any]:
+        """Cleanly revoke credentials or disconnect integration session."""
+        self.token = None
+        return {"status": "disconnected", "provider": self.provider_name}
 
     @classmethod
     def get_oauth_authorize_url(cls, state: str, redirect_uri: str) -> str:

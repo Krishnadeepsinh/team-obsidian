@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal, get_db
+from app.core.rate_limiter import get_client_ip, rate_limiter
 from app.core.security import decrypt_credentials
 from app.models.integration import Integration, SourceEvent
 from app.services.connectors.base import compute_sha256
@@ -36,6 +38,73 @@ def _get_webhook_secret(integ: Integration) -> str:
     return str(creds.get("webhook_secret") or "").strip()
 
 
+MAX_WEBHOOK_BYTES = 2 * 1024 * 1024  # 2 MB request body limit
+
+
+class WebhookReplayGuard:
+    """Tracks provider delivery and event IDs with TTL expiration to prevent replay attacks."""
+
+    def __init__(self, ttl_seconds: int = 3600):
+        self.ttl = ttl_seconds
+        self._seen: Dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def check_and_record(self, key: str) -> bool:
+        if not key:
+            return True
+        now = time.time()
+        cutoff = now - self.ttl
+        with self._lock:
+            if len(self._seen) > 5000:
+                self._seen = {k: ts for k, ts in self._seen.items() if ts >= cutoff}
+            if key in self._seen and self._seen[key] >= cutoff:
+                return False
+            self._seen[key] = now
+            return True
+
+
+webhook_replay_guard = WebhookReplayGuard(ttl_seconds=3600)
+
+
+async def _validate_webhook_request(
+    request: Request,
+    integration_id: str,
+    delivery_id: Optional[str] = None,
+) -> bytes:
+    """Rate limits, size limits, and checks replay protection for incoming webhooks."""
+    client_ip = get_client_ip(request)
+    rate_limiter.check(
+        key=f"webhook_integ:{integration_id}",
+        limit=120,
+        window_seconds=60,
+        detail="Rate limit exceeded for webhooks on this integration.",
+    )
+    rate_limiter.check(
+        key=f"webhook_ip:{client_ip}",
+        limit=200,
+        window_seconds=60,
+        detail="Rate limit exceeded for webhooks from this client IP.",
+    )
+
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook payload exceeds maximum size limit (2 MB).")
+
+    raw_body = await request.body()
+    if len(raw_body) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook payload exceeds maximum size limit (2 MB).")
+
+    if delivery_id:
+        replay_key = f"{integration_id}:{delivery_id}"
+        if not webhook_replay_guard.check_and_record(replay_key):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Duplicate webhook delivery detected (delivery_id={delivery_id}).",
+            )
+
+    return raw_body
+
+
 def _run_webhook_pipeline(project_id: str, integration_id: str) -> None:
     db = SessionLocal()
     try:
@@ -60,7 +129,8 @@ async def github_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="GitHub integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Webhook secret is not configured for this integration.")
@@ -190,7 +260,8 @@ async def slack_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Slack integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("X-Slack-Request-Timestamp")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
@@ -271,7 +342,8 @@ async def notion_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Notion integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("X-Notion-Delivery-Id") or request.headers.get("X-Notion-Event-Id")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Notion webhook secret is not configured.")
@@ -368,6 +440,8 @@ async def gitlab_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="GitLab integration not found")
 
+    delivery_id = request.headers.get("X-Gitlab-Event-UUID") or request.headers.get("X-Gitlab-Delivery")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="GitLab webhook secret is not configured.")
@@ -376,7 +450,7 @@ async def gitlab_webhook(
         raise HTTPException(status_code=401, detail="Invalid GitLab webhook token.")
 
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid GitLab webhook JSON payload.")
     if not isinstance(payload, dict):
@@ -457,7 +531,8 @@ async def linear_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Linear integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("Linear-Delivery")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Linear webhook secret is not configured.")
@@ -504,7 +579,8 @@ async def jira_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Jira integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("X-Atlassian-Webhook-Identifier") or request.headers.get("X-Arequestid")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Jira webhook secret is not configured.")
@@ -553,7 +629,8 @@ async def sentry_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Sentry integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("Sentry-Trace") or request.headers.get("Sentry-Hook-Resource")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Sentry webhook secret is not configured.")
@@ -602,7 +679,8 @@ async def confluence_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Confluence integration not found")
 
-    raw_body = await request.body()
+    delivery_id = request.headers.get("X-Atlassian-Webhook-Identifier") or request.headers.get("X-Arequestid")
+    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
     secret = _get_webhook_secret(integ)
     if not secret:
         raise HTTPException(status_code=403, detail="Confluence webhook secret is not configured.")

@@ -47,7 +47,7 @@ export default function OverviewPage() {
   const [seedingDemo, setSeedingDemo] = useState(false)
 
   const loadData = useCallback(async () => {
-    if (typeof window === "undefined" || !localStorage.getItem("obsidian_token")) {
+    if (typeof window === "undefined" || !localStorage.getItem("obsidian_user")) {
       setLoading(false)
       return
     }
@@ -90,6 +90,7 @@ export default function OverviewPage() {
     critical_risks: 0
   }
   const activeHandover = data?.active_handover || null
+  const hasRealHandover = Boolean(activeHandover && activeHandover.id)
 
   // Monthly Cumulative Ingestion Chart Data
   const chartData = data?.activity_trend && data.activity_trend.length > 0 
@@ -211,8 +212,8 @@ export default function OverviewPage() {
           <div className="space-y-2 max-w-2xl">
             {/* Status Pill */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-[11px] font-medium text-purple-200">
-              <span className={`w-1.5 h-1.5 rounded-full ${activeHandover ? "bg-fuchsia-400 animate-pulse" : "bg-emerald-400"}`} />
-              <span>{activeHandover ? (activeHandover.status || "Handover Active") : "Personal Workspace"}</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${hasRealHandover ? "bg-fuchsia-400 animate-pulse" : "bg-emerald-400"}`} />
+              <span>{hasRealHandover ? (activeHandover?.status || "Handover Active") : "Workspace Active"}</span>
             </div>
 
             {/* Handover Title */}
@@ -230,7 +231,7 @@ export default function OverviewPage() {
             </p>
 
             {/* Meta & Progress */}
-            {activeHandover && (
+            {hasRealHandover ? (
               <div className="flex flex-wrap items-center gap-5 pt-1 text-xs text-purple-200/80">
                 {activeHandover.target_date && (
                   <div className="flex items-center gap-1.5">
@@ -238,8 +239,9 @@ export default function OverviewPage() {
                     <span>Target Completion: {activeHandover.target_date}</span>
                   </div>
                 )}
-                {typeof activeHandover.confidence === "number" && (
+                {typeof activeHandover.confidence === "number" && activeHandover.confidence > 0 ? (
                   <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-purple-200/70">Readiness:</span>
                     <div className="w-28 h-2 rounded-full bg-white/20 overflow-hidden">
                       <div
                         className="h-full bg-gradient-to-r from-violet-400 to-fuchsia-400 rounded-full shadow-sm"
@@ -248,7 +250,13 @@ export default function OverviewPage() {
                     </div>
                     <span className="text-xs font-semibold text-white">{Math.round(activeHandover.confidence * 100)}%</span>
                   </div>
+                ) : (
+                  <span className="text-[11px] text-purple-300/80">Dossier initialized · Awaiting section reviews</span>
                 )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 pt-1 text-xs text-purple-200/70">
+                <span>Ready to capture knowledge · Click &ldquo;Start Handover&rdquo; to begin</span>
               </div>
             )}
           </div>
@@ -259,7 +267,7 @@ export default function OverviewPage() {
               onClick={() => router.push("/handover")}
               className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-900 flex items-center gap-1.5 shadow-md shadow-black/10 transition-all hover:scale-[1.02]"
             >
-              <span>{activeHandover ? "Review Handover" : "Start Handover"}</span>
+              <span>{hasRealHandover ? "Review Handover" : "Start Handover"}</span>
               <ArrowUpRight className="w-4 h-4" />
             </button>
             <button

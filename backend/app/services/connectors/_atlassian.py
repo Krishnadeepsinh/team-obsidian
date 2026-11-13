@@ -2,6 +2,7 @@ import base64
 import html
 import ipaddress
 import re
+import socket
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
@@ -32,12 +33,46 @@ def validate_external_https_url(url: str, label: str = "Site URL") -> str:
     host = (parsed.hostname or "").strip().lower()
     if not host or host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"} or host.endswith(".local"):
         raise ConnectorError(f"{label} cannot target a local or private host.")
+
+    # 1. Reject direct private/loopback/reserved IP literals
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ConnectorError(f"{label} cannot target a private IP address.")
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ConnectorError(f"{label} cannot target a private or reserved IP address.")
     except ValueError:
         pass
+
+    # 2. Resolve hostname using socket.getaddrinfo() and reject any private/loopback/reserved IPv4/IPv6
+    try:
+        addr_infos = socket.getaddrinfo(host, None)
+        if not addr_infos:
+            raise ConnectorError(f"{label} host could not be resolved.")
+        for info in addr_infos:
+            sockaddr = info[4]
+            ip_str = sockaddr[0]
+            try:
+                resolved_ip = ipaddress.ip_address(ip_str)
+                if (
+                    resolved_ip.is_private
+                    or resolved_ip.is_loopback
+                    or resolved_ip.is_link_local
+                    or resolved_ip.is_reserved
+                    or resolved_ip.is_multicast
+                    or resolved_ip.is_unspecified
+                ):
+                    raise ConnectorError(f"{label} resolves to a private or reserved IP address ({ip_str}).")
+            except ValueError:
+                raise ConnectorError(f"{label} returned an invalid IP address ({ip_str}).")
+    except socket.gaierror as exc:
+        raise ConnectorError(f"{label} host could not be resolved: {exc}")
+
     return f"https://{parsed.netloc}{parsed.path}".rstrip("/")
 
 

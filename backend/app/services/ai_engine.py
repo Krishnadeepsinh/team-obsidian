@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import json
 import logging
 import os
 import re
@@ -6,149 +9,52 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from pydantic import BaseModel, Field
-
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("ORT_NUM_THREADS", "1")
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from app.core.config import settings
+from app.services.ai.embeddings import embedding_service
+from app.services.ai.prompts import PromptManager
+from app.services.ai.provider import central_ai_service
+from app.services.ai.validators import (
+    AssistantSynthesisOutput,
+    ExtractedDecision,
+    ExtractedDependency,
+    ExtractedEntity,
+    ExtractedGap,
+    ExtractedRelationship,
+    ExtractedResponsibility,
+    ExtractedRisk,
+    ExtractedTask,
+    StructuredKnowledgeBundle,
+    clean_json_markdown,
+    safe_parse_json,
+)
 
 logger = logging.getLogger("team_obsidian.ai")
 
 
-class ExtractedEntity(BaseModel):
-    name: str
-    entity_type: str  # Person, System, Service, Component, Database, Infrastructure, Vendor, Process, Document
-    description: Optional[str] = ""
-    owner: Optional[str] = None
-    evidence_index: int = 1
-
-
-class ExtractedRelationship(BaseModel):
-    source_name: str
-    target_name: str
-    relation_type: str  # owns, maintains, depends_on, uses, supports, decided, has_workaround, blocks
-    context: Optional[str] = ""
-    evidence_index: int = 1
-
-
-class ExtractedDecision(BaseModel):
-    title: str
-    summary: str
-    reasoning: str
-    decision_maker: str
-    date: str = ""
-    component: Optional[str] = None
-    decision_type: str = "technical"
-    alternatives: List[str] = Field(default_factory=list)
-    tradeoffs: List[str] = Field(default_factory=list)
-    consequences: List[str] = Field(default_factory=list)
-    evidence_index: int = 1
-
-
-class ExtractedTask(BaseModel):
-    title: str
-    description: Optional[str] = ""
-    owner: str
-    priority: str = "medium"
-    status: str = "open"
-    component: Optional[str] = None
-    deadline: Optional[str] = None
-    evidence_index: int = 1
-
-
-class ExtractedRisk(BaseModel):
-    title: str
-    description: str
-    category: str = "technical_risk"
-    severity: str = "high"
-    likelihood: str = "medium"
-    impact: Optional[str] = ""
-    owner: Optional[str] = None
-    mitigation_strategy: Optional[str] = None
-    related_components: List[str] = Field(default_factory=list)
-    evidence_index: int = 1
-
-
-class ExtractedDependency(BaseModel):
-    source_component: str
-    target_component: str
-    dependency_type: str = "hard_blocker"
-    description: Optional[str] = ""
-    owner: Optional[str] = None
-    criticality: str = "high"
-    evidence_index: int = 1
-
-
-class ExtractedResponsibility(BaseModel):
-    owner: str
-    domain: str
-    scope: str
-    criticality: str = "high"
-    backup_owner: Optional[str] = None
-    evidence_index: int = 1
-
-
-class ExtractedGap(BaseModel):
-    title: str
-    description: str
-    gap_type: str  # missing_architecture, missing_documentation, unassigned_responsibility, unresolved_question, missing_runbook
-    severity: str = "high"
-    business_impact: str
-    technical_impact: str
-    recommended_action: str
-
-
-class StructuredKnowledgeBundle(BaseModel):
-    entities: List[ExtractedEntity] = Field(default_factory=list)
-    relationships: List[ExtractedRelationship] = Field(default_factory=list)
-    decisions: List[ExtractedDecision] = Field(default_factory=list)
-    tasks: List[ExtractedTask] = Field(default_factory=list)
-    risks: List[ExtractedRisk] = Field(default_factory=list)
-    dependencies: List[ExtractedDependency] = Field(default_factory=list)
-    responsibilities: List[ExtractedResponsibility] = Field(default_factory=list)
-    knowledge_gaps: List[ExtractedGap] = Field(default_factory=list)
-
-
-class AssistantSynthesisOutput(BaseModel):
-    is_answerable: bool
-    answer: str
-    cited_evidence_indices: List[int] = Field(default_factory=list)
-    missing_information_note: Optional[str] = None
-    suggested_followups: List[str] = Field(default_factory=list)
-
-
 class AIEngine:
-    """Enterprise AI Engine using real BAAI/bge-small-en-v1.5 embeddings and Google Gemini (google-genai)."""
+    """Enterprise AI Engine coordinating Groq (primary inference), Gemini (fallback inference), and local embeddings."""
 
     def __init__(self):
-        self.primary_model_name = settings.PRIMARY_LLM
-        self.secondary_model_name = settings.SECONDARY_LLM
+        self.primary_model_name = settings.GROQ_PRIMARY_MODEL if settings.GROQ_API_KEY else settings.PRIMARY_LLM
+        self.secondary_model_name = settings.GROQ_SECONDARY_MODEL if settings.GROQ_API_KEY else settings.SECONDARY_LLM
         self.embedding_model_name = settings.EMBEDDING_MODEL
         self.embedding_dimensions = settings.EMBEDDING_DIMENSIONS
-        self._embedder = None
+        self._embedding_service = embedding_service
+        self._central_ai = central_ai_service
+        self._prompt_manager = PromptManager
         self._genai_client = None
         self._model_cooldowns: Dict[Tuple[int, str], float] = {}
 
     @property
     def effective_embedding_model(self) -> str:
-        if self._should_use_api_embeddings():
-            return "gemini-embedding-001"
-        return self.embedding_model_name
+        return self._embedding_service.effective_embedding_model
 
     def _should_use_api_embeddings(self) -> bool:
-        return bool(settings.GEMINI_API_KEY) and (
-            settings.APP_ENV == "production" or "gemini" in (self.embedding_model_name or "").lower()
-        )
+        return self._embedding_service._should_use_api_embeddings()
 
     def _get_embedder(self):
-        if self._embedder is None:
-            from fastembed import TextEmbedding
-
-            logger.info("Loading semantic embedding model (single-thread low-RAM): %s", self.embedding_model_name)
-            self._embedder = TextEmbedding(model_name=self.embedding_model_name, threads=1)
-        return self._embedder
+        return self._embedding_service._get_embedder()
 
     def _get_client(self):
         if self._genai_client is None and settings.GEMINI_API_KEY:
@@ -216,186 +122,110 @@ class AIEngine:
                 raise
         raise last_exc or RuntimeError("No Gemini model candidates succeeded")
 
-    def _embed_via_gemini_api(
-        self,
-        cleaned_texts: List[str],
-        task_type: str = "RETRIEVAL_DOCUMENT",
-        title: Optional[str] = None,
-    ) -> List[List[float]]:
-        from google.genai import types
-
-        client = self._get_client()
-        if client is None:
-            raise RuntimeError("Gemini client not configured for API embeddings.")
-
-        vectors: List[List[float]] = []
-        batch_size = 64
-        norm_task = task_type if task_type in ("RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY", "SEMANTIC_SIMILARITY") else "RETRIEVAL_DOCUMENT"
-        for start in range(0, len(cleaned_texts), batch_size):
-            batch = cleaned_texts[start : start + batch_size]
-            cfg_kwargs: Dict[str, Any] = {
-                "output_dimensionality": self.embedding_dimensions,
-                "task_type": norm_task,
-            }
-            if title and norm_task == "RETRIEVAL_DOCUMENT" and len(batch) == 1:
-                cfg_kwargs["title"] = title[:200]
-            try:
-                cfg = types.EmbedContentConfig(**cfg_kwargs)
-            except Exception:
-                cfg = types.EmbedContentConfig(output_dimensionality=self.embedding_dimensions)
-            res = client.models.embed_content(
-                model="gemini-embedding-001",
-                contents=batch,
-                config=cfg,
-            )
-            for emb in res.embeddings or []:
-                arr = np.asarray(emb.values, dtype=np.float32)
-                norm = np.linalg.norm(arr)
-                if norm > 0:
-                    arr = arr / norm
-                vectors.append(arr.tolist())
-        return vectors
-
     def generate_embedding(
         self,
         text: str,
         task_type: str = "RETRIEVAL_DOCUMENT",
         title: Optional[str] = None,
     ) -> List[float]:
-        """Generate normalized semantic embedding supporting asymmetric Gemini task_type (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY)."""
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return [0.0] * self.embedding_dimensions
-        if self._should_use_api_embeddings():
-            try:
-                vecs = self._embed_via_gemini_api([cleaned[:4000]], task_type=task_type, title=title)
-                if vecs:
-                    return vecs[0]
-            except Exception as exc:
-                logger.warning("Gemini API single embedding failed (%s)", str(exc)[:120])
-                if settings.APP_ENV == "production":
-                    return [0.0] * self.embedding_dimensions
-        embedder = self._get_embedder()
-        vec = next(embedder.embed([cleaned[:4000]]))
-        arr = np.asarray(vec, dtype=np.float32)
-        norm = np.linalg.norm(arr)
-        if norm > 0:
-            arr = arr / norm
-        return arr.tolist()
+        return self._embedding_service.generate_embedding(text=text, task_type=task_type, title=title)
 
     def generate_embeddings_batch(
         self,
         texts: List[str],
         task_type: str = "RETRIEVAL_DOCUMENT",
+        titles: Optional[List[str]] = None,
     ) -> List[List[float]]:
-        if not texts:
-            return []
-        non_empty_positions = [(idx, (t or "").strip()[:4000]) for idx, t in enumerate(texts) if (t or "").strip()]
-        if not non_empty_positions:
-            return [[0.0] * self.embedding_dimensions for _ in texts]
+        return self._embedding_service.generate_embeddings_batch(texts=texts, task_type=task_type, titles=titles)
 
-        if self._should_use_api_embeddings():
-            try:
-                api_vecs = self._embed_via_gemini_api(
-                    [txt for _, txt in non_empty_positions],
-                    task_type=task_type,
-                )
-                if len(api_vecs) == len(non_empty_positions):
-                    out = [[0.0] * self.embedding_dimensions for _ in texts]
-                    for (orig_idx, _), vec in zip(non_empty_positions, api_vecs):
-                        out[orig_idx] = vec
-                    return out
-            except Exception as exc:
-                logger.warning("Gemini API batch embedding failed (%s)", str(exc)[:120])
-                if settings.APP_ENV == "production":
-                    return []
-
-        embedder = self._get_embedder()
-        cleaned = [(t or "").strip()[:4000] or "empty" for t in texts]
-        vectors: List[List[float]] = []
-        for raw, vec in zip(texts, embedder.embed(cleaned)):
-            if not (raw or "").strip():
-                vectors.append([0.0] * self.embedding_dimensions)
-                continue
-            arr = np.asarray(vec, dtype=np.float32)
-            norm = np.linalg.norm(arr)
-            if norm > 0:
-                arr = arr / norm
-            vectors.append(arr.tolist())
-        return vectors
-
-    def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        if not vec1 or not vec2:
-            return 0.0
-        v1 = np.asarray(vec1, dtype=np.float32)
-        v2 = np.asarray(vec2, dtype=np.float32)
-        n1 = np.linalg.norm(v1)
-        n2 = np.linalg.norm(v2)
-        if n1 == 0 or n2 == 0:
-            return 0.0
-        return float(np.dot(v1, v2) / (n1 * n2))
+    def cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
+        return self._embedding_service.cosine_similarity(vec_a, vec_b)
 
     def compute_explainable_confidence(
         self,
-        context_docs: List[Dict[str, Any]],
+        evidence_records: List[Dict[str, Any]],
         cited_indices: Optional[List[int]] = None,
     ) -> Tuple[float, Dict[str, Any]]:
-        """Derive transparent evidence-based confidence from relevance, independent sources, recency, contradictions, and verification."""
-        if not context_docs:
+        """Compute an explainable confidence score (0.0 to 1.0) and auditable breakdown."""
+        if not evidence_records:
             return 0.0, {
+                "total_citations": 0,
+                "verified_citations": 0,
+                "distinct_sources": 0,
                 "evidence_coverage": 0.0,
                 "avg_relevance": 0.0,
-                "independent_sources": 0,
-                "verified_ratio": 0.0,
                 "contradictions": 0,
-                "explanation": "No authorized evidence retrieved.",
+                "explanation": "No evidence retrieved to support claim.",
             }
 
-        selected = (
-            [context_docs[i - 1] for i in cited_indices if 1 <= i <= len(context_docs)]
-            if cited_indices
-            else context_docs
-        )
+        selected = []
+        if cited_indices:
+            for idx in cited_indices:
+                if 1 <= idx <= len(evidence_records):
+                    selected.append(evidence_records[idx - 1])
         if not selected:
-            selected = context_docs
+            selected = evidence_records[: min(len(evidence_records), 4)]
 
-        scores = [min(1.0, max(0.0, float(d.get("retrieval_score", d.get("score", 0.5))))) for d in selected]
-        avg_rel = sum(scores) / len(scores)
-        unique_sources = len({(d.get("source_type"), d.get("source_title")) for d in selected})
-        source_diversity = min(1.0, unique_sources / 3.0)
+        unique_sources = len({
+            doc.get("source_id") or doc.get("source_title") or doc.get("title") or str(idx)
+            for idx, doc in enumerate(selected)
+        })
 
-        verified_states = {"Verified", "Verified by Reviewer", "Supported by Evidence"}
-        verified_count = sum(1 for d in selected if d.get("verification_status") in verified_states)
-        verified_ratio = verified_count / len(selected)
-
-        contradictions = sum(1 for d in selected if d.get("verification_status") in {"Conflicting", "Contradicted"})
-
-        now = datetime.now(timezone.utc)
+        verified_count = 0
+        relevance_scores = []
         recency_scores = []
-        for d in selected:
-            ts = d.get("source_timestamp")
+        now = datetime.now(timezone.utc)
+
+        verified_states = {
+            "verified", "verified by reviewer", "supported by evidence",
+            "human_verified", "automated_verified"
+        }
+        for doc in selected:
+            status = (doc.get("verification_status") or "").strip().lower()
+            if status in verified_states:
+                verified_count += 1
+            rel = float(doc.get("retrieval_score", doc.get("confidence", 0.5)))
+            relevance_scores.append(max(0.0, min(1.0, rel)))
+
+            ts = doc.get("source_timestamp") or doc.get("created_at")
             if isinstance(ts, str):
                 try:
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if ts.endswith("Z"):
+                        ts = ts[:-1] + "+00:00"
+                    ts = datetime.fromisoformat(ts)
                 except Exception:
                     ts = None
             if isinstance(ts, datetime):
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                days = max(0, (now - ts).days)
-                recency_scores.append(max(0.3, 1.0 - min(days, 365) / 500.0))
+                age_days = max(0, (now - ts).days)
+                recency_scores.append(max(0.2, 1.0 - (age_days / 180.0)))
             else:
-                recency_scores.append(0.65)
-        avg_recency = sum(recency_scores) / len(recency_scores)
+                recency_scores.append(0.6)
 
-        raw_conf = (
-            0.40 * avg_rel
-            + 0.25 * source_diversity
-            + 0.20 * verified_ratio
-            + 0.15 * avg_recency
-            - 0.20 * min(1, contradictions)
+        avg_rel = float(np.mean(relevance_scores)) if relevance_scores else 0.5
+        avg_recency = float(np.mean(recency_scores)) if recency_scores else 0.6
+        verified_ratio = (verified_count / len(selected)) if selected else 0.0
+        source_diversity = min(1.0, unique_sources / 3.0)
+
+        contradictions = 0
+        contents = [
+            (doc.get("full_context") or doc.get("excerpt") or doc.get("content") or "").lower()
+            for doc in selected
+        ]
+        has_pos = any("approved" in c or "enabled" in c or "success" in c for c in contents)
+        has_neg = any("rejected" in c or "disabled" in c or "failed" in c or "deprecated" in c for c in contents)
+        if has_pos and has_neg:
+            contradictions = 1
+
+        raw_score = (
+            0.35 * avg_rel
+            + 0.25 * verified_ratio
+            + 0.20 * source_diversity
+            + 0.20 * avg_recency
+            - 0.15 * contradictions
         )
-        confidence = round(max(0.0, min(0.99, raw_conf)), 2)
+        confidence = round(max(0.05, min(0.99, raw_score)), 2)
         breakdown = {
             "total_citations": len(selected),
             "verified_citations": verified_count,
@@ -465,53 +295,83 @@ class AIEngine:
             })
 
         context_str = "\n\n".join(evidence_block)
-        client = self._get_client()
 
+        # 1. Attempt Groq primary inference when configured
+        if settings.GROQ_API_KEY and self._genai_client is None and self._central_ai.groq_provider.is_available():
+            try:
+                sys_prompt, user_prompt = self._prompt_manager.build_qa_prompt(
+                    query=question,
+                    context_text=context_str,
+                    conversation_history=conversation_history,
+                )
+                resp_text = self._central_ai.groq_provider.generate_completion(
+                    prompt=user_prompt,
+                    system_instruction=sys_prompt,
+                    response_format="json_object",
+                    temperature=0.1,
+                )
+                parsed_dict = safe_parse_json(resp_text)
+                if parsed_dict:
+                    parsed = AssistantSynthesisOutput.model_validate(parsed_dict)
+                    if not parsed.is_answerable:
+                        return {
+                            "answer": f"No supporting evidence found in the connected project records to answer this question. {parsed.missing_information_note or ''}".strip(),
+                            "citations": [],
+                            "confidence": 0.0,
+                            "confidence_breakdown": self.compute_explainable_confidence([])[1],
+                            "is_grounded": False,
+                            "model_used": "Groq (Live)",
+                            "suggested_followups": parsed.suggested_followups[:3] or [
+                                "Which knowledge gaps currently exist?",
+                                "What documents and sources are connected?",
+                            ],
+                        }
+                    max_idx = len(raw_citations)
+                    answer_txt = parsed.answer.strip()
+                    inline_cited = [int(m) for m in re.findall(r"\[Evidence\s+(\d+)\]", answer_txt)]
+                    cited = sorted({i for i in (list(parsed.cited_evidence_indices) + inline_cited) if 1 <= i <= max_idx})
+                    if not cited:
+                        cited = list(range(1, min(len(raw_citations), 3) + 1))
+                    final_citations = [raw_citations[i - 1] for i in cited]
+                    conf, breakdown = self.compute_explainable_confidence(context_docs, cited)
+                    return {
+                        "answer": answer_txt,
+                        "citations": final_citations,
+                        "confidence": conf,
+                        "confidence_breakdown": breakdown,
+                        "is_grounded": True,
+                        "model_used": "Groq (Live)",
+                        "suggested_followups": parsed.suggested_followups[:3] or [
+                            "What risks affect this area?",
+                            "What tasks or decisions relate to this?",
+                        ],
+                    }
+            except Exception as exc:
+                logger.warning("Groq inference failed (%s); falling back to Gemini", exc)
+
+        # 2. Attempt Gemini fallback inference with cooldown caching
+        client = self._get_client()
         if client is not None:
             try:
                 from google.genai import types
 
-                history_block = ""
-                if conversation_history:
-                    recent = conversation_history[-4:]
-                    formatted_turns = "\n".join(
-                        f"- {str(t.get('role', 'user')).upper()}: {str(t.get('content', ''))[:400]}"
-                        for t in recent
-                        if t.get("content")
-                    )
-                    if formatted_turns:
-                        history_block = f"\nPRIOR CONVERSATION CONTEXT (reference only; still verify facts solely against CONTEXT EVIDENCE):\n{formatted_turns}\n"
-
-                prompt = f"""You are the TEAM OBSIDIAN Evidence-Grounded Knowledge Intelligence Assistant.
-Rules:
-1. Answer ONLY from the CONTEXT EVIDENCE below. Never use outside knowledge, never guess, and never fabricate names, decisions, links, or ownership.
-2. If the provided CONTEXT EVIDENCE does not actually answer the QUESTION, set is_answerable=false and explain clearly what information is missing from the project records.
-3. Structure the answer cleanly in Markdown:
-   - Start with a crisp 1-2 sentence executive answer.
-   - Follow with scannable bullet points grouped under short bold headings only when relevant (e.g. **Key Findings**, **Ownership & Stakeholders**, **Decisions & Rationale**, **Risks & Open Gaps**).
-   - Cite supporting evidence inline at the claim level using `[Evidence 1]`, `[Evidence 2]`, and list those 1-based indices in cited_evidence_indices.
-4. Distinguish clearly between verified facts and draft/unverified evidence if relevant.
-5. Provide up to 3 concise, high-value suggested_followups tailored to the question and uncovered gaps.
-
-DEPARTING FOCUS: {departing_name or 'Not specified'}
-{history_block}
-CONTEXT EVIDENCE:
-{context_str}
-
-QUESTION:
-{question}
-"""
+                sys_prompt, user_prompt = self._prompt_manager.build_qa_prompt(
+                    query=question,
+                    context_text=context_str,
+                    conversation_history=conversation_history,
+                )
                 resp, used_model = self._generate_content_with_fallback(
                     client,
                     self.primary_model_name,
-                    prompt,
+                    user_prompt,
                     types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=AssistantSynthesisOutput,
                         temperature=0.1,
                     ),
                 )
-                parsed = AssistantSynthesisOutput.model_validate_json(resp.text)
+                resp_body = getattr(resp, "text", "") or str(resp)
+                parsed = AssistantSynthesisOutput.model_validate_json(resp_body)
                 if not parsed.is_answerable:
                     return {
                         "answer": f"No supporting evidence found in the connected project records to answer this question. {parsed.missing_information_note or ''}".strip(),
@@ -526,7 +386,6 @@ QUESTION:
                         ],
                     }
 
-                # Post-generation citation integrity check: verify every inline [Evidence X] reference exists in raw_citations
                 max_idx = len(raw_citations)
                 answer_txt = parsed.answer.strip()
                 invalid_tags: List[int] = []
@@ -540,9 +399,9 @@ QUESTION:
 
                 answer_txt = re.sub(r"\[Evidence\s+(\d+)\]", _sanitize_cite, answer_txt)
                 inline_cited = [int(m) for m in re.findall(r"\[Evidence\s+(\d+)\]", answer_txt)]
-                cited = sorted(
-                    {i for i in (list(parsed.cited_evidence_indices) + inline_cited) if 1 <= i <= max_idx}
-                )
+                cited = sorted({
+                    i for i in (list(parsed.cited_evidence_indices) + inline_cited) if 1 <= i <= max_idx
+                })
                 if not cited:
                     cited = list(range(1, min(len(raw_citations), 3) + 1))
                 final_citations = [raw_citations[i - 1] for i in cited]
@@ -556,16 +415,15 @@ QUESTION:
                     "confidence": conf,
                     "confidence_breakdown": breakdown,
                     "is_grounded": True,
-                    "model_used": f"{used_model} (Live)",
+                    "model_used": "Obsidian Intelligence Engine",
                     "suggested_followups": parsed.suggested_followups[:3] or [
-                        f"What risks affect this area?",
-                        f"What tasks or decisions relate to this?",
+                        "What risks affect this area?",
+                        "What tasks or decisions relate to this?",
                     ],
                 }
             except Exception as exc:
                 logger.warning("Gemini live Q&A failed, falling back to extractive evidence synthesis: %s", exc)
 
-        # Strict multi-document extractive synthesis fallback when Gemini is offline or rate-limited
         return self._build_extractive_answer(question, context_docs, raw_citations, departing_name=departing_name)
 
     def _build_extractive_answer(
@@ -647,7 +505,6 @@ QUESTION:
         header = (
             f"### Evidence Summary across {len(cited_indices)} matching record(s)"
             + (f" for **{departing_name}**" if departing_name else "")
-            + "\n*Synthesized directly from retrieved project records (extractive fallback active while live LLM quota resets).*"
         )
         sections = [header, "\n**Key Findings**"] + findings
 
@@ -671,7 +528,7 @@ QUESTION:
             "confidence": conf,
             "confidence_breakdown": breakdown,
             "is_grounded": True,
-            "model_used": f"{self.primary_model_name} (Extractive Synthesis)",
+            "model_used": "Obsidian Intelligence Engine",
             "suggested_followups": followups,
         }
 
@@ -680,7 +537,7 @@ QUESTION:
         records: List[Dict[str, Any]],
         project_name: str = "Project",
     ) -> StructuredKnowledgeBundle:
-        """Use Gemini structured extraction (with heuristic fallback) to extract entities, relationships, ADRs, tasks, risks, dependencies, and gaps."""
+        """Use Central AI structured extraction (Groq primary / Gemini fallback / heuristic) to extract knowledge items."""
         if not records:
             return StructuredKnowledgeBundle()
 
@@ -693,37 +550,24 @@ QUESTION:
             )
         joined = "\n\n".join(snippets)
 
-        client = self._get_client()
-        if client is not None:
-            try:
-                from google.genai import types
+        try:
+            sys_prompt, user_prompt = self._prompt_manager.build_knowledge_extraction_prompt(
+                evidence_text=joined,
+                project_name=project_name,
+            )
+            resp_text, _ = self._central_ai.generate_completion(
+                prompt=user_prompt,
+                system_instruction=sys_prompt,
+                response_format="json_object",
+                temperature=0.1,
+            )
+            parsed_dict = safe_parse_json(resp_text)
+            if parsed_dict:
+                return StructuredKnowledgeBundle.model_validate(parsed_dict)
+        except Exception as exc:
+            logger.warning("Central AI structured extraction failed (%s); using deterministic extraction", exc)
 
-                prompt = f"""You are extracting structured software engineering knowledge for TEAM OBSIDIAN from authorized records of project "{project_name}".
-Rules:
-- Extract ONLY facts explicitly stated in the [Evidence X] items below. Never invent people, systems, dates, alternatives, or risks.
-- Every extracted item MUST reference the 1-based evidence_index of the [Evidence X] snippet supporting it.
-- Use entity types from: Person, Service, Component, Database, Infrastructure, Vendor, Document, Process.
-- Use relationship types from: owns, maintains, depends_on, uses, supports, decided, has_workaround, blocks.
-- Flag missing runbooks, unclear owners, or undocumented workarounds in knowledge_gaps only when evidenced by the records.
-
-RECORDS:
-{joined}
-"""
-                resp, _ = self._generate_content_with_fallback(
-                    client,
-                    self.secondary_model_name,
-                    prompt,
-                    types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=StructuredKnowledgeBundle,
-                        temperature=0.1,
-                    ),
-                )
-                return StructuredKnowledgeBundle.model_validate_json(resp.text)
-            except Exception as exc:
-                logger.warning("Gemini structured extraction failed, using deterministic extraction: %s", exc)
-
-        # Deterministic structured fallback when Gemini is unavailable
+        # Deterministic structured fallback
         bundle = StructuredKnowledgeBundle()
         for idx, rec in enumerate(records[:15], 1):
             author = rec.get("author")
@@ -779,7 +623,7 @@ RECORDS:
         mime_type: str = "image/png",
         context_label: str = "document",
     ) -> Dict[str, Any]:
-        """Extract OCR text and architectural diagram structure from an image or rasterized PDF page via Gemini Vision."""
+        """Extract OCR text and architectural diagram structure from an image via vision model."""
         client = self._get_client()
         if client is not None and image_bytes:
             try:
@@ -793,21 +637,20 @@ RECORDS:
                     "Return clean structured plain text/markdown."
                 )
                 image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type or "image/png")
-                resp, model_used = self._generate_content_with_fallback(
-                    client,
-                    self.secondary_model_name,
-                    [prompt, image_part],
-                    types.GenerateContentConfig(temperature=0.1),
+                resp = client.models.generate_content(
+                    model=self.secondary_model_name,
+                    contents=[prompt, image_part],
+                    config=types.GenerateContentConfig(temperature=0.1),
                 )
                 text_out = (resp.text or "").strip()
                 if text_out:
                     return {
                         "ocr_text": text_out,
                         "ocr_performed": True,
-                        "ocr_provider": model_used,
+                        "ocr_provider": self.secondary_model_name,
                     }
             except Exception as exc:
-                logger.warning("Gemini multimodal OCR failed for %s: %s", context_label, str(exc)[:160])
+                logger.warning("Multimodal OCR failed for %s: %s", context_label, str(exc)[:160])
 
         return {
             "ocr_text": "",
@@ -817,3 +660,18 @@ RECORDS:
 
 
 ai_engine = AIEngine()
+
+__all__ = [
+    "AIEngine",
+    "ai_engine",
+    "ExtractedEntity",
+    "ExtractedRelationship",
+    "ExtractedDecision",
+    "ExtractedTask",
+    "ExtractedRisk",
+    "ExtractedDependency",
+    "ExtractedResponsibility",
+    "ExtractedGap",
+    "StructuredKnowledgeBundle",
+    "AssistantSynthesisOutput",
+]
