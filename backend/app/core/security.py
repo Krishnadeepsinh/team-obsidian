@@ -250,6 +250,24 @@ def generate_reset_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def generate_otp_code() -> str:
+    """Generate a cryptographically secure 6-digit numeric OTP code."""
+    # 000000 to 999999
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_otp_code(otp: str, email: str = "") -> str:
+    """Hash an OTP code with SHA-256 bound to recipient email."""
+    normalized_email = (email or "").strip().lower()
+    raw = f"obsidian_otp_{normalized_email}_{otp.strip()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def generate_otp_session_token() -> str:
+    """Generate a high-entropy verified session token returned after OTP verification."""
+    return f"otp_sess_{secrets.token_urlsafe(32)}"
+
+
 def hash_reset_token(token: str) -> str:
     """Hash a password reset token with SHA-256 before database persistence."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()

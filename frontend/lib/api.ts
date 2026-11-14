@@ -249,12 +249,19 @@ export const api = {
     return res
   },
   logout: async () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("obsidian_token")
-      localStorage.removeItem("obsidian_authenticated")
-      localStorage.removeItem("obsidian_user")
+    try {
+      await fetchJson<any>("/auth/logout", { method: "POST" }).catch(() => ({}))
+    } finally {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("obsidian_token")
+        localStorage.removeItem("obsidian_authenticated")
+        localStorage.removeItem("obsidian_user")
+        localStorage.removeItem("obsidian_active_project_id")
+        localStorage.removeItem("obsidian_active_project")
+        sessionStorage.clear()
+        window.location.href = "/login"
+      }
     }
-    return fetchJson<any>("/auth/logout", { method: "POST" }).catch(() => ({}))
   },
   getUserContext: async () => {
     return fetchJson<any>("/auth/me/context")
@@ -279,7 +286,13 @@ export const api = {
       body: JSON.stringify({ email }),
     })
   },
-  resetPassword: async (data: { email: string; reset_token: string; new_password: string }) => {
+  verifyOtp: async (email: string, otp: string) => {
+    return fetchJson<any>("/auth/otp/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, otp }),
+    })
+  },
+  resetPassword: async (data: { email: string; reset_token: string; new_password: string; confirm_password?: string }) => {
     return fetchJson<any>("/auth/reset-password", {
       method: "POST",
       body: JSON.stringify(data),

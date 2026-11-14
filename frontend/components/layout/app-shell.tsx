@@ -44,6 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [showProjectMenu, setShowProjectMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false)
   const [activeProject, setActiveProject] = useState("My Workspace")
   const [projectsList, setProjectsList] = useState<any[]>([])
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -85,22 +86,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         localStorage.getItem("obsidian_user") ||
         localStorage.getItem("obsidian_token")
       if (!isAuth) {
-        router.push("/login")
+        window.location.href = "/login"
         return
       }
     }
-  }, [pathname, isPublic, router])
+  }, [pathname, isPublic])
 
   useEffect(() => {
     if (typeof window === "undefined") return
     const onSessionExpired = () => {
       if (!isPublic) {
-        router.push("/login")
+        window.location.href = "/login"
       }
     }
     window.addEventListener("obsidian_session_expired", onSessionExpired)
     return () => window.removeEventListener("obsidian_session_expired", onSessionExpired)
-  }, [isPublic, router])
+  }, [isPublic])
 
   useEffect(() => {
     setMobileNavOpen(false)
@@ -232,18 +233,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [isPublic, pathname, projectsList])
 
-  const handleSignOut = () => {
+  useEffect(() => {
     setShowUserMenu(false)
+    setShowHeaderMenu(false)
+    setShowProjectMenu(false)
     setMobileNavOpen(false)
+  }, [pathname])
+
+  const handleSignOut = async () => {
+    setShowUserMenu(false)
+    setShowHeaderMenu(false)
+    setMobileNavOpen(false)
+    try {
+      await api.logout()
+    } catch {
+      // safe fallback
+    }
     if (typeof window !== "undefined") {
       localStorage.removeItem("obsidian_token")
       localStorage.removeItem("obsidian_authenticated")
       localStorage.removeItem("obsidian_user")
       localStorage.removeItem("obsidian_active_project_id")
       localStorage.removeItem("obsidian_active_project")
+      sessionStorage.clear()
+      window.location.href = "/login"
     }
-    router.push("/login")
-    api.logout().catch(() => {})
   }
 
   if (isPublic) {
@@ -659,13 +673,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </button>
 
-            <button
-              onClick={() => router.push("/profile")}
-              className="w-7 h-7 rounded-full bg-[#1E1238] flex items-center justify-center text-white text-[10px] font-bold cursor-pointer hover:ring-2 hover:ring-violet-400 transition-all shadow-sm"
-              title={currentUser?.name || "Profile"}
-            >
-              {userInitials}
-            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowHeaderMenu(!showHeaderMenu)}
+                className="w-7 h-7 rounded-full bg-[#1E1238] flex items-center justify-center text-white text-[10px] font-bold cursor-pointer hover:ring-2 hover:ring-violet-400 transition-all shadow-sm"
+                title={currentUser?.name || "Profile menu"}
+                aria-label="User profile menu"
+              >
+                {userInitials}
+              </button>
+              {showHeaderMenu && (
+                <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-[#E8EBF2] rounded-xl shadow-xl p-1 z-50">
+                  <div className="px-3 py-2 border-b border-slate-100 mb-1">
+                    <p className="text-xs font-semibold text-slate-800 truncate">{currentUser?.name || "Workspace User"}</p>
+                    <p className="text-[10px] text-slate-400 truncate">{currentUser?.email || ""}</p>
+                  </div>
+                  <Link
+                    href="/profile"
+                    onClick={() => setShowHeaderMenu(false)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <Users className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Profile & Security</span>
+                  </Link>
+                  <Link
+                    href="/settings"
+                    onClick={() => setShowHeaderMenu(false)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Settings</span>
+                  </Link>
+                  <button
+                    onClick={handleSignOut}
+                    className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-rose-600 hover:bg-rose-50 transition-colors"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 

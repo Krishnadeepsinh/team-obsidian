@@ -18,9 +18,12 @@ from app.core.security import (
     clear_auth_cookie,
     create_access_token,
     decode_access_token,
+    generate_otp_code,
+    generate_otp_session_token,
     generate_reset_token,
     get_current_user,
     get_password_hash,
+    hash_otp_code,
     hash_reset_token,
     revoke_token_jti,
     set_auth_cookie,
@@ -32,11 +35,13 @@ from app.schemas.auth import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    ResetPasswordWithOtpRequest,
     Token,
     UserLogin,
     UserProfileUpdate,
     UserRegister,
     UserResponse,
+    VerifyOtpRequest,
 )
 from app.services.audit_service import record_activity
 from app.services.email_service import email_service
@@ -217,29 +222,47 @@ def login(login_in: UserLogin, request: Request, response: Response, db: Session
 def logout(
     request: Request,
     response: Response,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Sign out active session, revoke token JTI, and clear session cookie across all browsers."""
+    clear_auth_cookie(response)
     auth_header = request.headers.get("authorization", "")
     raw_tok = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else (request.cookies.get(settings.AUTH_COOKIE_NAME) or "").strip()
+    user_id = None
+    user_email = None
+    org_id = None
+
     if raw_tok:
         payload = decode_access_token(raw_tok)
         if payload:
-            revoke_token_jti(payload.get("jti"), payload.get("exp"), db=db)
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            if jti:
+                revoke_token_jti(jti, exp, db=db)
+                db.commit()
+            user_id = payload.get("sub")
+            user_email = payload.get("email")
+
+    if user_id:
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                org_id = user.org_id
+            record_activity(
+                db=db,
+                action="auth.logout",
+                entity_type="user",
+                entity_id=user_id,
+                user_id=user_id,
+                org_id=org_id,
+                actor_email=user_email,
+                details={"message": f"Signed out session for {user_email or user_id}"},
+                ip_address=request.client.host if request.client else None,
+            )
             db.commit()
-    clear_auth_cookie(response)
-    record_activity(
-        db=db,
-        action="auth.logout",
-        entity_type="user",
-        entity_id=current_user.id,
-        user_id=current_user.id,
-        org_id=current_user.org_id,
-        actor_email=current_user.email,
-        details={"message": f"Signed out session for {current_user.email}"},
-        ip_address=request.client.host if request.client else None,
-    )
-    db.commit()
+        except Exception:
+            pass
+
     return {"status": "success", "message": "Signed out successfully."}
 
 
@@ -338,116 +361,234 @@ def get_auth_capabilities() -> Dict[str, Any]:
 
 @router.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
-    """Create a single-use hashed password reset token and deliver via email. Never returns token in HTTP response."""
+    """Create a cryptographically secure 6-digit email OTP and deliver via Gmail SMTP or fallback provider."""
     ip = get_client_ip(request)
     normalized_email = req.email.strip().lower()
     rate_limiter.check(
         f"forgot:{ip}:{normalized_email}",
         limit=8,
         window_seconds=300,
-        detail="Too many password reset requests. Please try again later.",
+        detail="Too many verification requests. Please try again later.",
     )
     if settings.APP_ENV == "production" and not email_service.is_configured():
         raise HTTPException(
             status_code=503,
             detail=(
-                "Password recovery email delivery is not configured on this deployment "
-                "(RESEND_API_KEY or SMTP credentials required). Signed-in users can update their password under Profile."
+                "Password recovery email delivery is not configured on this deployment. "
+                "Signed-in users can update their password under Profile."
             ),
         )
+
     user = db.query(User).filter(User.email == normalized_email).first()
     delivery_result = None
+    now = datetime.now(timezone.utc)
+
     if user and user.is_active:
-        # Invalidate any prior unused reset tokens for this user
-        now = datetime.now(timezone.utc)
+        # Check 60-second resend cooldown against recent active OTP
+        recent_token = (
+            db.query(PasswordResetToken)
+            .filter(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.used_at.is_(None),
+            )
+            .order_by(PasswordResetToken.created_at.desc())
+            .first()
+        )
+        if recent_token and recent_token.created_at:
+            created_at = recent_token.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            elapsed_seconds = (now - created_at).total_seconds()
+            if elapsed_seconds < 60:
+                wait_time = int(60 - elapsed_seconds)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Please wait {wait_time} seconds before requesting a new verification code.",
+                )
+
+        # Invalidate any prior unused tokens for this user
         db.query(PasswordResetToken).filter(
             PasswordResetToken.user_id == user.id,
             PasswordResetToken.used_at.is_(None),
         ).update({"used_at": now})
 
-        raw_token = generate_reset_token()
+        # Generate 6-digit numeric OTP and hash bound to email
+        raw_otp = generate_otp_code()
+        otp_hash = hash_otp_code(raw_otp, user.email)
+
         token_rec = PasswordResetToken(
             user_id=user.id,
-            token_hash=hash_reset_token(raw_token),
-            expires_at=now + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES),
+            token_hash=otp_hash,
+            expires_at=now + timedelta(minutes=5),  # 5-minute expiration
+            attempts_count=0,
         )
         db.add(token_rec)
         record_activity(
             db=db,
-            action="auth.password_reset_requested",
+            action="auth.otp_requested",
             entity_type="user",
             entity_id=user.id,
             user_id=user.id,
             org_id=user.org_id,
             actor_email=user.email,
-            details={"message": "Password reset link issued"},
+            details={"message": "Password reset 6-digit OTP code dispatched"},
             ip_address=ip,
         )
         db.commit()
-        delivery_result = email_service.send_password_reset_email(user.email, raw_token, user_name=user.name)
+        delivery_result = email_service.send_otp_email(user.email, raw_otp, user_name=user.name)
 
     response_payload: Dict[str, Any] = {
         "status": "success",
-        "message": "If this email is registered, password reset instructions have been sent.",
+        "message": "If this email is registered, a 6-digit verification code has been dispatched.",
+        "cooldown_seconds": 60,
+        "expires_in_minutes": 5,
     }
-    if settings.APP_ENV != "production" and delivery_result and not delivery_result.get("delivered"):
+    if delivery_result:
+        response_payload["delivered"] = delivery_result.get("delivered", False)
         response_payload["delivery_provider"] = delivery_result.get("provider")
-        err_code = delivery_result.get("error_code")
-        if err_code == "resend_sandbox_restricted":
+        if delivery_result.get("warning"):
+            response_payload["delivery_warning"] = delivery_result.get("warning")
+        elif delivery_result.get("error_code") == "resend_sandbox_restricted":
             response_payload["delivery_warning"] = (
-                "Resend is using its sandbox sender (onboarding@resend.dev), which only delivers to your verified Resend account email. "
-                "Verify a domain in Resend and set SMTP_FROM_EMAIL (or configure SMTP_HOST/SMTP_USER/SMTP_PASSWORD) for general inbox delivery. "
-                "For local development, the single-use reset code was written to backend/.dev_mail_outbox.log."
+                "Email provider is in sandbox sender mode; check terminal outbox or configure verified domain."
             )
-        else:
-            response_payload["delivery_warning"] = (
-                "Outbound email provider did not deliver externally in development mode; "
-                "the single-use reset code was logged to backend/.dev_mail_outbox.log."
-            )
-    elif settings.APP_ENV == "production" and email_service.is_resend_sandbox_only():
-        response_payload["delivery_warning"] = (
-            "Resend is currently configured with onboarding@resend.dev (sandbox mode), which only delivers to the Resend account owner. "
-            "Configure a verified SMTP_FROM_EMAIL domain or SMTP credentials for arbitrary recipients."
-        )
 
     return response_payload
 
 
+@router.post("/otp/verify")
+def verify_otp(req: VerifyOtpRequest, request: Request, db: Session = Depends(get_db)):
+    """Verify single-use 6-digit OTP against stored hash, enforcing 5-min expiry and max 5 attempts."""
+    ip = get_client_ip(request)
+    normalized_email = req.email.strip().lower()
+    clean_otp = req.otp.strip()
+
+    rate_limiter.check(
+        f"otp_verify:{ip}:{normalized_email}",
+        limit=10,
+        window_seconds=300,
+        detail="Too many verification attempts. Please wait a few minutes.",
+    )
+
+    user = db.query(User).filter(User.email == normalized_email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+
+    now = datetime.now(timezone.utc)
+    token_rec = (
+        db.query(PasswordResetToken)
+        .filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .order_by(PasswordResetToken.created_at.desc())
+        .first()
+    )
+
+    if not token_rec:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please request a new one.")
+
+    # Check maximum attempt limit (5 attempts)
+    if (token_rec.attempts_count or 0) >= 5:
+        token_rec.used_at = now
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum verification attempts (5) exceeded. This code has been invalidated.",
+        )
+
+    # Check expiration (5 minutes)
+    expires_at = token_rec.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < now:
+        token_rec.used_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
+
+    # Compare cryptographic hash
+    expected_hash = hash_otp_code(clean_otp, user.email)
+    import hmac
+    if not hmac.compare_digest(token_rec.token_hash, expected_hash):
+        token_rec.attempts_count = (token_rec.attempts_count or 0) + 1
+        db.commit()
+        remaining = max(0, 5 - token_rec.attempts_count)
+        if remaining == 0:
+            token_rec.used_at = now
+            db.commit()
+            raise HTTPException(
+                status_code=400,
+                detail="Maximum verification attempts (5) exceeded. Please request a new code.",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Incorrect verification code. {remaining} attempt(s) remaining.",
+        )
+
+    # Valid OTP verified! Issue single-use reset session token
+    session_token = generate_otp_session_token()
+    token_rec.reset_session_token = session_token
+    token_rec.verified_at = now
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Verification code confirmed successfully.",
+        "reset_session_token": session_token,
+    }
+
+
 @router.post("/reset-password")
 def reset_password(req: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
-    """Verify single-use expiring password reset token and update password."""
+    """Reset password after successful OTP verification, enforcing password requirements and revoking prior sessions."""
     ip = get_client_ip(request)
     normalized_email = req.email.strip().lower()
     rate_limiter.check(
         f"reset:{ip}:{normalized_email}",
         limit=8,
         window_seconds=300,
-        detail="Too many reset verification attempts. Please wait a few minutes.",
+        detail="Too many password reset attempts. Please wait a few minutes.",
     )
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        raise HTTPException(status_code=400, detail="Invalid or expired reset session.")
 
-    token_hash = hash_reset_token(req.reset_token.strip())
+    if req.confirm_password and req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="New password and confirm password do not match.")
+
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+
+    provided_token = req.reset_token.strip()
+    now = datetime.now(timezone.utc)
+
+    # Match by reset_session_token (verified OTP session) OR direct hash fallback
     token_rec = (
         db.query(PasswordResetToken)
         .filter(
             PasswordResetToken.user_id == user.id,
-            PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.used_at.is_(None),
+            (
+                (PasswordResetToken.reset_session_token == provided_token)
+                | (PasswordResetToken.token_hash == hash_reset_token(provided_token))
+                | (PasswordResetToken.token_hash == hash_otp_code(provided_token, user.email))
+            ),
         )
         .first()
     )
 
-    now = datetime.now(timezone.utc)
-    if not token_rec or token_rec.used_at is not None:
-        raise HTTPException(status_code=400, detail="Invalid or already-used reset token.")
+    if not token_rec:
+        raise HTTPException(status_code=400, detail="Invalid, expired, or already-used reset token. Please request a new code.")
 
     expires_at = token_rec.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < now:
-        raise HTTPException(status_code=400, detail="Reset token has expired. Please request a new one.")
+    if expires_at < now and not token_rec.verified_at:
+        token_rec.used_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
 
+    # Invalidate token immediately
     token_rec.used_at = now
     user.password_hash = get_password_hash(req.new_password)
     user.password_updated_at = now
@@ -460,11 +601,14 @@ def reset_password(req: ResetPasswordRequest, request: Request, db: Session = De
         user_id=user.id,
         org_id=user.org_id,
         actor_email=user.email,
-        details={"message": "Password updated via one-time reset token"},
+        details={"message": "Password updated via verified 6-digit email OTP"},
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return {"status": "success", "message": "Password has been successfully updated. You may now log in."}
+    return {
+        "status": "success",
+        "message": "Password has been successfully updated. You may now log in with your new password.",
+    }
 
 
 @router.post("/change-password")

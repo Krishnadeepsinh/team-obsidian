@@ -153,6 +153,8 @@ def test_email_service_uses_resend_onboarding_when_from_is_local(monkeypatch):
         captured["to"] = json["to"]
         return _DummyResp(200, {"id": "email_123"})
 
+    monkeypatch.setattr(settings, "SMTP_HOST", "")
+    monkeypatch.setattr(settings, "SMTP_USER", "")
     monkeypatch.setattr(settings, "RESEND_API_KEY", "re_test_key_123")
     monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "noreply@teamobsidian.local")
     with patch("app.services.email_service.requests.post", side_effect=_fake_post):

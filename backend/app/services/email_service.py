@@ -47,6 +47,44 @@ class EmailService:
         error_code: Optional[str] = None
         error_detail: Optional[str] = None
 
+        # 1. Primary Priority: SMTP (e.g. Gmail SMTP, SendGrid, custom mail servers)
+        if self.is_smtp_configured():
+            attempted_provider = "smtp"
+            try:
+                msg = EmailMessage()
+                msg["Subject"] = subject
+                from_addr = settings.SMTP_FROM_EMAIL or settings.SMTP_USER
+                msg["From"] = f"TEAM OBSIDIAN <{from_addr}>"
+                msg["To"] = to_email
+                msg.set_content(text_body)
+                msg.add_alternative(html_body, subtype="html")
+
+                smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
+                if int(settings.SMTP_PORT) == 465:
+                    with smtplib.SMTP_SSL(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=15) as server:
+                        server.login(settings.SMTP_USER, smtp_password)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=15) as server:
+                        server.ehlo()
+                        server.starttls()
+                        server.ehlo()
+                        server.login(settings.SMTP_USER, smtp_password)
+                        server.send_message(msg)
+                if settings.APP_ENV != "production":
+                    try:
+                        with self._outbox_path.open("a", encoding="utf-8") as fh:
+                            fh.write(f"--- TO: {to_email} | SUBJECT: {subject} ---\n{text_body}\n\n")
+                    except Exception:
+                        pass
+                logger.info("Successfully delivered email via SMTP to %s", to_email)
+                return {"delivered": True, "provider": "smtp"}
+            except Exception as exc:
+                error_code = "smtp_error"
+                error_detail = str(exc)[:300]
+                logger.warning("SMTP email delivery failed: %s", exc)
+
+        # 2. Secondary Fallback: Resend API (if configured)
         if settings.RESEND_API_KEY:
             attempted_provider = "resend"
             sender = (
@@ -87,32 +125,7 @@ class EmailService:
                 error_detail = str(exc)[:300]
                 logger.warning("Resend email exception: %s", exc)
 
-        if self.is_smtp_configured():
-            attempted_provider = "smtp"
-            try:
-                msg = EmailMessage()
-                msg["Subject"] = subject
-                msg["From"] = settings.SMTP_FROM_EMAIL or settings.SMTP_USER
-                msg["To"] = to_email
-                msg.set_content(text_body)
-                msg.add_alternative(html_body, subtype="html")
-                if int(settings.SMTP_PORT) == 465:
-                    with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                        server.ehlo()
-                        server.starttls()
-                        server.ehlo()
-                        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                        server.send_message(msg)
-                return {"delivered": True, "provider": "smtp"}
-            except Exception as exc:
-                error_code = "smtp_error"
-                error_detail = str(exc)[:300]
-                logger.warning("SMTP email delivery failed: %s", exc)
-
+        # 3. Development local outbox fallback
         if settings.APP_ENV != "production":
             try:
                 with self._outbox_path.open("a", encoding="utf-8") as fh:
@@ -135,6 +148,102 @@ class EmailService:
             "error_code": error_code or "unconfigured",
             "error_detail": error_detail or "No outbound email provider configured.",
         }
+
+    def send_otp_email(self, to_email: str, otp_code: str, user_name: Optional[str] = None) -> dict:
+        """Deliver a high-security 6-digit OTP code with expiration and security warning."""
+        greeting = f"Hi {user_name}," if user_name else "Hello,"
+        escaped_user_name = html.escape(user_name, quote=True) if user_name else None
+        html_greeting = f"Hi {escaped_user_name}," if escaped_user_name else "Hello,"
+
+        text_body = (
+            f"{greeting}\n\n"
+            "We received a request to reset your TEAM OBSIDIAN account password.\n\n"
+            f"Your 6-Digit Verification Code: {otp_code}\n"
+            f"Reset code: {otp_code}\n\n"
+            "SECURITY NOTICE:\n"
+            "• This code is valid for 5 minutes only.\n"
+            "• It can only be used once.\n"
+            "• Maximum 5 verification attempts are allowed.\n"
+            "• Never share this OTP with anyone, including TEAM OBSIDIAN staff.\n\n"
+            "If you did not request a password reset, no changes have been made to your account. You can safely ignore this email.\n\n"
+            "TEAM OBSIDIAN Security Team\n"
+        )
+
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TEAM OBSIDIAN Password Reset Verification</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #0F172A; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #E2E8F0;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #0F172A; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width: 540px; background-color: #1E293B; border: 1px solid #334155; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);">
+          <!-- Header -->
+          <tr>
+            <td style="padding: 32px 32px 24px 32px; background: linear-gradient(135deg, #1E1238 0%, #0F172A 100%); border-bottom: 1px solid #334155;">
+              <table role="presentation" width="100%">
+                <tr>
+                  <td>
+                    <span style="font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: #A78BFA; background-color: rgba(167, 139, 250, 0.12); padding: 4px 10px; border-radius: 9999px; border: 1px solid rgba(167, 139, 250, 0.25);">TEAM OBSIDIAN</span>
+                    <h1 style="margin: 14px 0 4px 0; font-size: 22px; font-weight: 700; color: #FFFFFF; letter-spacing: -0.5px;">Password Reset Verification</h1>
+                    <p style="margin: 0; font-size: 12px; color: #94A3B8;">Autonomous Engineering Knowledge &amp; Handover Platform</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          
+          <!-- Content Body -->
+          <tr>
+            <td style="padding: 32px;">
+              <p style="margin: 0 0 16px 0; font-size: 14px; line-height: 1.6; color: #CBD5E1;">{html_greeting}</p>
+              <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #CBD5E1;">
+                We received a request to reset the password for your account. Use the single-use verification code below to complete the reset:
+              </p>
+              
+              <!-- OTP Box -->
+              <div style="background-color: #0B0F19; border: 1.5px solid #7C3AED; border-radius: 14px; padding: 24px 16px; text-align: center; margin: 24px 0 28px 0;">
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94A3B8; margin-bottom: 8px;">Your Verification Code</div>
+                <div style="font-family: 'SF Mono', Monaco, Consolas, 'Courier New', monospace; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #A78BFA; text-indent: 12px;">{otp_code}</div>
+                <div style="font-size: 11px; color: #64748B; margin-top: 8px;">Expires in 5 minutes &bull; Single-use only</div>
+              </div>
+
+              <!-- Security Information -->
+              <div style="background-color: rgba(239, 68, 68, 0.08); border-left: 3px solid #EF4444; border-radius: 6px; padding: 12px 14px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #FCA5A5;">
+                  <strong>Security Reminder:</strong> Never share this code with anyone. TEAM OBSIDIAN engineers or support will never ask you for your verification code.
+                </p>
+              </div>
+
+              <p style="margin: 0; font-size: 12px; line-height: 1.6; color: #64748B;">
+                If you did not request a password reset, no changes were made to your account. You can safely ignore this email.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 32px; background-color: #0B0F19; border-top: 1px solid #334155; text-align: center;">
+              <p style="margin: 0; font-size: 11px; color: #475569;">
+                &copy; TEAM OBSIDIAN &bull; Continuous Knowledge Reconstruction &amp; Engineering Continuity Engine
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+        return self.send_email(
+            to_email=to_email,
+            subject="TEAM OBSIDIAN — Password Reset Code: " + otp_code,
+            html_body=html_body,
+            text_body=text_body,
+        )
 
     def send_password_reset_email(self, to_email: str, reset_token: str, user_name: Optional[str] = None) -> dict:
         query = urlencode({"token": reset_token, "email": to_email})

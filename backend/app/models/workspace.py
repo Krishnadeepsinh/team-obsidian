@@ -6,6 +6,7 @@ from sqlalchemy import (
     Text,
     DateTime,
     Float,
+    Integer,
     ForeignKey,
     Boolean,
     JSON,
@@ -90,6 +91,9 @@ class PasswordResetToken(Base):
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now)
+    attempts_count = Column(Integer, default=0, nullable=False)
+    verified_at = Column(DateTime, nullable=True)
+    reset_session_token = Column(String(64), nullable=True, index=True)
 
     user = relationship("User", back_populates="reset_tokens")
 
