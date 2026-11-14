@@ -64,7 +64,39 @@ class EmailService:
         error_code: Optional[str] = None
         error_detail: Optional[str] = None
 
-        # 1. Primary Priority: SMTP (e.g. Gmail SMTP, SendGrid, custom mail servers)
+        # 1. Primary Cloud Priority: HTTPS Mail Relay on Vercel
+        # Bypasses cloud host outbound SMTP port restrictions (e.g. Render Free Tier blocks 25, 465, 587)
+        if settings.FRONTEND_URL and settings.FRONTEND_URL.startswith("https://"):
+            relay_url = f"{settings.FRONTEND_URL.rstrip('/')}/api/mail/send"
+            try:
+                res = requests.post(
+                    relay_url,
+                    headers={
+                        "Authorization": f"Bearer {settings.SECRET_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "to": to_email,
+                        "subject": subject,
+                        "html": html_body,
+                        "text": text_body,
+                        "from": f"TEAM OBSIDIAN <{settings.SMTP_FROM_EMAIL or settings.SMTP_USER}>",
+                    },
+                    timeout=4,
+                )
+                if res.status_code == 200 and res.json().get("delivered"):
+                    logger.info("Successfully delivered email via HTTPS mail relay to %s", to_email)
+                    if settings.APP_ENV != "production":
+                        try:
+                            with self._outbox_path.open("a", encoding="utf-8") as fh:
+                                fh.write(f"--- TO: {to_email} | SUBJECT: {subject} ---\n{text_body}\n\n")
+                        except Exception:
+                            pass
+                    return {"delivered": True, "provider": "smtp"}
+            except Exception as exc:
+                logger.info("HTTPS mail relay skipped (%s), falling back to direct SMTP", exc)
+
+        # 2. Secondary Priority: Direct SMTP (e.g. Gmail SMTP, SendGrid, custom mail servers)
         if self.is_smtp_configured():
             attempted_provider = "smtp"
             try:
@@ -78,11 +110,11 @@ class EmailService:
 
                 smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
                 if int(settings.SMTP_PORT) == 465:
-                    with smtplib.SMTP_SSL(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=15) as server:
+                    with smtplib.SMTP_SSL(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=3) as server:
                         server.login(settings.SMTP_USER, smtp_password)
                         server.send_message(msg)
                 else:
-                    with smtplib.SMTP(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=15) as server:
+                    with smtplib.SMTP(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=3) as server:
                         server.ehlo()
                         server.starttls()
                         server.ehlo()
@@ -101,7 +133,7 @@ class EmailService:
                 error_detail = str(exc)[:300]
                 logger.warning("SMTP email delivery failed: %s", exc)
 
-        # 2. Secondary Fallback: Resend API (if configured)
+        # 3. Tertiary Fallback: Resend API (if configured)
         if settings.RESEND_API_KEY:
             attempted_provider = "resend"
             sender = (
@@ -123,7 +155,7 @@ class EmailService:
                         "html": html_body,
                         "text": text_body,
                     },
-                    timeout=10,
+                    timeout=4,
                 )
                 if 200 <= res.status_code < 300:
                     return {"delivered": True, "provider": "resend"}

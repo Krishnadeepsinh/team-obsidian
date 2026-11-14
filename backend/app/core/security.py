@@ -154,22 +154,23 @@ def revoke_token_jti(
 
     from app.models.workspace import RevokedToken
 
-    own_session = db is None
-    session = db if db is not None else SessionLocal()
+    # Always use an isolated, dedicated session for token revocation
+    # so that duplicate JTIs or flush errors never corrupt the caller's request transaction
     try:
-        session.query(RevokedToken).filter(RevokedToken.expires_ts < now).delete(synchronize_session=False)
-        session.merge(RevokedToken(jti=jti, expires_ts=expiry))
-        if own_session:
-            session.commit()
-        else:
-            session.flush()
-    except SQLAlchemyError as exc:
-        logger.warning("Failed to persist JTI revocation in database: %s", exc)
-        if own_session:
-            session.rollback()
-    finally:
-        if own_session:
-            session.close()
+        with SessionLocal() as session:
+            try:
+                session.query(RevokedToken).filter(RevokedToken.expires_ts < now).delete(synchronize_session=False)
+                existing = session.query(RevokedToken).filter(RevokedToken.jti == jti).first()
+                if not existing:
+                    session.add(RevokedToken(jti=jti, expires_ts=expiry))
+                else:
+                    existing.expires_ts = expiry
+                session.commit()
+            except SQLAlchemyError as exc:
+                session.rollback()
+                logger.warning("Failed to persist JTI revocation in database: %s", exc)
+    except Exception as exc:
+        logger.warning("Failed to acquire session for JTI revocation: %s", exc)
 
 
 def is_token_jti_revoked(jti: Optional[str], db: Optional[Session] = None) -> bool:
