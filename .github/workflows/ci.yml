@@ -17,6 +17,7 @@ jobs:
       APP_ENV: test
       DATABASE_URL: sqlite:///./ci_obsidian_test.db
       SECRET_KEY: ci-ephemeral-test-secret-key-at-least-32-bytes
+      PYTHONPATH: .
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,7 +35,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run full pytest suite
-        run: pytest -v tests/
+        run: python -m pytest -v tests/
 
   frontend-checks:
     name: Frontend Lint, Typecheck & Build
