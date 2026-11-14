@@ -28,11 +28,19 @@ export function safeHref(
 }
 
 function getAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("obsidian_token") : null
   const headers: Record<string, string> = { ...extra }
+  if (token && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`
+  }
   return headers
 }
 
 async function performFetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+  const optionsWithCredentials: RequestInit = {
+    credentials: "include",
+    ...options,
+  }
   const retryableStatuses = new Set([502, 503, 504])
   const retryDelaysMs = [2000, 4000, 6000]
   const emitWaking = (waking: boolean, attempt: number) => {
@@ -42,10 +50,7 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
   }
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
     try {
-      const res = await fetch(url, {
-        credentials: "include",
-        ...options,
-      })
+      const res = await fetch(url, optionsWithCredentials)
       if (attempt < retryDelaysMs.length && retryableStatuses.has(res.status)) {
         emitWaking(true, attempt + 1)
         await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]))
@@ -105,6 +110,8 @@ async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promis
       !endpoint.startsWith("/auth/forgot-password") &&
       !endpoint.startsWith("/auth/reset-password")
     ) {
+      localStorage.removeItem("obsidian_token")
+      localStorage.removeItem("obsidian_authenticated")
       localStorage.removeItem("obsidian_user")
       window.dispatchEvent(new Event("obsidian_session_expired"))
     }
@@ -209,6 +216,12 @@ export function resolveActiveProjectId(projects: any[], preferredId?: string): s
 
 function persistAuthSession(res: any): void {
   if (typeof window !== "undefined") {
+    // Dual-mode auth: persist token for cross-origin deployments (e.g. Vercel <-> Render)
+    // where browsers block 3rd-party HttpOnly cookies by default, while retaining cookie support.
+    if (res?.access_token) {
+      localStorage.setItem("obsidian_token", res.access_token)
+    }
+    localStorage.setItem("obsidian_authenticated", "true")
     if (res?.user) localStorage.setItem("obsidian_user", JSON.stringify(res.user))
     if (res?.active_project_id) {
       setStoredProjectId(res.active_project_id, false)
@@ -236,14 +249,12 @@ export const api = {
     return res
   },
   logout: async () => {
-    try {
-      return await fetchJson<any>("/auth/logout", { method: "POST" }).catch(() => ({}))
-    } finally {
-      if (typeof window !== "undefined") {
-        localStorage.removeItem("obsidian_user")
-        localStorage.removeItem("obsidian_active_project_id")
-      }
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("obsidian_token")
+      localStorage.removeItem("obsidian_authenticated")
+      localStorage.removeItem("obsidian_user")
     }
+    return fetchJson<any>("/auth/logout", { method: "POST" }).catch(() => ({}))
   },
   getUserContext: async () => {
     return fetchJson<any>("/auth/me/context")

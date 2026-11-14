@@ -7,8 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root system user
-RUN adduser --disabled-password --gecos "" --no-create-home appuser
+# Create non-root system user with home directory for caches
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /home/appuser/.cache \
+    && chown -R appuser:appuser /home/appuser
+
+ENV HOME=/home/appuser
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

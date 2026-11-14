@@ -80,15 +80,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isPublic && typeof window !== "undefined") {
-      const user = localStorage.getItem("obsidian_user")
-      if (!user) {
-        api.getUserContext().then((ctx) => {
-          if (!ctx?.user) {
-            router.push("/login")
-          }
-        }).catch(() => {
-          router.push("/login")
-        })
+      const isAuth =
+        localStorage.getItem("obsidian_authenticated") ||
+        localStorage.getItem("obsidian_user") ||
+        localStorage.getItem("obsidian_token")
+      if (!isAuth) {
+        router.push("/login")
+        return
       }
     }
   }, [pathname, isPublic, router])
@@ -144,6 +142,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .getUserContext()
       .then((ctx) => {
         if (ctx) {
+          localStorage.setItem("obsidian_authenticated", "true")
           if (ctx.user) {
             setCurrentUser(ctx.user)
             localStorage.setItem("obsidian_user", JSON.stringify(ctx.user))
@@ -233,16 +232,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [isPublic, pathname, projectsList])
 
-  const handleSignOut = async () => {
+  const handleSignOut = () => {
     setShowUserMenu(false)
     setMobileNavOpen(false)
-    await api.logout()
     if (typeof window !== "undefined") {
+      localStorage.removeItem("obsidian_token")
+      localStorage.removeItem("obsidian_authenticated")
       localStorage.removeItem("obsidian_user")
       localStorage.removeItem("obsidian_active_project_id")
       localStorage.removeItem("obsidian_active_project")
     }
     router.push("/login")
+    api.logout().catch(() => {})
   }
 
   if (isPublic) {
