@@ -42,8 +42,8 @@ export default function ProjectDetailPage() {
   const projectId = String(params?.id || "")
 
   const { data: projectData, isLoading: pLoading, refetch: refetchProject } = useProject(projectId)
-  const { data: membersData, isLoading: mLoading, refetch: refetchMembers } = useProjectMembers(projectId)
-  const { data: timelineData, isLoading: tLoading, refetch: refetchTimeline } = useProjectTimeline(projectId)
+  const { data: membersData, refetch: refetchMembers } = useProjectMembers(projectId)
+  const { data: timelineData, refetch: refetchTimeline } = useProjectTimeline(projectId)
   const { invalidateProjectDetail, invalidateProjects, invalidateDashboard } = useInvalidateQueries()
 
   const project = projectData || null

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 export let globalQueryClient: QueryClient | null = null
@@ -27,7 +27,9 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       })
   )
 
-  globalQueryClient = queryClient
+  useEffect(() => {
+    globalQueryClient = queryClient
+  }, [queryClient])
 
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }

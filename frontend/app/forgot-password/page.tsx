@@ -102,7 +102,7 @@ function ForgotPasswordForm() {
       })
       setSubmittedMsg(res.message || "Password updated successfully. Redirecting to sign in...")
       setTimeout(() => {
-        window.location.href = "/login"
+        router.push("/login")
       }, 1500)
     } catch (err: any) {
       setError(err.message || "Failed to update password. Please request a new code.")

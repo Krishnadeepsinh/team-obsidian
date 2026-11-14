@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useCallback, useEffect, useState } from "react"
+import React, { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import {
@@ -61,7 +61,7 @@ export default function OverviewPage() {
   }, [])
 
   const { data: statsData, isLoading: statsLoading, refetch: refetchStats } = useDashboardStats(activeProjId)
-  const { data: activitiesData, isLoading: actsLoading, refetch: refetchActs } = useDashboardActivity(activeProjId)
+  const { data: activitiesData, refetch: refetchActs } = useDashboardActivity(activeProjId)
 
   const data = statsData || null
   const activities = Array.isArray(activitiesData) ? activitiesData : []

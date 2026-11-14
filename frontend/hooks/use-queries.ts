@@ -1,7 +1,7 @@
 "use client"
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId } from "@/lib/api"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { api } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 
 // 1. User & Multi-Tenant Workspace Context
