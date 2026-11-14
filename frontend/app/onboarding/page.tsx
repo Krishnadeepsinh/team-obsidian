@@ -80,7 +80,7 @@ export default function OnboardingPage() {
             <MessageSquare className="w-3.5 h-3.5" /> Open Evidence-Grounded AI Assistant
           </Link>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/dashboard")}
             className="px-5 py-2.5 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-600/20 flex items-center gap-2"
           >
             <span>Go to Overview Dashboard</span>

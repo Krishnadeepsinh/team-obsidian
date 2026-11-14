@@ -25,7 +25,7 @@ export default function RegisterPage() {
         password,
       })
       if (res.access_token) {
-        router.push("/")
+        router.push("/dashboard")
       }
     } catch (err: any) {
       setError(err.message || "Could not create account. Please verify your inputs.")

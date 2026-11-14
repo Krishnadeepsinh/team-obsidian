@@ -30,7 +30,7 @@ export default function LoginPage() {
     try {
       const res = await api.login({ email, password })
       if (res.access_token) {
-        router.push("/")
+        router.push("/dashboard")
       }
     } catch (err: any) {
       setError(err.message || "Invalid credentials. Please check your email and password.")

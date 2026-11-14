@@ -78,20 +78,22 @@ export function useWorkspaces() {
 }
 
 // 8. Dashboard Statistics
-export function useDashboardStats(projectId?: string) {
+export function useDashboardStats(projectId?: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.dashboard.stats(undefined, projectId),
     queryFn: () => api.getStats(projectId),
     staleTime: 30 * 1000,
+    enabled,
   })
 }
 
 // 9. Dashboard Activity
-export function useDashboardActivity(projectId?: string) {
+export function useDashboardActivity(projectId?: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.dashboard.activity(undefined, projectId),
     queryFn: () => api.getActivity(projectId),
     staleTime: 30 * 1000,
+    enabled,
   })
 }
 

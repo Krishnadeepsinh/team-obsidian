@@ -75,6 +75,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [])
 
   const isPublic =
+    pathname === "/" ||
     pathname === "/landing" ||
     pathname === "/login" ||
     pathname === "/register" ||
@@ -277,7 +278,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const navItems = [
-    { name: "Overview", href: "/", icon: LayoutDashboard },
+    { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
     { name: "Projects", href: "/projects", icon: FolderGit2 },
     { name: "Knowledge", href: "/knowledge/explorer", icon: Compass },
     { name: "Handover", href: "/handover", icon: FileSignature },
@@ -315,7 +316,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {isDesktopViewport && (
         <aside className="hidden md:flex w-60 flex-shrink-0 flex-col bg-white border-r border-[#E8EBF2] select-none z-30">
         <div className="p-4 pt-5 pb-3">
-          <Link href="/" className="flex items-center gap-2.5 group">
+          <Link href="/dashboard" className="flex items-center gap-2.5 group">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#1E1238] to-[#3B1A7A] p-1.5 flex items-center justify-center shadow-md shadow-purple-900/10">
               <Layers className="w-5 h-5 text-white" />
             </div>
@@ -395,7 +396,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Navigation */}
         <nav className="flex-1 px-3 space-y-1 overflow-y-auto pb-2">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href !== "/" && pathname?.startsWith(item.href))
+            const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname?.startsWith(item.href))
             const Icon = item.icon
             return (
               <Link
@@ -588,7 +589,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <button
                 onClick={() => {
                   setActiveTab("Workspace")
-                  router.push("/")
+                  router.push("/dashboard")
                 }}
                 className={`px-2.5 sm:px-4 py-1 rounded-full text-xs font-semibold transition-all ${
                   activeTab === "Workspace" ? "bg-white text-violet-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
