@@ -1,8 +1,152 @@
 import { NextResponse } from "next/server"
-import nodemailer from "nodemailer"
+import tls from "node:tls"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+
+function sendMailViaTls({
+  host,
+  port,
+  user,
+  pass,
+  to,
+  from,
+  subject,
+  html,
+  text,
+}: {
+  host: string
+  port: number
+  user: string
+  pass: string
+  to: string
+  from?: string
+  subject: string
+  html?: string
+  text?: string
+}): Promise<{ delivered: boolean; provider: string; messageId: string }> {
+  return new Promise((resolve, reject) => {
+    const socket = tls.connect({ host, port, rejectUnauthorized: true })
+    let buffer = ""
+    let state = "CONNECTED"
+    const msgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@teamobsidian.com>`
+
+    socket.setEncoding("utf8")
+
+    function onMultilineComplete(code: string, callback: () => void): boolean {
+      const lines = buffer.split("\r\n")
+      for (const line of lines) {
+        if (line.startsWith(code + " ")) {
+          buffer = ""
+          callback()
+          return true
+        }
+      }
+      return false
+    }
+
+    socket.on("data", (chunk: string) => {
+      buffer += chunk
+
+      if (state === "CONNECTED") {
+        if (
+          onMultilineComplete("220", () => {
+            state = "EHLO"
+            socket.write("EHLO localhost\r\n")
+          })
+        )
+          return
+      }
+      if (state === "EHLO") {
+        if (
+          onMultilineComplete("250", () => {
+            state = "AUTH"
+            socket.write("AUTH LOGIN\r\n")
+          })
+        )
+          return
+      }
+      if (state === "AUTH") {
+        if (buffer.includes("334")) {
+          buffer = ""
+          state = "USER"
+          socket.write(Buffer.from(user).toString("base64") + "\r\n")
+          return
+        }
+      }
+      if (state === "USER") {
+        if (buffer.includes("334")) {
+          buffer = ""
+          state = "PASS"
+          socket.write(Buffer.from(pass).toString("base64") + "\r\n")
+          return
+        }
+      }
+      if (state === "PASS") {
+        if (buffer.includes("235")) {
+          buffer = ""
+          state = "MAIL_FROM"
+          socket.write(`MAIL FROM:<${user}>\r\n`)
+          return
+        }
+      }
+      if (state === "MAIL_FROM") {
+        if (buffer.includes("250")) {
+          buffer = ""
+          state = "RCPT_TO"
+          socket.write(`RCPT TO:<${to}>\r\n`)
+          return
+        }
+      }
+      if (state === "RCPT_TO") {
+        if (buffer.includes("250")) {
+          buffer = ""
+          state = "DATA"
+          socket.write("DATA\r\n")
+          return
+        }
+      }
+      if (state === "DATA") {
+        if (buffer.includes("354")) {
+          buffer = ""
+          state = "BODY"
+          const sender = from || `TEAM OBSIDIAN <${user}>`
+          const headers = [
+            `From: ${sender}`,
+            `To: ${to}`,
+            `Subject: ${subject}`,
+            `Message-ID: ${msgId}`,
+            "MIME-Version: 1.0",
+            "Content-Type: text/html; charset=UTF-8",
+            "Content-Transfer-Encoding: 7bit",
+            "",
+            html || text,
+            "",
+            ".",
+          ].join("\r\n") + "\r\n"
+          socket.write(headers)
+          return
+        }
+      }
+      if (state === "BODY") {
+        if (buffer.includes("250")) {
+          buffer = ""
+          state = "DONE"
+          socket.write("QUIT\r\n")
+          socket.end()
+          resolve({ delivered: true, provider: "vercel_smtp_tls", messageId: msgId })
+          return
+        }
+      }
+    })
+
+    socket.on("error", (err) => reject(err))
+    socket.setTimeout(8000, () => {
+      socket.destroy()
+      reject(new Error(`SMTP connection timed out at state: ${state}`))
+    })
+  })
+}
 
 export async function POST(req: Request) {
   try {
@@ -25,33 +169,21 @@ export async function POST(req: Request) {
     const host = process.env.SMTP_HOST || "smtp.gmail.com"
     const port = Number(process.env.SMTP_PORT) || 465
 
-    const transporter = nodemailer.createTransport({
+    const result = await sendMailViaTls({
       host,
       port,
-      secure: port === 465,
-      auth: {
-        user,
-        pass,
-      },
-    })
-
-    const sender = from || `TEAM OBSIDIAN <${process.env.SMTP_FROM_EMAIL || user}>`
-
-    const info = await transporter.sendMail({
-      from: sender,
+      user,
+      pass,
       to,
+      from: from || `TEAM OBSIDIAN <${process.env.SMTP_FROM_EMAIL || user}>`,
       subject,
-      text: text || "",
-      html: html || undefined,
+      html,
+      text,
     })
 
-    return NextResponse.json({
-      delivered: true,
-      provider: "vercel_smtp",
-      messageId: info.messageId,
-    })
+    return NextResponse.json(result)
   } catch (error: any) {
-    console.error("[MailRelay] Error delivering email via SMTP:", error)
+    console.error("[MailRelay] Error delivering email via SMTP TLS:", error)
     return NextResponse.json(
       {
         delivered: false,
