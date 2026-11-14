@@ -1,11 +1,13 @@
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_user_accessible_project_ids, verify_project_access
 from app.core.security import get_current_user
 from app.models.evidence import Evidence
@@ -48,10 +50,11 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Return real database statistics aggregated strictly across the user's permitted projects."""
-    p_ids = get_user_accessible_project_ids(current_user, db)
     if project_id:
         verify_project_access(project_id, current_user, db)
         p_ids = [project_id]
+    else:
+        p_ids = get_user_accessible_project_ids(current_user, db)
 
     if not p_ids:
         empty_trend = list(_last_six_months_buckets().values())
@@ -96,64 +99,7 @@ def get_dashboard_stats(
     doc_query = db.query(Document).filter(Document.project_id.in_(p_ids))
     rec_query = db.query(SourceRecord).filter(SourceRecord.project_id.in_(p_ids))
 
-    total_projects = proj_query.count()
-    connected_sources = integ_query.filter(Integration.status == "connected").count()
-    total_sources = integ_query.count()
-
-    total_entities = ent_query.count()
-    total_decisions = dec_query.count()
-    total_dependencies = dep_query.count()
-    total_gaps = gap_query.count()
-
-    open_tasks = task_query.filter(TaskItem.status != "completed").count()
-    completed_tasks = task_query.filter(TaskItem.status == "completed").count()
-
-    unresolved_risks = risk_query.filter(RiskItem.status != "resolved").count()
-    critical_risks = risk_query.filter(RiskItem.severity == "critical").count()
-
-    verified_statuses = ["Verified", "Verified by Reviewer", "Supported by Evidence"]
-    pending_statuses = ["Needs Review", "Needs Human Verification", "Draft / AI Suggested", "Uncertain"]
-    pending_reviews = ev_query.filter(Evidence.verification_status.in_(pending_statuses)).count()
-    verified_evidences = ev_query.filter(Evidence.verification_status.in_(verified_statuses)).count()
-
-    total_handovers = ho_query.count()
-    approved_handovers = ho_query.filter(
-        Handover.status.in_(["approved", "acknowledged", "published"])
-    ).count()
-
-    total_documents = doc_query.count()
-    total_source_records = rec_query.count()
-    knowledge_items_total = total_entities + total_documents + total_source_records
-
-    recent_decisions = dec_query.order_by(Decision.created_at.desc()).limit(5).all()
-    decisions_list = [
-        {
-            "id": d.id,
-            "title": d.title,
-            "decision_maker": d.decision_maker,
-            "date": d.date,
-            "status": d.status,
-            "verification_status": getattr(d, "verification_status", "Needs Human Verification"),
-            "component": d.component,
-            "confidence": d.confidence,
-        }
-        for d in recent_decisions
-    ]
-
-    upcoming_tasks = task_query.filter(TaskItem.status != "completed").order_by(TaskItem.deadline.asc()).limit(5).all()
-    tasks_list = [
-        {
-            "id": t.id,
-            "title": t.title,
-            "owner": t.owner,
-            "priority": t.priority,
-            "status": t.status,
-            "deadline": t.deadline,
-            "is_departing": t.is_departing_owner,
-            "suggested_reassignment": t.suggested_reassignment,
-        }
-        for t in upcoming_tasks
-    ]
+    total_projects = 1 if project_id else len(p_ids)
 
     integrations = integ_query.all()
     integrations_list = [
@@ -169,6 +115,87 @@ def get_dashboard_stats(
         }
         for i in integrations
     ]
+    connected_sources = sum(1 for i in integrations if i.status == "connected")
+    total_sources = len(integrations)
+
+    counts_row = db.query(
+        db.query(func.count(KnowledgeEntity.id)).filter(KnowledgeEntity.project_id.in_(p_ids)).as_scalar(),
+        db.query(func.count(Decision.id)).filter(Decision.project_id.in_(p_ids)).as_scalar(),
+        db.query(func.count(Dependency.id)).filter(Dependency.project_id.in_(p_ids)).as_scalar(),
+        db.query(func.count(KnowledgeGap.id)).filter(KnowledgeGap.project_id.in_(p_ids)).as_scalar(),
+        db.query(func.count(Document.id)).filter(Document.project_id.in_(p_ids)).as_scalar(),
+        db.query(func.count(SourceRecord.id)).filter(SourceRecord.project_id.in_(p_ids)).as_scalar(),
+    ).first() or (0, 0, 0, 0, 0, 0)
+
+    total_entities, total_decisions, total_dependencies, total_gaps, total_documents, total_source_records = counts_row
+
+    task_counts = dict(
+        db.query(TaskItem.status, func.count(TaskItem.id))
+        .filter(TaskItem.project_id.in_(p_ids))
+        .group_by(TaskItem.status)
+        .all()
+    )
+    completed_tasks = task_counts.get("completed", 0)
+    open_tasks = sum(c for s, c in task_counts.items() if s != "completed")
+
+    risk_stats = db.query(
+        func.count(case((RiskItem.status != "resolved", 1))),
+        func.count(case((RiskItem.severity == "critical", 1))),
+    ).filter(RiskItem.project_id.in_(p_ids)).first() or (0, 0)
+    unresolved_risks = risk_stats[0] or 0
+    critical_risks = risk_stats[1] or 0
+
+    verified_statuses = ["Verified", "Verified by Reviewer", "Supported by Evidence"]
+    pending_statuses = ["Needs Review", "Needs Human Verification", "Draft / AI Suggested", "Uncertain"]
+    ev_stats = db.query(
+        func.count(case((Evidence.verification_status.in_(pending_statuses), 1))),
+        func.count(case((Evidence.verification_status.in_(verified_statuses), 1))),
+    ).filter(Evidence.project_id.in_(p_ids)).first() or (0, 0)
+    pending_reviews = ev_stats[0] or 0
+    verified_evidences = ev_stats[1] or 0
+
+    ho_stats = db.query(
+        func.count(Handover.id),
+        func.count(case((Handover.status.in_(["approved", "acknowledged", "published"]), 1))),
+    ).filter(Handover.project_id.in_(p_ids)).first() or (0, 0)
+    total_handovers = ho_stats[0] or 0
+    approved_handovers = ho_stats[1] or 0
+
+    knowledge_items_total = total_entities + total_documents + total_source_records
+
+    decisions_list = []
+    if total_decisions > 0:
+        recent_decisions = dec_query.order_by(Decision.created_at.desc()).limit(5).all()
+        decisions_list = [
+            {
+                "id": d.id,
+                "title": d.title,
+                "decision_maker": d.decision_maker,
+                "date": d.date,
+                "status": d.status,
+                "verification_status": getattr(d, "verification_status", "Needs Human Verification"),
+                "component": d.component,
+                "confidence": d.confidence,
+            }
+            for d in recent_decisions
+        ]
+
+    tasks_list = []
+    if open_tasks > 0:
+        upcoming_tasks = task_query.filter(TaskItem.status != "completed").order_by(TaskItem.deadline.asc()).limit(5).all()
+        tasks_list = [
+            {
+                "id": t.id,
+                "title": t.title,
+                "owner": t.owner,
+                "priority": t.priority,
+                "status": t.status,
+                "deadline": t.deadline,
+                "is_departing": t.is_departing_owner,
+                "suggested_reassignment": t.suggested_reassignment,
+            }
+            for t in upcoming_tasks
+        ]
 
     distribution = [
         {"category": "Decisions", "count": total_decisions, "fill": "#7C3AED"},
@@ -179,31 +206,46 @@ def get_dashboard_stats(
         {"category": "Others", "count": total_documents + total_gaps, "fill": "#F59E0B"},
     ]
 
-    # Real monthly aggregation from database timestamps
+    # Real monthly aggregation from database timestamps (filtered to relevant 6 months window)
     buckets = _last_six_months_buckets()
-    for (ts,) in rec_query.with_entities(SourceRecord.ingested_at).all():
-        if ts:
-            key = ts.strftime("%Y-%m")
-            if key in buckets:
-                buckets[key]["ingested"] += 1
-    for (ts,) in doc_query.with_entities(Document.created_at).all():
-        if ts:
-            key = ts.strftime("%Y-%m")
-            if key in buckets:
-                buckets[key]["ingested"] += 1
-    for (ts,) in ev_query.filter(Evidence.verification_status.in_(verified_statuses)).with_entities(Evidence.created_at).all():
-        if ts:
-            key = ts.strftime("%Y-%m")
-            if key in buckets:
-                buckets[key]["verified"] += 1
-    for (ts,) in ho_query.with_entities(Handover.created_at).all():
-        if ts:
-            key = ts.strftime("%Y-%m")
-            if key in buckets:
-                buckets[key]["handovers"] += 1
+    now = datetime.now(timezone.utc)
+    cutoff_year = now.year
+    cutoff_month = now.month - 5
+    if cutoff_month <= 0:
+        cutoff_month += 12
+        cutoff_year -= 1
+    six_months_ago = datetime(cutoff_year, cutoff_month, 1, tzinfo=timezone.utc)
+
+    if total_source_records > 0:
+        for (ts,) in rec_query.filter(SourceRecord.ingested_at >= six_months_ago).with_entities(SourceRecord.ingested_at).all():
+            if ts:
+                key = ts.strftime("%Y-%m")
+                if key in buckets:
+                    buckets[key]["ingested"] += 1
+
+    if total_documents > 0:
+        for (ts,) in doc_query.filter(Document.created_at >= six_months_ago).with_entities(Document.created_at).all():
+            if ts:
+                key = ts.strftime("%Y-%m")
+                if key in buckets:
+                    buckets[key]["ingested"] += 1
+
+    if verified_evidences > 0:
+        for (ts,) in ev_query.filter(Evidence.verification_status.in_(verified_statuses), Evidence.created_at >= six_months_ago).with_entities(Evidence.created_at).all():
+            if ts:
+                key = ts.strftime("%Y-%m")
+                if key in buckets:
+                    buckets[key]["verified"] += 1
+
+    if total_handovers > 0:
+        for (ts,) in ho_query.filter(Handover.created_at >= six_months_ago).with_entities(Handover.created_at).all():
+            if ts:
+                key = ts.strftime("%Y-%m")
+                if key in buckets:
+                    buckets[key]["handovers"] += 1
     activity_trend = list(buckets.values())
 
-    latest_handover = ho_query.order_by(Handover.updated_at.desc()).first()
+    latest_handover = ho_query.order_by(Handover.updated_at.desc()).first() if total_handovers > 0 else None
     active_handover_info = None
     if latest_handover:
         proj = db.query(Project).filter(Project.id == latest_handover.project_id).first()
@@ -271,10 +313,11 @@ def get_dashboard_activity(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    p_ids = get_user_accessible_project_ids(current_user, db)
     if project_id:
         verify_project_access(project_id, current_user, db)
         p_ids = [project_id]
+    else:
+        p_ids = get_user_accessible_project_ids(current_user, db)
 
     query = db.query(ActivityLog)
     if p_ids:

@@ -33,49 +33,39 @@ import {
   Cell
 } from "recharts"
 import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { useDashboardStats, useDashboardActivity } from "@/hooks/use-queries"
 import { FormattedMarkdown } from "@/components/formatted-markdown"
 
 export default function OverviewPage() {
   const router = useRouter()
-  const [data, setData] = useState<any>(null)
-  const [activities, setActivities] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const [activeProjId, setActiveProjId] = useState<string | undefined>(() => {
+    if (typeof window !== "undefined") {
+      return getStoredProjectId() || undefined
+    }
+    return undefined
+  })
   const [checkedActions, setCheckedActions] = useState<Record<string, boolean>>({})
   const [quickQuery, setQuickQuery] = useState("")
   const [quickAnswer, setQuickAnswer] = useState<any>(null)
   const [quickAsking, setQuickAsking] = useState(false)
   const [seedingDemo, setSeedingDemo] = useState(false)
 
-  const loadData = useCallback(async () => {
-    if (typeof window === "undefined" || !localStorage.getItem("obsidian_user")) {
-      setLoading(false)
-      return
-    }
-    try {
-      const activeProjId = getStoredProjectId() || undefined
-      const [res, acts] = await Promise.all([
-        api.getStats(activeProjId).catch(() => null),
-        api.getActivity(activeProjId).catch(() => [])
-      ])
-      setData(res)
-      setActivities(Array.isArray(acts) ? acts : [])
-    } catch {
-      setData(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
   useEffect(() => {
-    loadData()
     const handleProjectChange = () => {
-      loadData()
+      setActiveProjId(getStoredProjectId() || undefined)
     }
     window.addEventListener("obsidian_project_changed", handleProjectChange)
     return () => {
       window.removeEventListener("obsidian_project_changed", handleProjectChange)
     }
-  }, [loadData])
+  }, [])
+
+  const { data: statsData, isLoading: statsLoading, refetch: refetchStats } = useDashboardStats(activeProjId)
+  const { data: activitiesData, isLoading: actsLoading, refetch: refetchActs } = useDashboardActivity(activeProjId)
+
+  const data = statsData || null
+  const activities = Array.isArray(activitiesData) ? activitiesData : []
+  const loading = statsLoading && !statsData
 
   // Live metrics strictly based on real database records
   const metrics = data?.metrics || {
@@ -93,33 +83,33 @@ export default function OverviewPage() {
   const hasRealHandover = Boolean(activeHandover && activeHandover.id)
 
   // Monthly Cumulative Ingestion Chart Data
-  const chartData = data?.activity_trend && data.activity_trend.length > 0 
-    ? data.activity_trend 
+  const chartData = data?.activity_trend && data.activity_trend.length > 0
+    ? data.activity_trend
     : [
-        { month: "Jun", ingested: 0, verified: 0 },
-        { month: "Jul", ingested: 0, verified: 0 },
-        { month: "Aug", ingested: 0, verified: 0 },
-        { month: "Sep", ingested: 0, verified: 0 },
-        { month: "Oct", ingested: 0, verified: 0 },
-        { month: "Nov", ingested: 0, verified: 0 }
-      ]
+      { month: "Jun", ingested: 0, verified: 0 },
+      { month: "Jul", ingested: 0, verified: 0 },
+      { month: "Aug", ingested: 0, verified: 0 },
+      { month: "Sep", ingested: 0, verified: 0 },
+      { month: "Oct", ingested: 0, verified: 0 },
+      { month: "Nov", ingested: 0, verified: 0 }
+    ]
 
   // Knowledge Categories Donut Data
   const totalEntities = metrics.knowledge_items || 0
   const categoryData = (data?.distribution && data.distribution.length > 0 && totalEntities > 0)
     ? data.distribution.map((d: any) => ({
-        name: d.category,
-        value: totalEntities > 0 ? Math.round((d.count / totalEntities) * 100) : 0,
-        color: d.fill || "#7C3AED"
-      }))
+      name: d.category,
+      value: totalEntities > 0 ? Math.round((d.count / totalEntities) * 100) : 0,
+      color: d.fill || "#7C3AED"
+    }))
     : [
-        { name: "Decisions", value: 0, color: "#7C3AED" },
-        { name: "Tasks", value: 0, color: "#38BDF8" },
-        { name: "Technical", value: 0, color: "#6366F1" },
-        { name: "Dependencies", value: 0, color: "#C084FC" },
-        { name: "Risks", value: 0, color: "#F472B6" },
-        { name: "Others", value: 0, color: "#F59E0B" }
-      ]
+      { name: "Decisions", value: 0, color: "#7C3AED" },
+      { name: "Tasks", value: 0, color: "#38BDF8" },
+      { name: "Technical", value: 0, color: "#6366F1" },
+      { name: "Dependencies", value: 0, color: "#C084FC" },
+      { name: "Risks", value: 0, color: "#F472B6" },
+      { name: "Others", value: 0, color: "#F59E0B" }
+    ]
 
   // Next Actions Data (from real open tasks)
   const nextActions = (data?.upcoming_tasks || []).map((t: any) => ({
@@ -154,7 +144,7 @@ export default function OverviewPage() {
     setCheckedActions(prev => ({ ...prev, [id]: nextDone }))
     try {
       await api.updateTaskStatus(id, nextDone ? "completed" : "open")
-      await loadData()
+      await Promise.all([refetchStats(), refetchActs()])
     } catch (err) {
       setCheckedActions(prev => ({ ...prev, [id]: !nextDone }))
       console.error("Task toggle failed:", err)
@@ -168,7 +158,7 @@ export default function OverviewPage() {
       if (res?.project_id) {
         setStoredProjectId(res.project_id)
       }
-      await loadData()
+      await Promise.all([refetchStats(), refetchActs()])
     } catch (err: any) {
       setQuickAnswer({
         answer: err.message || "Failed to initialize demo sandbox.",
@@ -287,39 +277,39 @@ export default function OverviewPage() {
         metrics.decisions === 0 &&
         metrics.open_tasks === 0 &&
         !activeHandover && (
-        <div className="apple-card p-5 border border-violet-200 bg-gradient-to-r from-violet-50/70 via-white to-indigo-50/70">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-violet-700">
-                <Sparkles className="w-3.5 h-3.5" /> Clean Workspace Initialized
+          <div className="apple-card p-5 border border-violet-200 bg-gradient-to-r from-violet-50/70 via-white to-indigo-50/70">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-violet-700">
+                  <Sparkles className="w-3.5 h-3.5" /> Clean Workspace Initialized
+                </div>
+                <h2 className="text-base font-bold text-slate-900">Get started in 3 steps — or explore the E-Commerce Sandbox</h2>
+                <p className="text-xs text-slate-600 max-w-2xl">
+                  Real workspaces never start with synthetic employee names. Create a project, connect GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, or Notion, or explore the synthetic E-Commerce demo dataset.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Link href="/projects" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
+                    1. Create Project
+                  </Link>
+                  <Link href="/integrations" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
+                    2. Connect Engineering Sources
+                  </Link>
+                  <Link href="/documents" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
+                    3. Upload Runbooks &amp; Docs
+                  </Link>
+                </div>
               </div>
-              <h2 className="text-base font-bold text-slate-900">Get started in 3 steps — or explore the E-Commerce Sandbox</h2>
-              <p className="text-xs text-slate-600 max-w-2xl">
-                Real workspaces never start with synthetic employee names. Create a project, connect GitHub, GitLab, Jira, Confluence, Linear, Sentry, Slack, or Notion, or explore the synthetic E-Commerce demo dataset.
-              </p>
-              <div className="flex flex-wrap gap-2 pt-2">
-                <Link href="/projects" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
-                  1. Create Project
-                </Link>
-                <Link href="/integrations" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
-                  2. Connect Engineering Sources
-                </Link>
-                <Link href="/documents" className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white border border-slate-200 hover:border-violet-300 text-slate-800 shadow-sm">
-                  3. Upload Runbooks &amp; Docs
-                </Link>
-              </div>
+              <button
+                onClick={handleLoadDemo}
+                disabled={seedingDemo}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white shadow-md shadow-violet-600/20 flex items-center gap-2 flex-shrink-0"
+              >
+                <Database className="w-4 h-4" />
+                <span>{seedingDemo ? "Loading Demo Sandbox..." : "Load Synthetic Demo Sandbox"}</span>
+              </button>
             </div>
-            <button
-              onClick={handleLoadDemo}
-              disabled={seedingDemo}
-              className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white shadow-md shadow-violet-600/20 flex items-center gap-2 flex-shrink-0"
-            >
-              <Database className="w-4 h-4" />
-              <span>{seedingDemo ? "Loading Demo Sandbox..." : "Load Synthetic Demo Sandbox"}</span>
-            </button>
           </div>
-        </div>
-      )}
+        )}
 
       {/* 2. KPI Metric Cards (6 in a row) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
@@ -606,9 +596,8 @@ export default function OverviewPage() {
                     className="flex items-center justify-between gap-2 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors flex-shrink-0 ${
-                        isDone ? "bg-violet-600 border-violet-600 text-white" : "border-slate-300 group-hover:border-slate-400"
-                      }`}>
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors flex-shrink-0 ${isDone ? "bg-violet-600 border-violet-600 text-white" : "border-slate-300 group-hover:border-slate-400"
+                        }`}>
                         {isDone && <Check className="w-3 h-3 stroke-[3]" />}
                       </div>
                       <span className={`text-xs truncate ${isDone ? "line-through text-slate-400" : "text-slate-700 font-medium"}`}>
@@ -739,11 +728,10 @@ export default function OverviewPage() {
                     <p className="font-bold text-slate-800 text-xs">{item.name}</p>
                     <p className="text-[10px] text-slate-400">Last sync: {item.sync}</p>
                   </div>
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                    item.status === "Connected"
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${item.status === "Connected"
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : "bg-slate-50 text-slate-600 border-slate-200"
-                  }`}>
+                    }`}>
                     {item.status === "Connected" && <Check className="w-2.5 h-2.5 stroke-[3]" />}
                     {item.status}
                   </span>
@@ -791,13 +779,11 @@ export default function OverviewPage() {
         </form>
 
         {quickAnswer && (
-          <div className={`p-3.5 rounded-xl border text-xs space-y-2 ${
-            quickAnswer.is_grounded ? "bg-violet-50/40 border-violet-200" : "bg-amber-50/60 border-amber-200"
-          }`}>
+          <div className={`p-3.5 rounded-xl border text-xs space-y-2 ${quickAnswer.is_grounded ? "bg-violet-50/40 border-violet-200" : "bg-amber-50/60 border-amber-200"
+            }`}>
             <div className="flex items-center justify-between gap-2">
-              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase ${
-                quickAnswer.is_grounded ? "text-emerald-700" : "text-amber-700"
-              }`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase ${quickAnswer.is_grounded ? "text-emerald-700" : "text-amber-700"
+                }`}>
                 <ShieldCheck className="w-3.5 h-3.5" />
                 {quickAnswer.is_grounded ? "Grounded in Project Evidence" : "Unsupported / Missing Evidence"}
               </span>

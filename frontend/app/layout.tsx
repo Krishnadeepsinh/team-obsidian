@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { AppShell } from '@/components/layout/app-shell'
+import { QueryProvider } from '@/components/providers/query-provider'
 
 export const metadata: Metadata = {
   title: 'TEAM OBSIDIAN — AI-Powered Knowledge Handover Platform',
@@ -21,7 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-[#F8F9FD] text-slate-900 antialiased selection:bg-violet-500/20 selection:text-violet-950">
-        <AppShell>{children}</AppShell>
+        <QueryProvider>
+          <AppShell>{children}</AppShell>
+        </QueryProvider>
       </body>
     </html>
   )

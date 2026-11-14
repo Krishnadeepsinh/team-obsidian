@@ -127,6 +127,7 @@ def mask_credentials(creds: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 # Thread-safe L1 cache + DB-persisted JWT JTI revocation store (survives worker restarts & multi-worker scaling)
 _REVOKED_JTIS: Dict[str, float] = {}
+_VALID_JTIS: Dict[str, float] = {}
 _REVOKED_LOCK = threading.Lock()
 
 
@@ -134,6 +135,7 @@ def clear_revoked_jti_cache() -> None:
     """Clear only the in-memory L1 JTI revocation cache (DB rows remain enforced)."""
     with _REVOKED_LOCK:
         _REVOKED_JTIS.clear()
+        _VALID_JTIS.clear()
 
 
 def revoke_token_jti(
@@ -147,6 +149,7 @@ def revoke_token_jti(
     now = time.time()
     expiry = float(exp_ts) if exp_ts else (now + settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     with _REVOKED_LOCK:
+        _VALID_JTIS.pop(jti, None)
         expired = [k for k, v in _REVOKED_JTIS.items() if v < now]
         for k in expired:
             _REVOKED_JTIS.pop(k, None)
@@ -184,6 +187,11 @@ def is_token_jti_revoked(jti: Optional[str], db: Optional[Session] = None) -> bo
             if exp_ts >= now:
                 return True
             _REVOKED_JTIS.pop(jti, None)
+        valid_exp = _VALID_JTIS.get(jti)
+        if valid_exp is not None:
+            if valid_exp >= now:
+                return False
+            _VALID_JTIS.pop(jti, None)
 
     from app.models.workspace import RevokedToken
 
@@ -192,6 +200,8 @@ def is_token_jti_revoked(jti: Optional[str], db: Optional[Session] = None) -> bo
     try:
         rec = session.query(RevokedToken).filter(RevokedToken.jti == jti).first()
         if not rec:
+            with _REVOKED_LOCK:
+                _VALID_JTIS[jti] = now + 60.0
             return False
         if float(rec.expires_ts) < now:
             session.delete(rec)
@@ -199,9 +209,12 @@ def is_token_jti_revoked(jti: Optional[str], db: Optional[Session] = None) -> bo
                 session.commit()
             else:
                 session.flush()
+            with _REVOKED_LOCK:
+                _VALID_JTIS[jti] = now + 60.0
             return False
         with _REVOKED_LOCK:
             _REVOKED_JTIS[jti] = float(rec.expires_ts)
+            _VALID_JTIS.pop(jti, None)
         return True
     except SQLAlchemyError as exc:
         logger.warning("Failed to check JTI revocation in database: %s", exc)

@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react"
 import { ALL_PROJECTS_VALUE, api, getStoredProjectId, setStoredProjectId, warmUpBackendHealth } from "@/lib/api"
+import { clearClientCache } from "@/components/providers/query-provider"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -139,46 +140,56 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } catch {}
     }
 
-    api
-      .getUserContext()
-      .then((ctx) => {
-        if (ctx) {
-          localStorage.setItem("obsidian_authenticated", "true")
-          if (ctx.user) {
-            setCurrentUser(ctx.user)
-            localStorage.setItem("obsidian_user", JSON.stringify(ctx.user))
-          }
-          if (ctx.projects && ctx.projects.length > 0) {
-            setProjectsList(ctx.projects)
-            const savedProjId =
-              localStorage.getItem("obsidian_active_project_id") ||
-              localStorage.getItem("obsidian_active_project")
-            if (savedProjId === ALL_PROJECTS_VALUE) {
-              setActiveProject("All Projects")
-            } else {
-              const found = ctx.projects.find((p: any) => p.id === savedProjId)
-              if (found) {
-                setActiveProject(found.name)
+    const loadContextAndNotifs = () => {
+      api
+        .getUserContext()
+        .then((ctx) => {
+          if (ctx) {
+            localStorage.setItem("obsidian_authenticated", "true")
+            if (ctx.user) {
+              setCurrentUser(ctx.user)
+              localStorage.setItem("obsidian_user", JSON.stringify(ctx.user))
+            }
+            if (ctx.projects && ctx.projects.length > 0) {
+              setProjectsList(ctx.projects)
+              const savedProjId =
+                localStorage.getItem("obsidian_active_project_id") ||
+                localStorage.getItem("obsidian_active_project")
+              if (savedProjId === ALL_PROJECTS_VALUE) {
+                setActiveProject("All Projects")
               } else {
-                setActiveProject(ctx.projects[0].name)
-                localStorage.setItem("obsidian_active_project_id", ctx.projects[0].id)
-                localStorage.setItem("obsidian_active_project", ctx.projects[0].id)
+                const found = ctx.projects.find((p: any) => p.id === savedProjId)
+                if (found) {
+                  setActiveProject(found.name)
+                } else {
+                  setActiveProject(ctx.projects[0].name)
+                  localStorage.setItem("obsidian_active_project_id", ctx.projects[0].id)
+                  localStorage.setItem("obsidian_active_project", ctx.projects[0].id)
+                }
               }
             }
           }
-        }
-      })
-      .catch(() => {})
+        })
+        .catch(() => {})
 
-    api
-      .getNotifications()
-      .then((list) => {
-        if (Array.isArray(list)) {
-          setUnreadCount(list.filter((n: any) => !n.is_read).length)
-        }
-      })
-      .catch(() => {})
-  }, [pathname, isPublic])
+      api
+        .getNotifications()
+        .then((list) => {
+          if (Array.isArray(list)) {
+            setUnreadCount(list.filter((n: any) => !n.is_read).length)
+          }
+        })
+        .catch(() => {})
+    }
+
+    loadContextAndNotifs()
+    window.addEventListener("obsidian_auth_changed", loadContextAndNotifs)
+    window.addEventListener("obsidian_notifications_changed", loadContextAndNotifs)
+    return () => {
+      window.removeEventListener("obsidian_auth_changed", loadContextAndNotifs)
+      window.removeEventListener("obsidian_notifications_changed", loadContextAndNotifs)
+    }
+  }, [isPublic])
 
   useEffect(() => {
     if (isPublic || typeof window === "undefined") return
@@ -250,6 +261,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // safe fallback
     }
     if (typeof window !== "undefined") {
+      clearClientCache()
       localStorage.removeItem("obsidian_token")
       localStorage.removeItem("obsidian_authenticated")
       localStorage.removeItem("obsidian_user")

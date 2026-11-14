@@ -323,7 +323,8 @@ export const api = {
   },
 
   // Projects
-  getProjects: async () => fetchJson<any[]>("/projects"),
+  getProjects: async (workspaceId?: string) =>
+    fetchJson<any[]>(workspaceId ? `/projects?workspace_id=${encodeURIComponent(workspaceId)}` : "/projects"),
   getProject: async (id: string) => fetchJson<any>(`/projects/${id}`),
   createProject: async (data: any) =>
     fetchJson<any>("/projects", { method: "POST", body: JSON.stringify(data) }),

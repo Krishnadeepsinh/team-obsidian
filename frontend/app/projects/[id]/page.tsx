@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import { api, getStoredProjectId, safeHref, setStoredProjectId } from "@/lib/api"
+import { useProject, useProjectMembers, useProjectTimeline, useInvalidateQueries } from "@/hooks/use-queries"
 import {
   ArrowLeft,
   Layers,
@@ -40,10 +41,16 @@ export default function ProjectDetailPage() {
   const router = useRouter()
   const projectId = String(params?.id || "")
 
-  const [project, setProject] = useState<any>(null)
-  const [members, setMembers] = useState<any[]>([])
-  const [timeline, setTimeline] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data: projectData, isLoading: pLoading, refetch: refetchProject } = useProject(projectId)
+  const { data: membersData, isLoading: mLoading, refetch: refetchMembers } = useProjectMembers(projectId)
+  const { data: timelineData, isLoading: tLoading, refetch: refetchTimeline } = useProjectTimeline(projectId)
+  const { invalidateProjectDetail, invalidateProjects, invalidateDashboard } = useInvalidateQueries()
+
+  const project = projectData || null
+  const members = Array.isArray(membersData) ? membersData : []
+  const timeline = Array.isArray(timelineData) ? timelineData : []
+  const loading = pLoading && !projectData
+
   const [error, setError] = useState("")
   const [statusMsg, setStatusMsg] = useState("")
 
@@ -59,34 +66,22 @@ export default function ProjectDetailPage() {
   const [editPriority, setEditPriority] = useState("medium")
   const [editStatus, setEditStatus] = useState("active")
 
-  const loadAll = useCallback(async () => {
-    if (!projectId) return
-    try {
-      setLoading(true)
-      setError("")
-      const [p, m, t] = await Promise.all([
-        api.getProject(projectId),
-        api.getProjectMembers(projectId).catch(() => []),
-        api.getProjectTimeline(projectId).catch(() => []),
-      ])
-      setProject(p)
-      setEditName(p.name || "")
-      setEditDesc(p.description || "")
-      setEditPriority(p.priority || "medium")
-      setEditStatus(p.status || "active")
-      setMembers(Array.isArray(m) ? m : [])
-      setTimeline(Array.isArray(t) ? t : [])
-      setStoredProjectId(p.id)
-    } catch (err: any) {
-      setError(err.message || "Failed to load project details.")
-    } finally {
-      setLoading(false)
-    }
-  }, [projectId])
-
   useEffect(() => {
-    loadAll()
-  }, [loadAll])
+    if (projectData) {
+      setEditName(projectData.name || "")
+      setEditDesc(projectData.description || "")
+      setEditPriority(projectData.priority || "medium")
+      setEditStatus(projectData.status || "active")
+      setStoredProjectId(projectData.id)
+    }
+  }, [projectData])
+
+  const loadAll = useCallback(async () => {
+    await Promise.all([refetchProject(), refetchMembers(), refetchTimeline()])
+    invalidateProjectDetail(projectId)
+    invalidateProjects()
+    invalidateDashboard()
+  }, [projectId, refetchProject, refetchMembers, refetchTimeline, invalidateProjectDetail, invalidateProjects, invalidateDashboard])
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -166,8 +161,27 @@ export default function ProjectDetailPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-6xl mx-auto">
-        <div className="apple-card p-10 text-center text-xs text-slate-400">Loading project workspace...</div>
+      <div className="p-6 max-w-[1400px] mx-auto space-y-5 animate-pulse">
+        <div className="flex justify-between items-center">
+          <div className="h-4 w-28 bg-slate-200 rounded" />
+          <div className="flex gap-2">
+            <div className="h-8 w-24 bg-slate-200 rounded-xl" />
+            <div className="h-8 w-24 bg-slate-200 rounded-xl" />
+          </div>
+        </div>
+        <div className="apple-card p-6 space-y-4">
+          <div className="h-7 w-1/3 bg-slate-200 rounded" />
+          <div className="h-4 w-2/3 bg-slate-100 rounded" />
+          <div className="flex gap-2">
+            <div className="h-5 w-20 bg-slate-100 rounded-full" />
+            <div className="h-5 w-20 bg-slate-100 rounded-full" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="apple-card p-5 h-48 bg-slate-100/60 rounded-2xl" />
+          <div className="apple-card p-5 h-48 bg-slate-100/60 rounded-2xl" />
+          <div className="apple-card p-5 h-48 bg-slate-100/60 rounded-2xl" />
+        </div>
       </div>
     )
   }

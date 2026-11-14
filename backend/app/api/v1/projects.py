@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 from typing import List, Optional
 
@@ -5,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.permissions import (
     ALL_ROLES,
     create_personal_workspace_for_user,
@@ -32,12 +33,81 @@ from app.services.audit_service import create_notification, record_activity
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
+def _batch_project_counts(p_ids: List[str]):
+    if not p_ids:
+        return {}, {}, {}, {}, {}
+
+    def fetch_m():
+        session = SessionLocal()
+        try:
+            return dict(
+                session.query(ProjectMember.project_id, func.count(ProjectMember.id))
+                .filter(ProjectMember.project_id.in_(p_ids))
+                .group_by(ProjectMember.project_id)
+                .all()
+            )
+        finally:
+            session.close()
+
+    def fetch_d():
+        session = SessionLocal()
+        try:
+            return dict(
+                session.query(Decision.project_id, func.count(Decision.id))
+                .filter(Decision.project_id.in_(p_ids))
+                .group_by(Decision.project_id)
+                .all()
+            )
+        finally:
+            session.close()
+
+    def fetch_t():
+        session = SessionLocal()
+        try:
+            return dict(
+                session.query(TaskItem.project_id, func.count(TaskItem.id))
+                .filter(TaskItem.project_id.in_(p_ids))
+                .group_by(TaskItem.project_id)
+                .all()
+            )
+        finally:
+            session.close()
+
+    def fetch_r():
+        session = SessionLocal()
+        try:
+            return dict(
+                session.query(RiskItem.project_id, func.count(RiskItem.id))
+                .filter(RiskItem.project_id.in_(p_ids))
+                .group_by(RiskItem.project_id)
+                .all()
+            )
+        finally:
+            session.close()
+
+    def fetch_e():
+        session = SessionLocal()
+        try:
+            return dict(
+                session.query(Evidence.project_id, func.count(Evidence.id))
+                .filter(Evidence.project_id.in_(p_ids))
+                .group_by(Evidence.project_id)
+                .all()
+            )
+        finally:
+            session.close()
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        f_m = executor.submit(fetch_m)
+        f_d = executor.submit(fetch_d)
+        f_t = executor.submit(fetch_t)
+        f_r = executor.submit(fetch_r)
+        f_e = executor.submit(fetch_e)
+        return f_m.result(), f_d.result(), f_t.result(), f_r.result(), f_e.result()
+
+
 def _build_project_response(p: Project, db: Session) -> ProjectResponse:
-    m_count = db.query(func.count(ProjectMember.id)).filter(ProjectMember.project_id == p.id).scalar() or 0
-    d_count = db.query(func.count(Decision.id)).filter(Decision.project_id == p.id).scalar() or 0
-    t_count = db.query(func.count(TaskItem.id)).filter(TaskItem.project_id == p.id).scalar() or 0
-    r_count = db.query(func.count(RiskItem.id)).filter(RiskItem.project_id == p.id).scalar() or 0
-    e_count = db.query(func.count(Evidence.id)).filter(Evidence.project_id == p.id).scalar() or 0
+    m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts([p.id])
 
     return ProjectResponse(
         id=p.id,
@@ -50,11 +120,11 @@ def _build_project_response(p: Project, db: Session) -> ProjectResponse:
         tags=p.tags or [],
         created_at=p.created_at,
         updated_at=p.updated_at,
-        member_count=m_count,
-        decision_count=d_count,
-        task_count=t_count,
-        risk_count=r_count,
-        evidence_count=e_count,
+        member_count=m_counts.get(p.id, 0),
+        decision_count=d_counts.get(p.id, 0),
+        task_count=t_counts.get(p.id, 0),
+        risk_count=r_counts.get(p.id, 0),
+        evidence_count=e_counts.get(p.id, 0),
     )
 
 
@@ -73,7 +143,32 @@ def list_projects(
         query = query.filter(Project.workspace_id == workspace_id)
 
     projects = query.order_by(Project.created_at.desc()).all()
-    return [_build_project_response(p, db) for p in projects]
+    if not projects:
+        return []
+
+    p_ids = [p.id for p in projects]
+    m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts(p_ids)
+
+    return [
+        ProjectResponse(
+            id=p.id,
+            workspace_id=p.workspace_id,
+            name=p.name,
+            slug=p.slug,
+            description=p.description,
+            status=p.status,
+            priority=p.priority,
+            tags=p.tags or [],
+            created_at=p.created_at,
+            updated_at=p.updated_at,
+            member_count=m_counts.get(p.id, 0),
+            decision_count=d_counts.get(p.id, 0),
+            task_count=t_counts.get(p.id, 0),
+            risk_count=r_counts.get(p.id, 0),
+            evidence_count=e_counts.get(p.id, 0),
+        )
+        for p in projects
+    ]
 
 
 @router.post("", response_model=ProjectResponse)

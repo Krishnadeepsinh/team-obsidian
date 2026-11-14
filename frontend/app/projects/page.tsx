@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import React, { useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   Plus,
@@ -9,11 +9,17 @@ import {
   ArrowUpRight
 } from "lucide-react"
 import { api } from "@/lib/api"
+import { useProjects, useInvalidateQueries } from "@/hooks/use-queries"
+import { useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
 
 export default function ProjectsPage() {
   const router = useRouter()
-  const [projects, setProjects] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const { data: projectsData, isLoading } = useProjects()
+  const { invalidateProjects, invalidateDashboard, invalidateUserContext } = useInvalidateQueries()
+  const projects = Array.isArray(projectsData) ? projectsData : []
+  const loading = isLoading && projects.length === 0
   const [search, setSearch] = useState("")
   const [showModal, setShowModal] = useState(false)
   
@@ -24,22 +30,6 @@ export default function ProjectsPage() {
   const [tags, setTags] = useState("")
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState("")
-
-  const loadProjects = async () => {
-    try {
-      setLoading(true)
-      const data = await api.getProjects()
-      setProjects(data)
-    } catch (err) {
-      console.error("Projects load error:", err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadProjects()
-  }, [])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -54,7 +44,9 @@ export default function ProjectsPage() {
         priority,
         tags: tagList
       })
-      await loadProjects()
+      invalidateProjects()
+      invalidateDashboard()
+      invalidateUserContext()
       setShowModal(false)
       setName("")
       setDescription("")
@@ -107,10 +99,37 @@ export default function ProjectsPage() {
 
       {/* Projects Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {loading && (
+          <>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="apple-card p-5 animate-pulse space-y-3">
+                <div className="flex justify-between items-center">
+                  <div className="h-4 w-20 bg-slate-200 rounded-full" />
+                  <div className="h-4 w-12 bg-slate-200 rounded-full" />
+                </div>
+                <div className="h-5 w-3/4 bg-slate-200 rounded" />
+                <div className="h-3 w-full bg-slate-100 rounded" />
+                <div className="h-3 w-2/3 bg-slate-100 rounded" />
+                <div className="flex gap-2 pt-3 border-t border-slate-100">
+                  <div className="h-6 w-16 bg-slate-100 rounded-md" />
+                  <div className="h-6 w-16 bg-slate-100 rounded-md" />
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
         {filtered.map((p) => (
           <div
             key={p.id}
             onClick={() => router.push(`/projects/${p.id}`)}
+            onMouseEnter={() => {
+              queryClient.prefetchQuery({
+                queryKey: queryKeys.projects.detail(undefined, p.id),
+                queryFn: () => api.getProject(p.id),
+                staleTime: 60 * 1000,
+              })
+            }}
             className="apple-card p-5 flex flex-col justify-between hover:border-violet-300 transition-all cursor-pointer group"
           >
             <div>
