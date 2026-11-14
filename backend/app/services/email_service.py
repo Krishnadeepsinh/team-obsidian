@@ -23,7 +23,24 @@ class EmailService:
 
     def has_custom_sender_domain(self) -> bool:
         sender = (settings.SMTP_FROM_EMAIL or "").strip().lower()
-        return bool(sender and "@" in sender and not sender.endswith(".local") and "resend.dev" not in sender)
+        public_freemail_domains = (
+            "@gmail.com",
+            "@googlemail.com",
+            "@yahoo.com",
+            "@hotmail.com",
+            "@outlook.com",
+            "@live.com",
+            "@icloud.com",
+            "@proton.me",
+            "@protonmail.com",
+        )
+        return bool(
+            sender
+            and "@" in sender
+            and not sender.endswith(".local")
+            and "resend.dev" not in sender
+            and not any(sender.endswith(dom) for dom in public_freemail_domains)
+        )
 
     def is_resend_sandbox_only(self) -> bool:
         """True when only Resend is configured and sender falls back to onboarding@resend.dev sandbox."""

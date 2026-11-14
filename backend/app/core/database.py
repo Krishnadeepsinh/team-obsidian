@@ -66,6 +66,9 @@ def _ensure_runtime_columns() -> None:
         ("embedding_records", "chunk_index", "INTEGER DEFAULT 0"),
         ("embedding_records", "task_type", "VARCHAR(40) DEFAULT 'RETRIEVAL_DOCUMENT'"),
         ("source_records", "extraction_processed_at", "TIMESTAMP"),
+        ("password_reset_tokens", "attempts_count", "INTEGER DEFAULT 0"),
+        ("password_reset_tokens", "verified_at", "TIMESTAMP"),
+        ("password_reset_tokens", "reset_session_token", "VARCHAR(64)"),
     ]
     index_statements = [
         ("source_records", "idx_source_record_project_proc", "project_id, extraction_processed_at"),
