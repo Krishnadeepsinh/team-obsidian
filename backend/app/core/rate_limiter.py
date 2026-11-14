@@ -158,8 +158,20 @@ def get_client_ip(request: Request) -> str:
     client_host = request.client.host if request.client else ""
     trusted_proxies = set(getattr(settings, "TRUSTED_PROXIES", ["127.0.0.1", "::1", "localhost", "testclient"]))
 
+    is_trusted_proxy = False
+    if client_host:
+        if client_host in trusted_proxies or client_host.startswith("127.") or client_host == "::1":
+            is_trusted_proxy = True
+        else:
+            try:
+                ip = ipaddress.ip_address(client_host)
+                if ip.is_private or ip.is_loopback:
+                    is_trusted_proxy = True
+            except ValueError:
+                pass
+
     # Only trust X-Forwarded-For if the immediate connection is from a trusted reverse proxy
-    if client_host and (client_host in trusted_proxies or client_host.startswith("127.") or client_host == "::1"):
+    if is_trusted_proxy:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             hops = [h.strip() for h in forwarded.split(",") if h.strip()]

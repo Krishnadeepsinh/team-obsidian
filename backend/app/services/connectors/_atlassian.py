@@ -59,6 +59,9 @@ def validate_external_https_url(url: str, label: str = "Site URL") -> str:
             ip_str = sockaddr[0]
             try:
                 resolved_ip = ipaddress.ip_address(ip_str)
+                # RFC 6052 Well-Known Prefix 64:ff9b::/96 translates an IPv4 address to IPv6
+                if resolved_ip.version == 6 and resolved_ip in ipaddress.ip_network("64:ff9b::/96"):
+                    resolved_ip = ipaddress.ip_address(resolved_ip.packed[-4:])
                 if (
                     resolved_ip.is_private
                     or resolved_ip.is_loopback
