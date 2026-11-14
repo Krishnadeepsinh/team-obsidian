@@ -1,4 +1,4 @@
-# TEAM OBSIDIAN
+# Team Obsidian
 
 <p align="center">
   <strong>Enterprise Autonomous Knowledge Reconstruction &amp; 16-Section Handover Dossier Engine</strong>
@@ -15,40 +15,29 @@
 
 ---
 
-## 📽️ Interactive Video Walkthrough
+## Project Demonstration
 
-Watch the full system demo showing real-time multi-source ingestion, knowledge graph traversal, conversational query routing, and 16-section handover generation:
-
-<div align="center">
-  <video src="docs/videos/tutorial.mp4" controls="controls" width="100%" poster="docs/screenshots/dashboard.png">
-    Your browser does not support the video tag. <a href="docs/videos/tutorial.mp4">Click here to download or view the video walkthrough directly</a>.
-  </video>
-  <p align="center">
-    <em>Full end-to-end product walkthrough (9.98 MB high-definition recording: <code>docs/videos/tutorial.mp4</code>)</em>
-  </p>
-</div>
+https://github.com/user-attachments/assets/d7713980-e606-4bd2-9ef1-8213a07785b5
 
 ---
 
-## 🌟 Executive Overview & Mission
+## Executive Overview
 
-When lead engineers, architects, or senior developers transition out of an organization, critical institutional knowledge disappears with them: unrecorded architectural decisions, tribal operational workarounds, fragile webhook dependencies, and incomplete code ownership models.
+When senior engineers, principal architects, or team leads depart an organization, critical institutional knowledge disappears with them: unrecorded architectural decisions, tribal operational workarounds, fragile webhook dependencies, and incomplete code ownership models.
 
-**TEAM OBSIDIAN** eliminates organizational brain drain. It operates as an autonomous, continuous knowledge reconstruction engine that:
+Team Obsidian eliminates organizational knowledge loss. The platform operates as an autonomous, continuous knowledge reconstruction engine that:
 
-1. **Ingests Engineering Footprints**: Collects real-time commits, pull requests, issues, Slack channel discussions, Notion runbooks, Google Drive assets, and 14+ raw technical document formats.
-2. **Builds an Evidence-Grounded Knowledge Graph**: Discovers code ownership, calculates blast radiuses, maps component dependencies, and automatically flags **Single Points of Failure (SPOFs)**.
-3. **Orchestrates Intelligent Conversations**: Uses a 6-strategy Query Orchestrator that programmatically answers factual queries with live GitHub APIs (zero hallucination) and performs deep cross-source semantic RAG with source verification badges.
-4. **Produces Cryptographically Verifiable Handover Dossiers**: Autonomously compiles and verifies an audit-ready **16-Section Knowledge Handover Dossier**, complete with multi-stakeholder approval gates and instant ReportLab PDF export.
+1. **Ingests Engineering Footprints**: Automatically collects commits, pull requests, issues, Slack channel discussions, Notion documentation, Google Drive assets, and 14+ raw technical document formats.
+2. **Synthesizes an Evidence-Grounded Knowledge Graph**: Discovers code ownership, calculates blast radiuses, maps component dependencies, and automatically isolates Single Points of Failure (SPOFs).
+3. **Orchestrates Intelligent Conversations**: Employs a 6-strategy Query Orchestrator that programmatically answers factual queries with live GitHub APIs (eliminating hallucination risk) and performs deep cross-source semantic retrieval with verified citation cards.
+4. **Produces Cryptographically Verifiable Handover Dossiers**: Compiles and verifies an audit-ready 16-Section Knowledge Handover Dossier, complete with multi-stakeholder approval gates and automated ReportLab PDF export.
 
 ---
 
-## 📸 Real Product Interface Walkthrough
+## Product Interface Walkthrough
 
-> *Every image below is a genuine, unedited screenshot captured directly from the live Team Obsidian application.*
-
-### 1. Executive Workspace & Handover Readiness Dashboard
-The central command center providing a comprehensive view of team transition readiness, live Single Point of Failure (SPOF) risks, active project metadata, connector health, and urgent handover action items.
+### 1. Workspace Overview & Handover Readiness Dashboard
+The central command center providing an operational overview of organizational transition readiness, live Single Point of Failure (SPOF) risks, active project metadata, connector health, and urgent transition action items.
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="Workspace Overview and Handover Readiness Dashboard" width="100%" />
@@ -56,8 +45,8 @@ The central command center providing a comprehensive view of team transition rea
 
 ---
 
-### 2. Conversational Project Assistant (Multi-Strategy Orchestrator)
-A context-aware engineering assistant powered by intent classification. Numerical questions (*e.g., "how many repo are there in my github"*) bypass expensive LLM guesswork and execute direct deterministic API queries. Analytical queries receive grounded technical synthesis with collapsible citation cards.
+### 2. Conversational Project Assistant
+A context-aware engineering assistant driven by deterministic intent routing. Numerical questions (for example, *"how many repo are there in my github"*) bypass speculative LLM generation and execute direct API queries. Complex architectural queries receive grounded technical synthesis with collapsible citation cards.
 
 <p align="center">
   <img src="docs/screenshots/ai_assistant.png" alt="Conversational AI Project Assistant" width="100%" />
@@ -65,8 +54,8 @@ A context-aware engineering assistant powered by intent classification. Numerica
 
 ---
 
-### 3. Interactive Knowledge Graph & Blast Radius Topology
-A high-performance `@xyflow/react` interactive canvas mapping system components, maintainers, dependencies, and communication channels. Graph analysis algorithms compute structural centrality and isolate critical SPOF nodes before an engineer departs.
+### 3. Interactive Knowledge Graph & Blast Radius Analysis
+An interactive canvas powered by `@xyflow/react` and NetworkX that maps system components, maintainers, dependencies, and communication channels. Structural centrality algorithms identify critical single points of failure before engineering transitions occur.
 
 <p align="center">
   <img src="docs/screenshots/knowledge_graph.png" alt="Interactive Knowledge Graph and Blast Radius" width="100%" />
@@ -74,8 +63,8 @@ A high-performance `@xyflow/react` interactive canvas mapping system components,
 
 ---
 
-### 4. 16-Section Knowledge Handover Dossier & PDF Generation
-An enterprise-grade transition dossier conforming to rigorous organizational handover standards. Each section aggregates verified evidence from commits, tickets, and runbooks, supported by stakeholder sign-offs and one-click PDF generation.
+### 4. 16-Section Knowledge Handover Dossier & PDF Export
+An enterprise-grade transition dossier conforming to rigorous organizational handover specifications. Each section aggregates verified evidence from commits, tickets, and runbooks, supported by stakeholder sign-offs and one-click PDF generation.
 
 <p align="center">
   <img src="docs/screenshots/handover_dossier.png" alt="16-Section Knowledge Handover Dossier" width="100%" />
@@ -92,32 +81,32 @@ Centralized credential management and health monitoring across development and p
 
 ---
 
-## 🛠️ Exhaustive Technology Stack
+## Technology Stack
 
 | Layer | Technologies | Architectural Purpose |
 | :--- | :--- | :--- |
-| **Backend Core** | **Python 3.10+ / 3.12**, **FastAPI 0.115+**, **Uvicorn**, **Pydantic v2** | High-concurrency async REST API, strict request/response contract validation, and SSE streaming. |
+| **Backend Core** | **Python 3.10+ / 3.12**, **FastAPI 0.115+**, **Uvicorn**, **Pydantic v2** | High-concurrency async REST API, strict request/response contract validation, and Server-Sent Events (SSE) streaming. |
 | **Frontend Framework** | **Next.js 16.4 (App Router)**, **React 19**, **Turbopack**, **TypeScript 5.x** | Ultra-responsive SSR/CSR architecture with optimized bundle splitting and edge-ready API routes. |
-| **UI & Styling** | **Tailwind CSS v4**, **Lucide React Icons**, **Framer Motion** | Dark obsidian aesthetic, accessible color contrasts, responsive sidebars, and fluid transitions. |
+| **UI & Styling** | **Tailwind CSS v4**, **Lucide Icons**, **Framer Motion** | Dark obsidian aesthetic, high-contrast accessible typography, responsive sidebars, and fluid transitions. |
 | **Graph Visualization** | **@xyflow/react (React Flow)**, **NetworkX (Backend)** | Topological graph layout, component dependency clustering, centrality calculation, and blast radius highlighting. |
 | **Database & Vector Search** | **PostgreSQL (Supabase Cloud)**, **pgvector**, **SQLAlchemy 2.0**, **Alembic** | Relational transactional persistence paired with HNSW indexed cosine similarity embeddings for semantic search. |
 | **AI & LLM Orchestration** | **Groq Llama-3.3-70B-Versatile**, **Google Gemini 2.5 Flash**, **FastEmbed (`bge-small-en-v1.5`)** | Multi-tier model routing, local ONNX embeddings (no remote embedding API latency), and resilient fallback logic. |
 | **Document Processing** | **pypdf**, **python-docx**, **openpyxl**, **markdown**, **BeautifulSoup4** | Multi-format text extraction engine supporting 14+ document extensions up to 25 MB with SHA-256 deduplication. |
 | **Security & Identity** | **Argon2id (`pwdlib`)**, **PyJWT (HS256)**, **Cryptography (Fernet)** | Multi-tenant tenant isolation, cryptographic credential vaulting at rest, and strict RBAC enforcement. |
-| **PDF Reporting** | **ReportLab 4.x** | Automated generation of pixel-perfect, audit-compliant 16-section handover documents. |
+| **PDF Reporting** | **ReportLab 4.x** | Automated generation of audit-compliant 16-section handover documents. |
 | **Automated Testing & CI** | **Pytest 8.x**, **pytest-asyncio**, **Playwright**, **ESLint**, **GitHub Actions** | Comprehensive verification suite spanning 119 unit/integration tests and headless end-to-end browser capture. |
 
 ---
 
-## 🏛️ Comprehensive Architecture
+## System Architecture
 
 ```
                                       TEAM OBSIDIAN ARCHITECTURE
                                       
     INGESTION LAYER                    SECURITY & ISOLATION                      ORCHESTRATION & AI
  ┌──────────────────────┐           ┌────────────────────────────┐           ┌──────────────────────────┐
- │ • GitHub Commits/PRs │           │  Argon2id Hash Authentication│         │  Intelligent Classifier │
- │ • Slack Conversations│──────────▶│  Row-Level Tenant Isolation │──────────▶│  (Regex + Heuristic Rules│
+ │ • GitHub Commits/PRs │           │  Argon2id Hash Auth        │           │  Intelligent Classifier │
+ │ • Slack Conversations│──────────▶│  Row-Level Tenant Isolation│──────────▶│  (Regex + Rules          │
  │ • Notion Databases   │           │  Fernet Secret Key Storage │           │   + Semantic Intent)     │
  │ • Google Drive Files │           │  Strict RBAC Boundary      │           └────────────┬─────────────┘
  │ • Multi-Format Docs  │           └────────────────────────────┘                        │
@@ -133,7 +122,7 @@ Centralized credential management and health monitoring across development and p
                                         QUERY ROUTING STRATEGIES                          ▼
  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────┐
  │  Strategy 1: Direct Deterministic Query  ──▶ API / DB count metrics (Repos, PRs, Tasks, Risks)     │
- │  Strategy 2: Structured Data Retrieval   ──▶ Specific entity inspection (Commits, Branches, Assignees)│
+ │  Strategy 2: Structured Data Retrieval   ──▶ Specific entity inspection (Commits, Branches, Authors)  │
  │  Strategy 3: Semantic RAG Retrieval      ──▶ pgvector HNSW cosine similarity + Evidence verification  │
  │  Strategy 4: Deep Architectural Analysis ──▶ Cross-source synthesis + Dependency & SPOF detection    │
  │  Strategy 5: Handover Pipeline Engine    ──▶ 16-Section dossier synthesis + ReportLab PDF export      │
@@ -144,7 +133,7 @@ Centralized credential management and health monitoring across development and p
                                 ┌───────────────────────────────────────┐
                                 │ Next.js 16 App Router (Turbopack)     │
                                 │ • Server-Sent Events (SSE) Streaming  │
-                                │ • Interactive React Flow Graph Engine │
+                                │ • Interactive React Flow Graph Canvas │
                                 │ • Evidence Verification Badge Drawer  │
                                 │ • Handover Readiness Command Center   │
                                 └───────────────────────────────────────┘
@@ -152,9 +141,9 @@ Centralized credential management and health monitoring across development and p
 
 ---
 
-## 🧠 The 6 Query Orchestration Strategies
+## Query Orchestration Strategies
 
-Rather than passing every question through a monolithic, expensive RAG pipeline, Team Obsidian implements a **Query Orchestrator** with 6 specialized strategies:
+Rather than directing all questions into a single RAG pipeline, Team Obsidian implements a specialized Query Orchestrator that dynamically determines the optimal processing path:
 
 | Strategy | When Triggered | Execution Mechanism | Latency / Accuracy Profile |
 | :--- | :--- | :--- | :--- |
@@ -167,7 +156,7 @@ Rather than passing every question through a monolithic, expensive RAG pipeline,
 
 ---
 
-## 📋 The 16-Section Enterprise Handover Standard
+## Handover Dossier Specification (16 Sections)
 
 Every handover dossier produced by Team Obsidian adheres to the following structured standard:
 
@@ -185,26 +174,26 @@ Every handover dossier produced by Team Obsidian adheres to the following struct
 12. **Deployment Topologies & CI/CD Pipelines**: Build pipelines, GitHub Actions workflows, container specs, and cloud providers.
 13. **Unresolved Knowledge Gaps & Questions**: Unanswered inquiries flagged by incoming engineers during transition reviews.
 14. **External Vendor Contacts & SLAs**: Service providers, support tiers, emergency escalation contacts, and billing points.
-15. **Incoming Developer First-Week Onboarding Checklist**: Day-by-day tactical roadmap for environment setup, repo checkout, and first commit.
+15. **Incoming Developer First-Week Onboarding Checklist**: Tactical roadmap for environment setup, repo checkout, and first commit.
 16. **Multi-Stakeholder Cryptographic Sign-Off**: Verification records documenting outgoing lead, incoming lead, and manager sign-off.
 
 ---
 
-## 🛡️ Enterprise Security & Multi-Tenant Protection
+## Security & Multi-Tenant Isolation
 
-- **Tenant Isolation**: Organizations, workspaces, and projects are strictly isolated using PostgreSQL Row-Level Security (RLS) patterns and user tenancy checks on every query.
-- **Zero Raw Secret Exposure**: Sensitive tokens (GitHub personal access tokens, Slack bot tokens, database credentials) are encrypted at rest using **Fernet 256-bit symmetric encryption** and masked in all API responses.
+- **Tenant Isolation**: Organizations, workspaces, and projects are strictly isolated using PostgreSQL Row-Level Security (RLS) patterns and tenant checks on every query.
+- **Zero Raw Secret Exposure**: Sensitive tokens (GitHub personal access tokens, Slack bot tokens, database credentials) are encrypted at rest using Fernet 256-bit symmetric encryption and masked in all API responses.
 - **Prompt Injection Defense**: User queries and untrusted document contexts are sanitized through delimiter encapsulation (`<<<UNTRUSTED_CONTENT>>>`) to prevent prompt jailbreaks.
 - **Dynamic Provider Abstraction**: LLM provider names and fallback notifications are handled centrally without exposing internal provider diagnostics to end users.
 
 ---
 
-## 🚀 Quickstart & Local Installation Guide
+## Installation & Local Development
 
 ### Prerequisites
-- **Python 3.10+** (Tested on Python 3.10 and 3.12)
-- **Node.js 18+ or 22+** and **npm 10+**
-- **Git**
+- Python 3.10+ (Tested on Python 3.10 and 3.12)
+- Node.js 18+ or 22+ and npm 10+
+- Git
 
 ### 1. Clone the Repository
 ```bash
@@ -235,8 +224,8 @@ cp .env.example .env
 # Start FastAPI development server
 python run.py
 ```
-> **Backend API**: `http://localhost:8000`  
-> **Interactive Swagger Documentation**: `http://localhost:8000/docs`
+> Backend API: `http://localhost:8000`  
+> Interactive Swagger Documentation: `http://localhost:8000/docs`
 
 ### 3. Frontend Setup
 ```bash
@@ -251,11 +240,11 @@ cp .env.example .env.local
 # Start Next.js development server
 npm run dev
 ```
-> **Web Application**: `http://localhost:3000`
+> Web Application: `http://localhost:3000`
 
 ---
 
-## 🧪 Comprehensive Verification Suite
+## Verification & Test Suite
 
 Team Obsidian features an automated test and verification suite covering tenant isolation, connector health, cryptographic security, rate limiting, and query orchestration:
 
@@ -304,17 +293,17 @@ npm run build         # Next.js Turbopack production compilation (34 routes comp
 
 ---
 
-## 👥 Engineering Team
+## Engineering Team
 
-Engineered with passion for **CodeFrontier** by **TEAM OBSIDIAN**:
+Developed for CodeFrontier by Team Obsidian:
 
-- **Vaghela Yagnadeepsinh Chetansinh**
-- **Chudasama Krishnadeepsinh Shaktisinh**
-- **Makwana Tushar Shantibhai**
-- **Chauhan Jaydip Pankajbhai**
+- Vaghela Yagnadeepsinh Chetansinh
+- Chudasama Krishnadeepsinh Shaktisinh
+- Makwana Tushar Shantibhai
+- Chauhan Jaydip Pankajbhai
 
 ---
 
 <p align="center">
-  <sub>TEAM OBSIDIAN • Autonomous Knowledge Reconstruction &amp; Engineering Continuity Engine</sub>
+  <sub>Team Obsidian • Autonomous Knowledge Reconstruction &amp; Engineering Continuity Engine</sub>
 </p>
