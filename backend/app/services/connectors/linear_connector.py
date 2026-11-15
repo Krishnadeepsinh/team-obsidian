@@ -67,6 +67,38 @@ class LinearConnector(BaseConnector):
             "token": payload["access_token"],
             "scope": payload.get("scope", "read"),
             "token_type": payload.get("token_type", "Bearer"),
+            **({"refresh_token": payload["refresh_token"]} if payload.get("refresh_token") else {}),
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
+        }
+
+    @classmethod
+    def refresh_oauth_token(cls, refresh_token: str) -> Dict[str, Any]:
+        if not settings.LINEAR_CLIENT_ID or not settings.LINEAR_CLIENT_SECRET:
+            raise ConnectorError("Missing LINEAR_CLIENT_ID or LINEAR_CLIENT_SECRET.")
+        connector = cls()
+        res = connector._request_with_retry(
+            "POST",
+            "https://api.linear.app/oauth/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "refresh_token",
+                "client_id": settings.LINEAR_CLIENT_ID,
+                "client_secret": settings.LINEAR_CLIENT_SECRET,
+                "refresh_token": refresh_token,
+            },
+            timeout=12,
+        )
+        payload = res.json() if res.text else {}
+        if res.status_code != 200 or not payload.get("access_token"):
+            raise ConnectorError(
+                f"Linear token refresh failed: {payload.get('error_description') or payload.get('error') or res.status_code}"
+            )
+        return {
+            "access_token": payload["access_token"],
+            "token": payload["access_token"],
+            "refresh_token": payload.get("refresh_token") or refresh_token,
+            "scope": payload.get("scope", "read"),
+            "token_type": payload.get("token_type", "Bearer"),
             **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
         }
 
@@ -99,6 +131,8 @@ class LinearConnector(BaseConnector):
                 "auth_type": "api_key" if self.token.startswith("lin_api_") else "oauth_token",
                 "connected_account": acct,
                 "organization": org.get("name"),
+                "external_org_id": org.get("id"),
+                "external_org_name": org.get("name"),
                 "scopes": ["read"],
             }
         except Exception as exc:

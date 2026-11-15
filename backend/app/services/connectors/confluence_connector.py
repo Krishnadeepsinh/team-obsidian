@@ -118,6 +118,8 @@ class ConfluenceConnector(BaseConnector):
                     "connected_account": acct,
                     "site_url": site_url,
                     "cloud_id": self.cloud_id,
+                    "external_org_id": self.cloud_id,
+                    "external_org_name": site_url or "Atlassian Confluence Site",
                     "scopes": ["read:confluence-content.all", "read:confluence-space.summary"],
                 }
             if self.auth_mode == "oauth":

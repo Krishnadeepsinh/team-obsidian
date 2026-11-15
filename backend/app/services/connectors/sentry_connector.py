@@ -79,6 +79,38 @@ class SentryConnector(BaseConnector):
             "scope": payload.get("scope", "project:read event:read org:read"),
             "token_type": "Bearer",
             **({"refresh_token": payload["refresh_token"]} if payload.get("refresh_token") else {}),
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
+        }
+
+    @classmethod
+    def refresh_oauth_token(cls, refresh_token: str) -> Dict[str, Any]:
+        if not settings.SENTRY_CLIENT_ID or not settings.SENTRY_CLIENT_SECRET:
+            raise ConnectorError("Missing SENTRY_CLIENT_ID or SENTRY_CLIENT_SECRET.")
+        connector = cls()
+        res = connector._request_with_retry(
+            "POST",
+            "https://sentry.io/oauth/token/",
+            headers={"Accept": "application/json"},
+            data={
+                "grant_type": "refresh_token",
+                "client_id": settings.SENTRY_CLIENT_ID,
+                "client_secret": settings.SENTRY_CLIENT_SECRET,
+                "refresh_token": refresh_token,
+            },
+            timeout=12,
+        )
+        payload = res.json() if res.text else {}
+        if res.status_code != 200 or not payload.get("access_token"):
+            raise ConnectorError(
+                f"Sentry token refresh failed: {payload.get('error_description') or payload.get('error') or res.status_code}"
+            )
+        return {
+            "access_token": payload["access_token"],
+            "token": payload["access_token"],
+            "refresh_token": payload.get("refresh_token") or refresh_token,
+            "scope": payload.get("scope", "project:read event:read org:read"),
+            "token_type": "Bearer",
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
         }
 
     def _list_organizations(self) -> List[Dict[str, Any]]:
@@ -100,12 +132,15 @@ class SentryConnector(BaseConnector):
                 user_info = (root_res.json() or {}).get("user") or {}
                 user_email = user_info.get("email") or user_info.get("name")
             acct = user_email or (org_slugs[0] if org_slugs else "Sentry Account")
+            primary_slug = self.org_slug or (org_slugs[0] if org_slugs else None)
             return {
                 "status": "connected",
                 "auth_type": "auth_token",
                 "connected_account": acct,
                 "organizations": org_slugs,
-                "org_slug": self.org_slug or (org_slugs[0] if org_slugs else None),
+                "org_slug": primary_slug,
+                "external_org_id": primary_slug,
+                "external_org_name": primary_slug,
                 "scopes": ["org:read", "project:read", "event:read"],
             }
         except Exception as exc:

@@ -1,4 +1,4 @@
-from app.services.connectors.base import BaseConnector, ConnectorError
+from app.services.connectors.base import BaseConnector, ConnectorError, ensure_valid_token
 from app.services.connectors.confluence_connector import ConfluenceConnector, confluence_connector
 from app.services.connectors.github_connector import GitHubConnector, github_connector
 from app.services.connectors.gitlab_connector import GitLabConnector, gitlab_connector
@@ -43,6 +43,7 @@ def get_connector(provider: str, token: str = None) -> BaseConnector | None:
 __all__ = [
     "BaseConnector",
     "ConnectorError",
+    "ensure_valid_token",
     "GitHubConnector",
     "SlackConnector",
     "NotionConnector",

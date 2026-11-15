@@ -29,7 +29,15 @@ class Integration(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     user_id = Column(String(36), nullable=True, index=True)
+    connection_type = Column(String(50), default="organization")  # organization, personal
+    external_org_id = Column(String(255), nullable=True, index=True)
+    external_org_name = Column(String(255), nullable=True)
+    authorized_by_user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    authorized_by_email = Column(String(255), nullable=True)
+    token_expires_at = Column(DateTime, nullable=True)
+    assigned_projects = Column(JSON, default=list)
     is_org_level = Column(Boolean, default=False)
     provider = Column(String(50), nullable=False)  # github, slack, notion, gdrive, manual
     name = Column(String(255), nullable=False)
@@ -49,8 +57,22 @@ class Integration(Base):
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
     project = relationship("Project", back_populates="integrations")
+    project_access = relationship("IntegrationProjectAccess", backref="integration", cascade="all, delete-orphan")
     source_records = relationship("SourceRecord", back_populates="integration", cascade="all, delete-orphan")
     events = relationship("SourceEvent", back_populates="integration", cascade="all, delete-orphan")
+
+
+class IntegrationProjectAccess(Base):
+    __tablename__ = "integration_project_access"
+    __table_args__ = (
+        UniqueConstraint("integration_id", "project_id", name="uq_integration_project_access"),
+        Index("idx_ipa_integration_project", "integration_id", "project_id"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    integration_id = Column(String(36), ForeignKey("integrations.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class SourceRecord(Base):

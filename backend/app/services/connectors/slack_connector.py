@@ -32,9 +32,6 @@ class SlackConnector(BaseConnector):
             "redirect_uri": redirect_uri,
             "state": state,
         }
-        slack_team = (getattr(settings, "SLACK_TEAM_ID", None) or "").strip()
-        if slack_team:
-            params_dict["team"] = slack_team
         return f"https://slack.com/oauth/v2/authorize?{urlencode(params_dict)}"
 
     @classmethod
@@ -62,6 +59,40 @@ class SlackConnector(BaseConnector):
             "scope": payload.get("scope", ""),
             "team_name": (payload.get("team") or {}).get("name"),
             "team_id": (payload.get("team") or {}).get("id"),
+            "external_org_name": (payload.get("team") or {}).get("name"),
+            "external_org_id": (payload.get("team") or {}).get("id"),
+            **({"refresh_token": payload["refresh_token"]} if payload.get("refresh_token") else {}),
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
+        }
+
+    @classmethod
+    def refresh_oauth_token(cls, refresh_token: str) -> Dict[str, Any]:
+        if not settings.SLACK_CLIENT_ID or not settings.SLACK_CLIENT_SECRET:
+            raise ConnectorError("Missing SLACK_CLIENT_ID or SLACK_CLIENT_SECRET.")
+        connector = cls()
+        res = connector._request_with_retry(
+            "POST",
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "client_id": settings.SLACK_CLIENT_ID,
+                "client_secret": settings.SLACK_CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+        )
+        payload = res.json() if res.text else {}
+        if not payload.get("ok") or not payload.get("access_token"):
+            raise ConnectorError(f"Slack token refresh failed: {payload.get('error', res.status_code)}")
+        return {
+            "access_token": payload["access_token"],
+            "token": payload["access_token"],
+            "bot_token": payload["access_token"],
+            "refresh_token": payload.get("refresh_token") or refresh_token,
+            "team_name": (payload.get("team") or {}).get("name"),
+            "team_id": (payload.get("team") or {}).get("id"),
+            "external_org_name": (payload.get("team") or {}).get("name"),
+            "external_org_id": (payload.get("team") or {}).get("id"),
+            **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
         }
 
     def check_connection(self) -> Dict[str, Any]:
@@ -82,6 +113,8 @@ class SlackConnector(BaseConnector):
                     "auth_type": "bot_token",
                     "team": data.get("team"),
                     "team_id": data.get("team_id"),
+                    "external_org_name": data.get("team"),
+                    "external_org_id": data.get("team_id"),
                     "user": data.get("user"),
                     "connected_account": f"{data.get('team', 'Slack')} (@{data.get('user', 'bot')})",
                     "scopes": scopes,

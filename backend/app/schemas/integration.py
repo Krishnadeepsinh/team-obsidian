@@ -8,6 +8,10 @@ class IntegrationCreate(BaseModel):
     provider: str  # github, slack, notion, gdrive, manual
     name: str
     auth_type: Optional[str] = "api_token"
+    connection_type: Optional[str] = "organization"  # organization, personal
+    external_org_id: Optional[str] = None
+    external_org_name: Optional[str] = None
+    assigned_projects: Optional[List[str]] = []
     credentials: Optional[Dict[str, Any]] = {}
     config: Optional[Dict[str, Any]] = {}
     is_org_level: Optional[bool] = False
@@ -16,6 +20,12 @@ class IntegrationCreate(BaseModel):
 class IntegrationResponse(BaseModel):
     id: str
     project_id: str
+    workspace_id: Optional[str] = None
+    connection_type: Optional[str] = "organization"
+    external_org_id: Optional[str] = None
+    external_org_name: Optional[str] = None
+    authorized_by_user_id: Optional[str] = None
+    authorized_by_email: Optional[str] = None
     provider: str
     name: str
     status: str
@@ -26,12 +36,21 @@ class IntegrationResponse(BaseModel):
     credentials: Optional[Dict[str, Any]] = {}
     config: Dict[str, Any]
     last_sync: Optional[datetime] = None
+    last_error_at: Optional[datetime] = None
+    token_expires_at: Optional[datetime] = None
+    assigned_projects: Optional[List[str]] = []
+    is_assigned_to_current_project: Optional[bool] = True
+    can_manage: Optional[bool] = False
     error_message: Optional[str] = None
     items_synced: int
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class IntegrationProjectAssignmentRequest(BaseModel):
+    project_ids: List[str]
 
 
 class SourceEventResponse(BaseModel):

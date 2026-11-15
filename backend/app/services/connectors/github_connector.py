@@ -118,12 +118,24 @@ class GitHubConnector(BaseConnector):
                 data = res.json()
                 raw_scopes = res.headers.get("X-OAuth-Scopes", "")
                 scopes = [s.strip() for s in raw_scopes.split(",") if s.strip()]
+                external_org_id = None
+                external_org_name = None
+                try:
+                    orgs_res = self._request_with_retry("GET", f"{self.base_url}/user/orgs", headers=self.headers, timeout=6)
+                    if orgs_res.status_code == 200 and isinstance(orgs_res.json(), list) and len(orgs_res.json()) > 0:
+                        first_org = orgs_res.json()[0]
+                        external_org_id = str(first_org.get("id") or first_org.get("login"))
+                        external_org_name = first_org.get("login")
+                except Exception:
+                    pass
                 return {
                     "status": "connected",
                     "auth_type": "oauth_token",
                     "login": data.get("login"),
                     "connected_account": data.get("login") or data.get("email"),
                     "name": data.get("name"),
+                    "external_org_id": external_org_id,
+                    "external_org_name": external_org_name,
                     "scopes": scopes,
                     "rate_limit_remaining": int(res.headers.get("X-RateLimit-Remaining", 5000)),
                 }

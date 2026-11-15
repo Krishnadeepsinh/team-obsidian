@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -27,11 +28,12 @@ from app.core.security import (
     mask_credentials,
     revoke_token_jti,
 )
-from app.models.integration import Integration, SourceEvent, SourceRecord
-from app.models.workspace import User
+from app.models.integration import Integration, IntegrationProjectAccess, SourceEvent, SourceRecord
+from app.models.workspace import User, Project
 from app.schemas.integration import (
     IntegrationCreate,
     IntegrationResponse,
+    IntegrationProjectAssignmentRequest,
     SourceEventResponse,
     SyncResultResponse,
 )
@@ -46,6 +48,7 @@ from app.services.connectors import (
     NotionConnector,
     SentryConnector,
     SlackConnector,
+    ensure_valid_token,
     get_connector_class,
 )
 from app.services.ingestion_service import upsert_source_records
@@ -71,10 +74,43 @@ class DiscoverResourcesRequest(BaseModel):
     credentials: Optional[Dict[str, Any]] = None
 
 
-def _to_response(i: Integration) -> IntegrationResponse:
+def _to_response(
+    i: Integration,
+    current_user: Optional[User] = None,
+    current_project_id: Optional[str] = None,
+) -> IntegrationResponse:
+    assigned_pids = []
+    if getattr(i, "project_access", None):
+        assigned_pids = [pa.project_id for pa in i.project_access]
+    elif getattr(i, "assigned_projects", None) and isinstance(i.assigned_projects, list):
+        assigned_pids = i.assigned_projects
+    elif i.project_id:
+        assigned_pids = [i.project_id]
+
+    can_manage = False
+    if current_user:
+        if current_user.role in ("admin", "org_admin", "workspace_owner", "project_owner", "tech_lead"):
+            can_manage = True
+        elif i.authorized_by_user_id == current_user.id or i.user_id == current_user.id:
+            can_manage = True
+
+    is_assigned = True
+    if current_project_id:
+        is_assigned = (current_project_id in assigned_pids) or (i.project_id == current_project_id)
+
     return IntegrationResponse(
         id=i.id,
         project_id=i.project_id,
+        workspace_id=getattr(i, "workspace_id", None),
+        connection_type=getattr(i, "connection_type", "organization") or "organization",
+        external_org_id=getattr(i, "external_org_id", None),
+        external_org_name=getattr(i, "external_org_name", None),
+        authorized_by_user_id=getattr(i, "authorized_by_user_id", None),
+        authorized_by_email=getattr(i, "authorized_by_email", None),
+        token_expires_at=getattr(i, "token_expires_at", None),
+        assigned_projects=assigned_pids,
+        is_assigned_to_current_project=is_assigned,
+        can_manage=can_manage,
         provider=i.provider,
         name=i.name,
         status=i.status,
@@ -85,8 +121,9 @@ def _to_response(i: Integration) -> IntegrationResponse:
         credentials=mask_credentials(i.credentials),
         config=i.config or {},
         last_sync=i.last_sync,
+        last_error_at=getattr(i, "last_error_at", None),
         error_message=i.error_message,
-        items_synced=i.items_synced,
+        items_synced=i.items_synced or 0,
         created_at=i.created_at,
         updated_at=i.updated_at,
     )
@@ -479,23 +516,48 @@ def oauth_callback(
         .filter(Integration.project_id == project_id, Integration.provider == provider.lower())
         .first()
     )
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    workspace_id = proj.workspace_id if proj else None
+
     if not integ:
         integ = Integration(
             project_id=project_id,
+            workspace_id=workspace_id,
             user_id=user.id,
+            authorized_by_user_id=user.id,
+            authorized_by_email=user.email,
+            connection_type="organization",
             provider=provider.lower(),
             name=f"{provider.title()} ({check.get('connected_account') or 'OAuth'})",
         )
         db.add(integ)
         db.flush()
+    else:
+        integ.workspace_id = workspace_id or integ.workspace_id
+        integ.authorized_by_user_id = user.id
+        integ.authorized_by_email = user.email
 
     integ.auth_type = "oauth"
     integ.auth_status = "verified"
     integ.status = "connected"
+    integ.connection_type = "organization"
     integ.connected_account = check.get("connected_account") or token_bundle.get("team_name") or token_bundle.get("workspace_name")
     integ.scopes = check.get("scopes") or []
+    integ.external_org_id = check.get("external_org_id") or token_bundle.get("external_org_id") or token_bundle.get("team_id") or token_bundle.get("workspace_id") or check.get("cloud_id")
+    integ.external_org_name = check.get("external_org_name") or token_bundle.get("external_org_name") or token_bundle.get("team_name") or token_bundle.get("workspace_name") or check.get("organization")
+    if token_bundle.get("expires_in"):
+        integ.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(token_bundle["expires_in"]))
+
     integ.credentials = encrypt_credentials(token_bundle)
     integ.error_message = None
+
+    existing_pa = db.query(IntegrationProjectAccess).filter(
+        IntegrationProjectAccess.integration_id == integ.id,
+        IntegrationProjectAccess.project_id == project_id,
+    ).first()
+    if not existing_pa:
+        db.add(IntegrationProjectAccess(integration_id=integ.id, project_id=project_id))
+    integ.assigned_projects = [project_id]
 
     record_activity(
         db=db,
@@ -523,13 +585,51 @@ def list_integrations(
     accessible_ids = get_user_accessible_project_ids(current_user, db)
     if project_id:
         verify_project_access(project_id, current_user, db)
-        query = db.query(Integration).filter(Integration.project_id == project_id)
+        proj = db.query(Project).filter(Project.id == project_id).first()
+        workspace_id = proj.workspace_id if proj else None
+
+        subq_access = db.query(IntegrationProjectAccess.integration_id).filter(
+            IntegrationProjectAccess.project_id == project_id
+        )
+        query = db.query(Integration).filter(
+            or_(
+                Integration.id.in_(subq_access),
+                Integration.project_id == project_id,
+                and_(
+                    Integration.workspace_id == workspace_id,
+                    Integration.connection_type == "organization",
+                ),
+            )
+        )
     else:
         if not accessible_ids:
             return []
-        query = db.query(Integration).filter(Integration.project_id.in_(accessible_ids))
+        subq_access = db.query(IntegrationProjectAccess.integration_id).filter(
+            IntegrationProjectAccess.project_id.in_(accessible_ids)
+        )
+        query = db.query(Integration).filter(
+            or_(
+                Integration.id.in_(subq_access),
+                Integration.project_id.in_(accessible_ids),
+            )
+        )
 
-    return [_to_response(i) for i in query.order_by(Integration.created_at.desc()).all()]
+    all_integs = query.order_by(Integration.created_at.desc()).all()
+
+    results: List[IntegrationResponse] = []
+    seen_ids = set()
+    for i in all_integs:
+        if i.id in seen_ids:
+            continue
+        is_personal = (i.connection_type == "personal")
+        is_author = (i.authorized_by_user_id == current_user.id or i.user_id == current_user.id)
+        if is_personal and not is_author:
+            # Strictly do not expose another developer's personal token to this user
+            continue
+        seen_ids.add(i.id)
+        results.append(_to_response(i, current_user=current_user, current_project_id=project_id))
+
+    return results
 
 
 @router.get("/jobs")
@@ -572,14 +672,21 @@ def create_integration(
 ):
     verify_project_access(integ_in.project_id, current_user, db, require_write=True)
 
+    proj = db.query(Project).filter(Project.id == integ_in.project_id).first()
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     provider = (integ_in.provider or "").lower()
     raw_creds = integ_in.credentials or {}
     token = _token_from_dict(raw_creds)
 
     connected_account = None
+    external_org_id = integ_in.external_org_id
+    external_org_name = integ_in.external_org_name
     scopes: List[str] = []
     auth_status = "unverified"
     connector_cls = get_connector_class(provider)
+    expires_in = None
 
     if connector_cls is not None:
         if not token:
@@ -602,11 +709,26 @@ def create_integration(
         for k in ("cloud_id", "site_url", "org_slug"):
             if check.get(k) and not raw_creds.get(k):
                 raw_creds[k] = check[k]
+        if not external_org_id:
+            external_org_id = check.get("external_org_id") or check.get("team_id") or check.get("cloud_id")
+        if not external_org_name:
+            external_org_name = check.get("external_org_name") or check.get("organization") or check.get("team") or check.get("site_url")
+        expires_in = raw_creds.get("expires_in") or check.get("expires_in")
+
+    target_projects = integ_in.assigned_projects if integ_in.assigned_projects else [integ_in.project_id]
+    target_projects = list(set(target_projects))
 
     integ = Integration(
         project_id=integ_in.project_id,
+        workspace_id=proj.workspace_id,
         user_id=current_user.id,
-        is_org_level=bool(integ_in.is_org_level),
+        authorized_by_user_id=current_user.id,
+        authorized_by_email=current_user.email,
+        connection_type=integ_in.connection_type or "organization",
+        external_org_id=external_org_id,
+        external_org_name=external_org_name,
+        assigned_projects=target_projects,
+        is_org_level=bool(integ_in.is_org_level or integ_in.connection_type == "organization"),
         provider=provider,
         name=integ_in.name.strip(),
         auth_type=integ_in.auth_type or "api_token",
@@ -618,8 +740,15 @@ def create_integration(
         status="connected",
         items_synced=0,
     )
+    if expires_in:
+        integ.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+
     db.add(integ)
     db.flush()
+
+    for pid in target_projects:
+        pa = IntegrationProjectAccess(integration_id=integ.id, project_id=pid)
+        db.add(pa)
 
     record_activity(
         db=db,
@@ -796,7 +925,9 @@ def trigger_sync(
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
 
-    token = _extract_token(integ)
+    # Ensure token is valid and refreshed prior to sync
+    valid_token = ensure_valid_token(integ, db)
+    token = valid_token or _extract_token(integ)
     provider = (integ.provider or "").lower()
     if not token:
         integ.status = "error"
@@ -1132,6 +1263,61 @@ def register_provider_auto_webhook(
         "has_secret": True,
         "results": results,
     }
+
+
+@router.post("/{integration_id}/assign", response_model=IntegrationResponse)
+def assign_integration_projects(
+    integration_id: str,
+    req: IntegrationProjectAssignmentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db, require_write=True)
+
+    current_assigned = set(integ.assigned_projects or [])
+    for pid in req.project_ids:
+        verify_project_access(pid, current_user, db, require_write=True)
+        existing = db.query(IntegrationProjectAccess).filter(
+            IntegrationProjectAccess.integration_id == integ.id,
+            IntegrationProjectAccess.project_id == pid,
+        ).first()
+        if not existing:
+            db.add(IntegrationProjectAccess(integration_id=integ.id, project_id=pid))
+        current_assigned.add(pid)
+
+    integ.assigned_projects = list(current_assigned)
+    db.commit()
+    db.refresh(integ)
+    return _to_response(integ, current_user=current_user)
+
+
+@router.post("/{integration_id}/unassign", response_model=IntegrationResponse)
+def unassign_integration_projects(
+    integration_id: str,
+    req: IntegrationProjectAssignmentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    integ = db.query(Integration).filter(Integration.id == integration_id).first()
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    verify_project_access(integ.project_id, current_user, db, require_write=True)
+
+    current_assigned = set(integ.assigned_projects or [])
+    for pid in req.project_ids:
+        db.query(IntegrationProjectAccess).filter(
+            IntegrationProjectAccess.integration_id == integ.id,
+            IntegrationProjectAccess.project_id == pid,
+        ).delete()
+        current_assigned.discard(pid)
+
+    integ.assigned_projects = list(current_assigned)
+    db.commit()
+    db.refresh(integ)
+    return _to_response(integ, current_user=current_user)
 
 
 @router.post("/{integration_id}/disconnect")

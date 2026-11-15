@@ -68,6 +68,7 @@ ALTER TABLE IF EXISTS password_reset_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS project_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS integrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS integration_project_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS source_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS source_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS documents ENABLE ROW LEVEL SECURITY;
@@ -146,7 +147,31 @@ CREATE POLICY "obsidian_project_members_isolation" ON project_members
 
 -- Project-scoped tables
 CREATE POLICY "obsidian_integrations_isolation" ON integrations
-    FOR ALL USING (user_id = public.current_app_user_id() OR public.user_can_access_project(project_id));
+    FOR ALL USING (
+        authorized_by_user_id = public.current_app_user_id()
+        OR user_id = public.current_app_user_id()
+        OR (
+            connection_type = 'organization'
+            AND (
+                public.user_can_access_project(project_id)
+                OR EXISTS (
+                    SELECT 1 FROM integration_project_access ipa
+                    WHERE ipa.integration_id = integrations.id
+                      AND public.user_can_access_project(ipa.project_id)
+                )
+            )
+        )
+    );
+
+CREATE POLICY "obsidian_integration_project_access_isolation" ON integration_project_access
+    FOR ALL USING (
+        public.user_can_access_project(project_id)
+        OR EXISTS (
+            SELECT 1 FROM integrations i
+            WHERE i.id = integration_id
+              AND (i.authorized_by_user_id = public.current_app_user_id() OR i.user_id = public.current_app_user_id())
+        )
+    );
 
 CREATE POLICY "obsidian_source_records_isolation" ON source_records
     FOR ALL USING (public.user_can_access_project(project_id));

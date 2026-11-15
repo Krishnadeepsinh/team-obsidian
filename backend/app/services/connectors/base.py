@@ -129,3 +129,72 @@ class BaseConnector(ABC):
     def exchange_oauth_code(cls, code: str, redirect_uri: str) -> Dict[str, Any]:
         raise ConnectorError(f"OAuth token exchange is not configured for {cls.provider_name}.")
 
+
+def ensure_valid_token(integration: Any, db: Any = None) -> Optional[str]:
+    """Ensure that integration credentials have a valid, active access token.
+    If the token is expired or within 5 minutes of expiring, automatically refresh it
+    using the provider's refresh mechanism and update the database record.
+    """
+    from datetime import timedelta
+    from app.core.security import decrypt_credentials, encrypt_credentials
+    from app.services.connectors import get_connector_class
+
+    if not integration or not getattr(integration, "credentials", None):
+        return None
+
+    creds = decrypt_credentials(integration.credentials) if isinstance(integration.credentials, (dict, str)) else {}
+    current_token = (
+        creds.get("access_token")
+        or creds.get("token")
+        or creds.get("api_key")
+        or creds.get("bot_token")
+    )
+
+    now_utc = datetime.now(timezone.utc)
+    token_expires_at = getattr(integration, "token_expires_at", None)
+    if token_expires_at and token_expires_at.tzinfo is None:
+        token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
+
+    # If token expires in more than 5 minutes, it is still valid
+    if current_token and token_expires_at and token_expires_at > (now_utc + timedelta(minutes=5)):
+        return current_token
+
+    refresh_token = creds.get("refresh_token")
+    if not refresh_token:
+        return current_token
+
+    connector_cls = get_connector_class(getattr(integration, "provider", ""))
+    if not connector_cls or not hasattr(connector_cls, "refresh_oauth_token"):
+        return current_token
+
+    try:
+        new_bundle = connector_cls.refresh_oauth_token(refresh_token)
+        merged = {**creds, **new_bundle}
+        integration.credentials = encrypt_credentials(merged)
+        integration.error_message = None
+        integration.status = "connected"
+        integration.auth_status = "verified"
+        if "expires_in" in new_bundle and new_bundle["expires_in"]:
+            integration.token_expires_at = now_utc + timedelta(seconds=int(new_bundle["expires_in"]))
+        if db:
+            db.commit()
+            db.refresh(integration)
+        return merged.get("access_token") or merged.get("token")
+    except Exception as exc:
+        logger.warning(
+            "Failed to refresh OAuth token for integration %s (%s): %s",
+            getattr(integration, "id", "unknown"),
+            getattr(integration, "provider", "unknown"),
+            exc,
+        )
+        integration.status = "token_expired"
+        integration.auth_status = "revoked"
+        integration.error_message = f"Token expired or refresh failed: {exc}"
+        if db:
+            try:
+                db.commit()
+                db.refresh(integration)
+            except Exception:
+                db.rollback()
+        return current_token
+

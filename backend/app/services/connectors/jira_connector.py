@@ -116,6 +116,8 @@ class JiraConnector(BaseConnector):
                     "connected_account": acct,
                     "site_url": site_url,
                     "cloud_id": self.cloud_id,
+                    "external_org_id": self.cloud_id,
+                    "external_org_name": site_url or "Atlassian Jira Site",
                     "scopes": ["read:jira-work", "read:jira-user"],
                 }
             if self.auth_mode == "oauth":

@@ -813,7 +813,7 @@ function IntegrationsContent() {
             (i) =>
               i.provider === card.key &&
               i.status === "connected" &&
-              (!activeProject || i.project_id === activeProject)
+              (!activeProject || i.project_id === activeProject || i.is_assigned_to_current_project)
           )
           return (
             <div
@@ -923,8 +923,21 @@ function IntegrationsContent() {
                           </span>
                           <span
                             className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                              integ.connection_type === "personal"
+                                ? "bg-blue-50 text-blue-700 border-blue-200"
+                                : "bg-purple-50 text-purple-700 border-purple-200"
+                            }`}
+                          >
+                            {integ.connection_type === "personal" ? "👤 Personal" : "🏢 Org Connection"}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
                               isConn
                                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : integ.status === "syncing"
+                                ? "bg-blue-50 text-blue-700 border-blue-200"
+                                : integ.status === "token_expired" || integ.status === "permission_required"
+                                ? "bg-amber-50 text-amber-700 border-amber-200"
                                 : "bg-rose-50 text-rose-700 border-rose-200"
                             }`}
                           >
@@ -945,11 +958,29 @@ function IntegrationsContent() {
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] space-y-1 text-slate-600">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] space-y-1.5 text-slate-600">
                     <div>
                       <strong className="text-slate-700">Account:</strong>{" "}
                       {integ.connected_account || "Not yet verified"}
                     </div>
+                    {(integ.external_org_name || integ.external_org_id) && (
+                      <div>
+                        <strong className="text-slate-700">Target Org / Workspace:</strong>{" "}
+                        <span className="font-semibold text-slate-800">{integ.external_org_name || integ.external_org_id}</span>
+                      </div>
+                    )}
+                    {integ.authorized_by_email && (
+                      <div>
+                        <strong className="text-slate-700">Authorized by:</strong>{" "}
+                        <span className="text-slate-600">{integ.authorized_by_email}</span>
+                      </div>
+                    )}
+                    {integ.token_expires_at && (
+                      <div>
+                        <strong className="text-slate-700">Token Expiry:</strong>{" "}
+                        <span className="text-slate-600">{new Date(integ.token_expires_at).toLocaleString()}</span>
+                      </div>
+                    )}
                     {(() => {
                       const targetList = parseTargetsFromConfig(integ.provider, integ.config || {})
                       return (
@@ -1219,8 +1250,16 @@ function IntegrationsContent() {
                         Right after authorization, your {resourceNoun(connectProvider).toLowerCase()} picker opens automatically — no manual API key required.
                       </div>
                       {connectProvider === "slack" && (
-                        <div className="p-2.5 rounded-lg bg-white/80 border border-violet-200 text-[11px] text-slate-600 leading-snug">
-                          <span className="font-semibold text-slate-800">Multi-Workspace Notice:</span> OAuth targets your development workspace. If you switch devices or encounter Slack&apos;s workspace error, you can also connect instantly via the <button type="button" onClick={() => setConnectAuthTab("token")} className="font-semibold text-violet-700 underline">API / PAT Token</button> tab with your Bot Token (<code className="font-mono bg-violet-100/70 px-1 py-0.5 rounded text-[10px]">xoxb-...</code>).
+                        <div className="p-3 rounded-lg bg-amber-50/90 border border-amber-200 text-[11px] text-amber-900 leading-snug space-y-1">
+                          <p className="font-semibold flex items-center gap-1.5 text-amber-800">
+                            ⚠️ Slack Workspace Installation Tip:
+                          </p>
+                          <p>
+                            If Slack displays <code className="font-mono bg-amber-100 px-1 py-0.5 rounded text-[10px]">invalid_team_for_non_distributed_app</code>, your Slack App in api.slack.com is restricted to its development workspace.
+                          </p>
+                          <p>
+                            To connect from another device or workspace, simply click <button type="button" onClick={() => setConnectAuthTab("token")} className="font-bold underline text-violet-700">Connect via Bot Token</button> and paste your Bot User OAuth Token (<code className="font-mono bg-amber-100 px-1 py-0.5 rounded text-[10px]">xoxb-...</code>).
+                          </p>
                         </div>
                       )}
                       <div className="flex items-center justify-between gap-2 pt-1">

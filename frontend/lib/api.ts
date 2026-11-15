@@ -605,6 +605,16 @@ export const api = {
     fetchJson<any>(`/integrations/${id}/reconnect`, { method: "POST", body: JSON.stringify(data) }),
   deleteIntegration: async (id: string) =>
     fetchJson<any>(`/integrations/${id}`, { method: "DELETE" }),
+  assignIntegrationProjects: async (id: string, projectIds: string[]) =>
+    fetchJson<any>(`/integrations/${id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
+  unassignIntegrationProjects: async (id: string, projectIds: string[]) =>
+    fetchJson<any>(`/integrations/${id}/unassign`, {
+      method: "POST",
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
   getIntegrationJobs: async (projectId?: string, limit: number = 20) => {
     const params = new URLSearchParams()
     if (projectId) params.set("project_id", projectId)

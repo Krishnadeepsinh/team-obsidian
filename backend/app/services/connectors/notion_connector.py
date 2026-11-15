@@ -90,11 +90,14 @@ class NotionConnector(BaseConnector):
                 data = res.json()
                 bot_info = data.get("bot") or {}
                 ws_name = bot_info.get("workspace_name") or data.get("name") or "Notion Workspace"
+                ws_id = bot_info.get("workspace_id") or bot_info.get("owner", {}).get("workspace_id")
                 return {
                     "status": "connected",
                     "auth_type": "bearer_token",
                     "bot_name": data.get("name", "TEAM OBSIDIAN Bot"),
                     "connected_account": ws_name,
+                    "external_org_name": ws_name,
+                    "external_org_id": ws_id,
                     "scopes": ["read_content", "read_user"],
                 }
             return {"status": "error", "message": f"Notion auth failed ({res.status_code}): {res.text[:200]}"}

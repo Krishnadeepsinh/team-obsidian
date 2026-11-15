@@ -116,11 +116,23 @@ class GitLabConnector(BaseConnector):
             res = self._request_with_retry("GET", f"{self.base_url}/user", headers=self.headers, timeout=8)
             if res.status_code == 200:
                 data = res.json()
+                external_org_id = None
+                external_org_name = None
+                try:
+                    groups_res = self._request_with_retry("GET", f"{self.base_url}/groups", headers=self.headers, params={"min_access_level": 30, "per_page": 5}, timeout=6)
+                    if groups_res.status_code == 200 and isinstance(groups_res.json(), list) and len(groups_res.json()) > 0:
+                        first_group = groups_res.json()[0]
+                        external_org_id = str(first_group.get("id"))
+                        external_org_name = first_group.get("name") or first_group.get("path")
+                except Exception:
+                    pass
                 return {
                     "status": "connected",
                     "auth_type": "pat" if self.token.startswith("glpat-") else "oauth_token",
                     "connected_account": data.get("username") or data.get("email") or data.get("name"),
                     "name": data.get("name"),
+                    "external_org_id": external_org_id,
+                    "external_org_name": external_org_name,
                     "scopes": ["read_api", "read_user", "read_repository"],
                 }
             return {"status": "error", "message": f"GitLab auth failed ({res.status_code}): {res.text[:200]}"}
