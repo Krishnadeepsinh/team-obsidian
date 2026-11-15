@@ -29,6 +29,13 @@ from app.services.storage_service import storage_service
 logger = logging.getLogger("team_obsidian.documents")
 router = APIRouter(prefix="/documents", tags=["Document Library"])
 
+def get_upload_dir() -> str:
+    """Resolve active upload directory dynamically from settings or module override."""
+    target = globals().get("UPLOAD_DIR") or str(settings.UPLOAD_DIR)
+    os.makedirs(target, exist_ok=True)
+    return str(target)
+
+
 UPLOAD_DIR = str(settings.UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -53,7 +60,8 @@ def _safe_disk_name(sha_prefix: str, filename: str) -> str:
     clean_ext = re.sub(r"[^A-Za-z0-9]+", "", ext.lstrip("."))[:16]
     suffix = f".{clean_ext}" if clean_ext else ""
     max_path_total = 220
-    budget = max(16, min(80, max_path_total - len(UPLOAD_DIR) - len(sha_prefix) - len(suffix) - 4))
+    upload_dir = get_upload_dir()
+    budget = max(16, min(80, max_path_total - len(upload_dir) - len(sha_prefix) - len(suffix) - 4))
     return f"{sha_prefix}_{clean_stem[:budget]}{suffix}"
 
 

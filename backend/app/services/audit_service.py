@@ -3,6 +3,21 @@ from sqlalchemy.orm import Session
 from app.models.workspace import ActivityLog, Notification
 
 
+def _scrub_sensitive_dict(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Recursively redact secrets and token keys from audit details."""
+    if not isinstance(data, dict):
+        return {}
+    scrubbed: Dict[str, Any] = {}
+    for k, v in data.items():
+        if any(marker in str(k).lower() for marker in ("token", "secret", "password", "authorization", "key", "credential")):
+            scrubbed[k] = "[REDACTED]"
+        elif isinstance(v, dict):
+            scrubbed[k] = _scrub_sensitive_dict(v)
+        else:
+            scrubbed[k] = v
+    return scrubbed
+
+
 def record_activity(
     db: Session,
     action: str,
@@ -15,7 +30,7 @@ def record_activity(
     details: Optional[Dict[str, Any]] = None,
     ip_address: Optional[str] = None,
 ) -> ActivityLog:
-    """Create a structured multi-tenant audit log record."""
+    """Create a structured multi-tenant audit log record with automatic secret redaction."""
     log = ActivityLog(
         project_id=project_id,
         user_id=user_id,
@@ -24,7 +39,7 @@ def record_activity(
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
-        details=details or {},
+        details=_scrub_sensitive_dict(details),
         ip_address=ip_address,
     )
     db.add(log)

@@ -1,0 +1,7 @@
+.git/
+.env*
+*.log
+node_modules/
+.next/
+__pycache__/
+

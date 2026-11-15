@@ -10,6 +10,13 @@ from app.core.config import settings
 
 logger = logging.getLogger("team_obsidian.storage")
 
+def get_upload_dir() -> str:
+    """Resolve active upload directory dynamically from settings or module override."""
+    target = globals().get("UPLOAD_DIR") or str(settings.UPLOAD_DIR)
+    os.makedirs(target, exist_ok=True)
+    return str(target)
+
+
 UPLOAD_DIR = str(settings.UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -89,8 +96,8 @@ class StorageService:
     ) -> Dict[str, Optional[str]]:
         """Persist raw binary to Supabase Storage when configured and write local cache path with content-addressable dedup."""
         safe_name = _safe_key_filename(sha256_hash[:16], filename)
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        local_path = os.path.join(UPLOAD_DIR, safe_name)[:500]
+        upload_dir = get_upload_dir()
+        local_path = os.path.join(upload_dir, safe_name)[:500]
         # Content-addressable deduplication: if exact content exists at local_path, reuse it
         if not (os.path.exists(local_path) and os.path.getsize(local_path) == len(file_bytes)):
             try:

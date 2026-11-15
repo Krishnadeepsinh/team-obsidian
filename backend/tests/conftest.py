@@ -3,6 +3,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+import pytest
 
 # Ensure the backend directory is always in sys.path for test collection
 BACKEND_DIR = str(Path(__file__).resolve().parent.parent)
@@ -34,6 +35,26 @@ try:
     settings.REPORTS_DIR = TEST_REPORTS_DIR
 except Exception:
     pass
+
+
+@pytest.fixture(autouse=True)
+def isolate_storage_dirs(tmp_path, monkeypatch):
+    """Isolate uploads and generated reports per test to prevent leaking to real directories."""
+    uploads = tmp_path / "uploads"
+    reports = tmp_path / "generated_reports"
+    uploads.mkdir(exist_ok=True)
+    reports.mkdir(exist_ok=True)
+
+    from app.core.config import settings
+    from app.services import storage_service, pdf_generator
+    from app.api.v1 import documents, handover
+
+    monkeypatch.setattr(settings, "UPLOAD_DIR", uploads, raising=False)
+    monkeypatch.setattr(settings, "REPORTS_DIR", reports, raising=False)
+    monkeypatch.setattr(storage_service, "UPLOAD_DIR", str(uploads), raising=False)
+    monkeypatch.setattr(documents, "UPLOAD_DIR", str(uploads), raising=False)
+    monkeypatch.setattr(pdf_generator, "REPORTS_DIR", reports, raising=False)
+    monkeypatch.setattr(handover, "REPORTS_DIR", reports, raising=False)
 
 
 def pytest_sessionfinish(session, exitstatus):

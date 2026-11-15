@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -20,6 +21,16 @@ class GoogleDriveConnector(BaseConnector):
     OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
     OAUTH_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+    MAX_STREAMING_BYTES: int = 20 * 1024 * 1024  # 20 MB streaming cap to prevent container OOM
+
+    @staticmethod
+    def _sanitize_message(message: str) -> str:
+        """Scrub tokens, credentials, and authorization headers from error messages."""
+        if not message:
+            return ""
+        scrubbed = re.sub(r"(Bearer\s+)[A-Za-z0-9_\-\.]+", r"\1[REDACTED_TOKEN]", str(message), flags=re.IGNORECASE)
+        scrubbed = re.sub(r"((?:client_secret|refresh_token|access_token|code)=)[^&\s]+", r"\1[REDACTED]", scrubbed, flags=re.IGNORECASE)
+        return scrubbed
 
     def __init__(self, token: Optional[str] = None):
         super().__init__(token)
@@ -251,8 +262,36 @@ class GoogleDriveConnector(BaseConnector):
             timeout=15,
         )
         if res.status_code != 200:
-            raise ConnectorError(f"Google Drive OAuth token exchange failed: {res.text}")
+            raise ConnectorError(f"Google Drive OAuth token exchange failed: {cls._sanitize_message(res.text)}")
         return res.json()
+
+    def download_file_content(self, file_id: str, mime_type: Optional[str] = None) -> bytes:
+        """Stream file content with strict 20 MB cap to prevent OOM."""
+        is_google_doc = mime_type and mime_type.startswith("application/vnd.google-apps")
+        if is_google_doc:
+            url = f"{self.API_BASE}/files/{file_id}/export"
+            params = {"mimeType": "text/plain"}
+        else:
+            url = f"{self.API_BASE}/files/{file_id}?alt=media"
+            params = {}
+
+        try:
+            with requests.get(url, headers=self._headers(), params=params, stream=True, timeout=30) as res:
+                if res.status_code != 200:
+                    raise ConnectorError(self._sanitize_message(f"Failed to download Drive file {file_id}: status {res.status_code}"))
+                chunks = []
+                total = 0
+                for chunk in res.iter_content(chunk_size=65536):
+                    if chunk:
+                        total += len(chunk)
+                        if total > self.MAX_STREAMING_BYTES:
+                            raise ConnectorError(f"Drive file {file_id} exceeds {self.MAX_STREAMING_BYTES // (1024*1024)}MB streaming cap.")
+                        chunks.append(chunk)
+                return b"".join(chunks)
+        except Exception as exc:
+            if isinstance(exc, ConnectorError):
+                raise
+            raise ConnectorError(self._sanitize_message(f"Drive download failed: {exc}"))
 
 
 google_drive_connector = GoogleDriveConnector()
