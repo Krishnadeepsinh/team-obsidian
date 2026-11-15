@@ -17,7 +17,7 @@
 
 ## Project Demonstration
 
-https://github.com/user-attachments/assets/d7713980-e606-4bd2-9ef1-8213a07785b5
+https://github.com/user-attachments/assets/3d2a38bc-f004-4df9-9d09-f27a9d6c43ab
 
 ---
 
