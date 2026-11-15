@@ -91,6 +91,8 @@ ALTER TABLE IF EXISTS handover_approvals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS handover_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS activity_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS integrations FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS integration_project_access FORCE ROW LEVEL SECURITY;
 
 -- Drop legacy policies if present so script is safely re-runnable
 DO $$

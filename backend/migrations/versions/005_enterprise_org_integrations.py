@@ -169,3 +169,4 @@ def downgrade() -> None:
     ]:
         if _has_column(insp, "integrations", col):
             op.drop_column("integrations", col)
+

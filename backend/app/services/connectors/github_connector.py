@@ -1,7 +1,10 @@
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
+
+import jwt
 
 from app.core.config import settings
 from app.services.connectors.base import (
@@ -102,6 +105,63 @@ class GitHubConnector(BaseConnector):
             "token_type": payload.get("token_type", "bearer"),
             "refresh_token": payload.get("refresh_token") or refresh_token,
             **({"expires_in": payload["expires_in"]} if payload.get("expires_in") else {}),
+        }
+
+    @classmethod
+    def create_app_jwt(cls, app_id: Optional[str] = None, private_key: Optional[str] = None) -> str:
+        """Sign a short-lived RS256 JWT using the GitHub App's private key for App-level authentication."""
+        resolved_app_id = (app_id or getattr(settings, "GITHUB_APP_ID", "") or "").strip()
+        resolved_key = (private_key or getattr(settings, "GITHUB_APP_PRIVATE_KEY", "") or "").strip()
+        if not resolved_app_id or not resolved_key:
+            raise ConnectorError("GitHub App ID and Private Key are required to generate an App JWT.")
+        # Support literal newlines if passed in single-line env var
+        if "\\n" in resolved_key:
+            resolved_key = resolved_key.replace("\\n", "\n")
+        now_ts = int(time.time())
+        payload = {
+            "iat": now_ts - 60,
+            "exp": now_ts + (9 * 60),
+            "iss": resolved_app_id,
+        }
+        try:
+            return jwt.encode(payload, resolved_key, algorithm="RS256")
+        except Exception as exc:
+            raise ConnectorError(f"Failed to generate GitHub App JWT: {exc}") from exc
+
+    @classmethod
+    def create_installation_access_token(
+        cls,
+        installation_id: str,
+        app_id: Optional[str] = None,
+        private_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Mint a short-lived (1 hour) GitHub App installation access token using the GitHub App private key."""
+        app_jwt = cls.create_app_jwt(app_id=app_id, private_key=private_key)
+        connector = cls()
+        res = connector._request_with_retry(
+            "POST",
+            f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+            headers={
+                "Authorization": f"Bearer {app_jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=12,
+        )
+        payload = res.json() if res.text else {}
+        token = payload.get("token")
+        if res.status_code != 201 or not token:
+            raise ConnectorError(
+                f"GitHub App installation token generation failed ({res.status_code}): {payload.get('message') or res.text[:200]}"
+            )
+        return {
+            "token": token,
+            "access_token": token,
+            "token_type": "bearer",
+            "expires_in": 3600,
+            "token_expires_at": payload.get("expires_at"),
+            "permissions": payload.get("permissions", {}),
+            "repositories": payload.get("repositories", []),
         }
 
     def check_connection(self) -> Dict[str, Any]:

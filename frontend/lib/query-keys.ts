@@ -29,6 +29,12 @@ export const queryKeys = {
   notifications: {
     list: (userId?: string) => ["notifications", "list", userId || "anonymous"] as const,
   },
+  integrations: {
+    list: (userId?: string, workspaceId?: string, projectId?: string) =>
+      ["integrations", "list", userId || "anonymous", workspaceId || "all", projectId || "all"] as const,
+    detail: (userId?: string, integrationId?: string) =>
+      ["integrations", "detail", userId || "anonymous", integrationId || ""] as const,
+  },
   knowledge: {
     explorer: (
       userId?: string,

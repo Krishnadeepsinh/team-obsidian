@@ -121,6 +121,8 @@ class Settings:
     GITHUB_CLIENT_ID: str = os.getenv("GITHUB_CLIENT_ID", "")
     GITHUB_CLIENT_SECRET: str = os.getenv("GITHUB_CLIENT_SECRET", "")
     GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
+    GITHUB_APP_ID: str = os.getenv("GITHUB_APP_ID", "")
+    GITHUB_APP_PRIVATE_KEY: str = os.getenv("GITHUB_APP_PRIVATE_KEY", "")
 
     SLACK_CLIENT_ID: str = os.getenv("SLACK_CLIENT_ID", "")
     SLACK_CLIENT_SECRET: str = os.getenv("SLACK_CLIENT_SECRET", "")

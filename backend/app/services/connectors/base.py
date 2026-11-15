@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -7,6 +8,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 logger = logging.getLogger("team_obsidian.connectors")
+
+_REFRESH_LOCKS: Dict[str, threading.Lock] = {}
+_META_LOCK = threading.Lock()
+
+
+def _get_integration_lock(integration_id: str) -> threading.Lock:
+    with _META_LOCK:
+        if integration_id not in _REFRESH_LOCKS:
+            _REFRESH_LOCKS[integration_id] = threading.Lock()
+        return _REFRESH_LOCKS[integration_id]
 
 
 def compute_sha256(content: str) -> str:
@@ -134,6 +145,13 @@ def ensure_valid_token(integration: Any, db: Any = None) -> Optional[str]:
     """Ensure that integration credentials have a valid, active access token.
     If the token is expired or within 5 minutes of expiring, automatically refresh it
     using the provider's refresh mechanism and update the database record.
+
+    Features:
+    - Protects against concurrent refresh race conditions via per-integration locking.
+    - Accurately distinguishes permanent tokens (PATs, Notion secrets, non-rotating Slack bots) vs refreshable OAuth tokens.
+    - Supports GitHub App installation token generation with private key RS256 JWTs.
+    - Preserves existing credentials and handles transient network errors without falsely marking tokens as revoked.
+    - Marks status='token_expired' and auth_status='revoked' on permanent invalid_grant rejections.
     """
     from datetime import timedelta
     from app.core.security import decrypt_credentials, encrypt_credentials
@@ -142,59 +160,105 @@ def ensure_valid_token(integration: Any, db: Any = None) -> Optional[str]:
     if not integration or not getattr(integration, "credentials", None):
         return None
 
-    creds = decrypt_credentials(integration.credentials) if isinstance(integration.credentials, (dict, str)) else {}
-    current_token = (
-        creds.get("access_token")
-        or creds.get("token")
-        or creds.get("api_key")
-        or creds.get("bot_token")
-    )
+    integ_id = getattr(integration, "id", "anonymous")
+    lock = _get_integration_lock(integ_id)
 
-    now_utc = datetime.now(timezone.utc)
-    token_expires_at = getattr(integration, "token_expires_at", None)
-    if token_expires_at and token_expires_at.tzinfo is None:
-        token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
-
-    # If token expires in more than 5 minutes, it is still valid
-    if current_token and token_expires_at and token_expires_at > (now_utc + timedelta(minutes=5)):
-        return current_token
-
-    refresh_token = creds.get("refresh_token")
-    if not refresh_token:
-        return current_token
-
-    connector_cls = get_connector_class(getattr(integration, "provider", ""))
-    if not connector_cls or not hasattr(connector_cls, "refresh_oauth_token"):
-        return current_token
-
-    try:
-        new_bundle = connector_cls.refresh_oauth_token(refresh_token)
-        merged = {**creds, **new_bundle}
-        integration.credentials = encrypt_credentials(merged)
-        integration.error_message = None
-        integration.status = "connected"
-        integration.auth_status = "verified"
-        if "expires_in" in new_bundle and new_bundle["expires_in"]:
-            integration.token_expires_at = now_utc + timedelta(seconds=int(new_bundle["expires_in"]))
-        if db:
-            db.commit()
-            db.refresh(integration)
-        return merged.get("access_token") or merged.get("token")
-    except Exception as exc:
-        logger.warning(
-            "Failed to refresh OAuth token for integration %s (%s): %s",
-            getattr(integration, "id", "unknown"),
-            getattr(integration, "provider", "unknown"),
-            exc,
-        )
-        integration.status = "token_expired"
-        integration.auth_status = "revoked"
-        integration.error_message = f"Token expired or refresh failed: {exc}"
-        if db:
+    with lock:
+        # Re-read database state if db session provided to prevent duplicate refresh across threads
+        if db and hasattr(integration, "id"):
             try:
-                db.commit()
                 db.refresh(integration)
             except Exception:
-                db.rollback()
-        return current_token
+                pass
+
+        creds = decrypt_credentials(integration.credentials) if isinstance(integration.credentials, (dict, str)) else {}
+        current_token = (
+            creds.get("access_token")
+            or creds.get("token")
+            or creds.get("api_key")
+            or creds.get("bot_token")
+        )
+
+        now_utc = datetime.now(timezone.utc)
+        token_expires_at = getattr(integration, "token_expires_at", None)
+        if token_expires_at and token_expires_at.tzinfo is None:
+            token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
+
+        # Permanent tokens: no expiry and no refresh token or installation_id -> immediately valid
+        refresh_token = creds.get("refresh_token")
+        provider = getattr(integration, "provider", "")
+        is_github_app = provider == "github" and bool(creds.get("installation_id"))
+
+        if not refresh_token and not is_github_app and not token_expires_at:
+            return current_token
+
+        # If token has an expiry date that is still comfortably in the future (> 5 min), return it
+        if current_token and token_expires_at and token_expires_at > (now_utc + timedelta(minutes=5)):
+            return current_token
+
+        # If it's a standard OAuth token without a refresh_token and expired, return current token
+        if not refresh_token and not is_github_app:
+            return current_token
+
+        connector_cls = get_connector_class(provider)
+        if not connector_cls:
+            return current_token
+
+        try:
+            if is_github_app and hasattr(connector_cls, "create_installation_access_token"):
+                new_bundle = connector_cls.create_installation_access_token(
+                    installation_id=str(creds["installation_id"]),
+                    app_id=creds.get("app_id"),
+                    private_key=creds.get("private_key"),
+                )
+            elif refresh_token and hasattr(connector_cls, "refresh_oauth_token"):
+                new_bundle = connector_cls.refresh_oauth_token(refresh_token)
+            else:
+                return current_token
+
+            merged = {**creds, **new_bundle}
+            integration.credentials = encrypt_credentials(merged)
+            integration.error_message = None
+            integration.status = "connected"
+            integration.auth_status = "verified"
+            if "expires_in" in new_bundle and new_bundle["expires_in"]:
+                integration.token_expires_at = now_utc + timedelta(seconds=int(new_bundle["expires_in"]))
+            elif "token_expires_at" in new_bundle and new_bundle["token_expires_at"]:
+                exp = new_bundle["token_expires_at"]
+                if isinstance(exp, str):
+                    try:
+                        integration.token_expires_at = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+                    except Exception:
+                        integration.token_expires_at = now_utc + timedelta(seconds=3600)
+                elif isinstance(exp, datetime):
+                    integration.token_expires_at = exp
+            if db:
+                db.commit()
+                db.refresh(integration)
+            return merged.get("access_token") or merged.get("token")
+        except Exception as exc:
+            err_str = str(exc).lower()
+            # Distinguish transient network issues from permanent credential revocation
+            is_transient = any(w in err_str for w in ["timeout", "connection refused", "failed to fetch", "502", "503", "504", "reset by peer"])
+            logger.warning(
+                "Failed to refresh token for integration %s (%s, transient=%s): %s",
+                integ_id,
+                provider,
+                is_transient,
+                exc,
+            )
+            if not is_transient:
+                integration.status = "token_expired"
+                integration.auth_status = "revoked"
+                integration.error_message = f"Token revoked or refresh failed: {exc}"
+            else:
+                integration.error_message = f"Transient refresh warning: {exc}"
+
+            if db:
+                try:
+                    db.commit()
+                    db.refresh(integration)
+                except Exception:
+                    db.rollback()
+            return current_token
 

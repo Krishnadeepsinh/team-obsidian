@@ -74,6 +74,17 @@ class DiscoverResourcesRequest(BaseModel):
     credentials: Optional[Dict[str, Any]] = None
 
 
+def check_can_manage_integration(integ: Integration, user: Optional[User], db: Optional[Session] = None) -> bool:
+    """Enforce Enterprise RBAC: only org admins, workspace owners, tech leads, or the authorizing developer can manage an integration."""
+    if not user:
+        return False
+    if getattr(user, "role", "") in ("admin", "org_admin", "workspace_owner", "project_owner", "tech_lead"):
+        return True
+    if getattr(integ, "authorized_by_user_id", None) == user.id or getattr(integ, "user_id", None) == user.id:
+        return True
+    return False
+
+
 def _to_response(
     i: Integration,
     current_user: Optional[User] = None,
@@ -87,12 +98,7 @@ def _to_response(
     elif i.project_id:
         assigned_pids = [i.project_id]
 
-    can_manage = False
-    if current_user:
-        if current_user.role in ("admin", "org_admin", "workspace_owner", "project_owner", "tech_lead"):
-            can_manage = True
-        elif i.authorized_by_user_id == current_user.id or i.user_id == current_user.id:
-            can_manage = True
+    can_manage = check_can_manage_integration(i, current_user)
 
     is_assigned = True
     if current_project_id:
@@ -1276,6 +1282,8 @@ def assign_integration_projects(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
+    if not check_can_manage_integration(integ, current_user, db):
+        raise HTTPException(status_code=403, detail="Only workspace administrators or the connecting user can manage project assignments.")
 
     current_assigned = set(integ.assigned_projects or [])
     for pid in req.project_ids:
@@ -1305,6 +1313,8 @@ def unassign_integration_projects(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
+    if not check_can_manage_integration(integ, current_user, db):
+        raise HTTPException(status_code=403, detail="Only workspace administrators or the connecting user can manage project assignments.")
 
     current_assigned = set(integ.assigned_projects or [])
     for pid in req.project_ids:
@@ -1330,6 +1340,8 @@ def disconnect_integration(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
+    if not check_can_manage_integration(integ, current_user, db):
+        raise HTTPException(status_code=403, detail="Only workspace administrators or the connecting user can disconnect this integration.")
 
     integ.status = "disconnected"
     integ.auth_status = "revoked"
@@ -1359,6 +1371,8 @@ def reconnect_integration(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
+    if not check_can_manage_integration(integ, current_user, db):
+        raise HTTPException(status_code=403, detail="Only workspace administrators or the connecting user can reconnect this integration.")
 
     creds_to_check = req.credentials or decrypt_credentials(integ.credentials)
     token = _token_from_dict(creds_to_check)
@@ -1395,6 +1409,8 @@ def delete_integration(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_admin=True)
+    if not check_can_manage_integration(integ, current_user, db):
+        raise HTTPException(status_code=403, detail="Only workspace administrators or the connecting user can delete this integration.")
 
     name = integ.name
     record_activity(
