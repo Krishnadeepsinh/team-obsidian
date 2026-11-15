@@ -966,7 +966,12 @@ function IntegrationsContent() {
                                 : "bg-purple-50 text-purple-700 border-purple-200"
                             }`}
                           >
-                            {integ.connection_type === "personal" ? "👤 Personal" : "🏢 Org Connection"}
+                            {integ.identity_type === "organization_app" && "🏢 Organization App"}
+                            {integ.identity_type === "organization_tenant" && "🏢 Org Tenant"}
+                            {integ.identity_type === "workspace_bot" && "🤖 Workspace Bot"}
+                            {integ.identity_type === "group_level" && "📦 Group Level"}
+                            {integ.identity_type === "personal_account" && "👤 Personal Account"}
+                            {!integ.identity_type && (integ.connection_type === "personal" ? "👤 Personal" : "🏢 Org Connection")}
                           </span>
                           <span
                             className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${

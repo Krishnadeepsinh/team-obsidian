@@ -173,32 +173,47 @@ class GitHubConnector(BaseConnector):
                 "rate_limit_remaining": 0,
             }
         try:
+            # 1. Attempt /user endpoint (valid for OAuth User tokens and PATs)
             res = self._request_with_retry("GET", f"{self.base_url}/user", headers=self.headers, timeout=8)
             if res.status_code == 200:
                 data = res.json()
                 raw_scopes = res.headers.get("X-OAuth-Scopes", "")
                 scopes = [s.strip() for s in raw_scopes.split(",") if s.strip()]
-                external_org_id = None
-                external_org_name = None
-                try:
-                    orgs_res = self._request_with_retry("GET", f"{self.base_url}/user/orgs", headers=self.headers, timeout=6)
-                    if orgs_res.status_code == 200 and isinstance(orgs_res.json(), list) and len(orgs_res.json()) > 0:
-                        first_org = orgs_res.json()[0]
-                        external_org_id = str(first_org.get("id") or first_org.get("login"))
-                        external_org_name = first_org.get("login")
-                except Exception:
-                    pass
+                is_pat = bool(self.token.startswith("ghp_") or self.token.startswith("github_pat_"))
                 return {
                     "status": "connected",
-                    "auth_type": "oauth_token",
+                    "auth_type": "pat" if is_pat else "oauth_token",
+                    "identity_type": "personal_account",
                     "login": data.get("login"),
                     "connected_account": data.get("login") or data.get("email"),
                     "name": data.get("name"),
-                    "external_org_id": external_org_id,
-                    "external_org_name": external_org_name,
+                    "external_org_id": None,
+                    "external_org_name": None,
                     "scopes": scopes,
                     "rate_limit_remaining": int(res.headers.get("X-RateLimit-Remaining", 5000)),
                 }
+
+            # 2. If /user fails, check whether token is a GitHub App Installation Access Token (ghs_...)
+            app_res = self._request_with_retry("GET", f"{self.base_url}/installation/repositories", headers=self.headers, timeout=8)
+            if app_res.status_code == 200:
+                app_data = app_res.json()
+                repos = app_data.get("repositories") or []
+                owner_info = repos[0].get("owner") if repos else {}
+                org_name = owner_info.get("login") or "GitHub Organization"
+                org_id = str(owner_info.get("id") or "")
+                return {
+                    "status": "connected",
+                    "auth_type": "app_installation",
+                    "identity_type": "organization_app",
+                    "login": org_name,
+                    "connected_account": f"GitHub App ({org_name})",
+                    "name": org_name,
+                    "external_org_id": org_id,
+                    "external_org_name": org_name,
+                    "scopes": ["issues", "pull_requests", "contents"],
+                    "rate_limit_remaining": int(app_res.headers.get("X-RateLimit-Remaining", 5000)),
+                }
+
             return {
                 "status": "error",
                 "message": f"GitHub authentication failed ({res.status_code}): {res.text[:200]}",

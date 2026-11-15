@@ -475,3 +475,171 @@ def test_ensure_valid_token_transient_network_error(db_session):
         assert integ.auth_status != "revoked"
         creds = decrypt_credentials(integ.credentials)
         assert creds.get("refresh_token") == "lin_refresh_token_net"
+
+
+def test_classify_connection_identity_all_providers():
+    """Verify precise enterprise classification for all 8 providers."""
+    from app.api.v1.integrations import classify_connection_identity
+
+    # 1. GitHub
+    conn_type, ident, org_id, org_name = classify_connection_identity(
+        "github",
+        check_data={"auth_type": "app_installation", "external_org_id": "org_123", "external_org_name": "ObsidianCorp"},
+        creds={"installation_id": 99999},
+    )
+    assert conn_type == "organization"
+    assert ident == "organization_app"
+    assert org_id == "org_123"
+
+    conn_type, ident, org_id, _ = classify_connection_identity(
+        "github",
+        check_data={"connected_account": "developer_alice"},
+        creds={"token": "ghp_abcdef1234567890"},
+    )
+    assert conn_type == "personal"
+    assert ident == "personal_account"
+    assert org_id is None
+
+    # 2. Slack
+    conn_type, ident, org_id, org_name = classify_connection_identity(
+        "slack",
+        check_data={"team": "TeamObsidian", "team_id": "T12345"},
+        creds={"bot_token": "xoxb-12345-bot-token"},
+    )
+    assert conn_type == "organization"
+    assert ident == "workspace_bot"
+    assert org_id == "T12345"
+
+    conn_type, ident, _, _ = classify_connection_identity(
+        "slack",
+        check_data={"user": "developer_bob"},
+        creds={"token": "xoxp-12345-user-token"},
+    )
+    assert conn_type == "personal"
+    assert ident == "personal_account"
+
+    # 3. Linear
+    conn_type, ident, _, _ = classify_connection_identity(
+        "linear",
+        check_data={"connected_account": "dev@team.io"},
+        creds={"api_key": "lin_api_testdevkey123"},
+    )
+    assert conn_type == "personal"
+    assert ident == "personal_account"
+
+    conn_type, ident, org_id, _ = classify_connection_identity(
+        "linear",
+        check_data={"organization": "Obsidian Inc", "external_org_id": "org_lin_99"},
+        creds={"access_token": "oauth_token_linear"},
+    )
+    assert conn_type == "organization"
+    assert ident == "organization_app"
+    assert org_id == "org_lin_99"
+
+    # 4. Sentry
+    conn_type, ident, _, _ = classify_connection_identity(
+        "sentry",
+        check_data={"connected_account": "dev@sentry.io"},
+        creds={"token": "sntryu_987654321_user_token"},
+    )
+    assert conn_type == "personal"
+    assert ident == "personal_account"
+
+    conn_type, ident, org_id, _ = classify_connection_identity(
+        "sentry",
+        check_data={"org_slug": "team-obsidian-prod"},
+        creds={"token": "sntrys_org_internal_token", "org_slug": "team-obsidian-prod"},
+    )
+    assert conn_type == "organization"
+    assert ident == "organization_app"
+    assert org_id == "team-obsidian-prod"
+
+    # 5. GitLab
+    conn_type, ident, _, _ = classify_connection_identity(
+        "gitlab",
+        check_data={"username": "gitdev"},
+        creds={"token": "glpat-secretpat123"},
+    )
+    assert conn_type == "personal"
+    assert ident == "personal_account"
+
+    conn_type, ident, org_id, _ = classify_connection_identity(
+        "gitlab",
+        check_data={"identity_type": "group_level", "external_org_id": "grp_456", "external_org_name": "ObsidianGroup"},
+        creds={"token": "group_access_token"},
+    )
+    assert conn_type == "organization"
+    assert ident == "group_level"
+    assert org_id == "grp_456"
+
+    # 6. Jira & Confluence
+    conn_type, ident, org_id, org_name = classify_connection_identity(
+        "jira",
+        check_data={"cloud_id": "cloud-uuid-77", "site_url": "https://obsidian.atlassian.net"},
+        creds={"access_token": "atlassian_oauth_token"},
+    )
+    assert conn_type == "organization"
+    assert ident == "organization_tenant"
+    assert org_id == "cloud-uuid-77"
+
+
+def test_duplicate_sync_prevention(test_setup, db_session):
+    """Verify HTTP 409 Conflict when an integration is already syncing."""
+    client = TestClient(app)
+    user_a = test_setup["user_a"]
+    token_a = create_access_token({"sub": user_a.id, "email": user_a.email, "role": user_a.role})
+
+    integ = Integration(
+        id=str(uuid.uuid4()),
+        project_id=test_setup["proj1"].id,
+        workspace_id=test_setup["ws1"].id,
+        user_id=user_a.id,
+        authorized_by_user_id=user_a.id,
+        provider="github",
+        name="GitHub Duplicate Sync Test",
+        status="syncing",
+        updated_at=datetime.now(timezone.utc),
+        credentials=encrypt_credentials({"token": "ghp_mock_token"}),
+    )
+    db_session.add(integ)
+    db_session.commit()
+
+    resp = client.post(
+        f"/api/v1/integrations/{integ.id}/sync",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert resp.status_code == 409
+    assert "already running" in resp.json()["detail"].lower()
+
+
+def test_ensure_valid_token_distributed_postgres_locking(db_session):
+    """Verify with_for_update is invoked on PostgreSQL engine."""
+    integ = Integration(
+        id=str(uuid.uuid4()),
+        project_id=str(uuid.uuid4()),
+        provider="linear",
+        name="Linear PG Lock Test",
+        status="connected",
+        auth_status="verified",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        credentials=encrypt_credentials({"access_token": "valid_token"}),
+    )
+    db_session.add(integ)
+    db_session.commit()
+
+    mock_db = MagicMock()
+    mock_bind = MagicMock()
+    mock_bind.dialect.name = "postgresql"
+    mock_db.get_bind.return_value = mock_bind
+    mock_query = MagicMock()
+    mock_db.query.return_value = mock_query
+    mock_filter = MagicMock()
+    mock_query.filter_by.return_value = mock_filter
+    mock_lock = MagicMock()
+    mock_filter.with_for_update.return_value = mock_lock
+    mock_lock.first.return_value = integ
+
+    tok = ensure_valid_token(integ, db=mock_db)
+    assert tok == "valid_token"
+    mock_filter.with_for_update.assert_called_once()
+

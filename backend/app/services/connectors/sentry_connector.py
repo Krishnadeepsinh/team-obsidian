@@ -133,14 +133,16 @@ class SentryConnector(BaseConnector):
                 user_email = user_info.get("email") or user_info.get("name")
             acct = user_email or (org_slugs[0] if org_slugs else "Sentry Account")
             primary_slug = self.org_slug or (org_slugs[0] if org_slugs else None)
+            is_user_tok = bool(self.token and self.token.startswith("sntryu_"))
             return {
                 "status": "connected",
-                "auth_type": "auth_token",
+                "auth_type": "user_auth_token" if is_user_tok else "org_auth_token",
+                "identity_type": "personal_account" if is_user_tok else "organization_app",
                 "connected_account": acct,
                 "organizations": org_slugs,
                 "org_slug": primary_slug,
-                "external_org_id": primary_slug,
-                "external_org_name": primary_slug,
+                "external_org_id": None if is_user_tok else primary_slug,
+                "external_org_name": None if is_user_tok else primary_slug,
                 "scopes": ["org:read", "project:read", "event:read"],
             }
         except Exception as exc:

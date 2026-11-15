@@ -126,13 +126,16 @@ class GitLabConnector(BaseConnector):
                         external_org_name = first_group.get("name") or first_group.get("path")
                 except Exception:
                     pass
+                is_pat = bool(self.token and self.token.startswith("glpat-"))
+                identity_type = "personal_account" if is_pat or not external_org_id else "group_level"
                 return {
                     "status": "connected",
-                    "auth_type": "pat" if self.token.startswith("glpat-") else "oauth_token",
+                    "auth_type": "pat" if is_pat else "oauth_token",
+                    "identity_type": identity_type,
                     "connected_account": data.get("username") or data.get("email") or data.get("name"),
                     "name": data.get("name"),
-                    "external_org_id": external_org_id,
-                    "external_org_name": external_org_name,
+                    "external_org_id": external_org_id if identity_type == "group_level" else None,
+                    "external_org_name": external_org_name if identity_type == "group_level" else None,
                     "scopes": ["read_api", "read_user", "read_repository"],
                 }
             return {"status": "error", "message": f"GitLab auth failed ({res.status_code}): {res.text[:200]}"}

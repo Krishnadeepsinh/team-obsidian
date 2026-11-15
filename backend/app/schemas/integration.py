@@ -22,6 +22,7 @@ class IntegrationResponse(BaseModel):
     project_id: str
     workspace_id: Optional[str] = None
     connection_type: Optional[str] = "organization"
+    identity_type: Optional[str] = "organization_app"
     external_org_id: Optional[str] = None
     external_org_name: Optional[str] = None
     authorized_by_user_id: Optional[str] = None

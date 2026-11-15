@@ -126,13 +126,15 @@ class LinearConnector(BaseConnector):
             viewer = data.get("viewer") or {}
             org = data.get("organization") or {}
             acct = viewer.get("email") or viewer.get("name") or org.get("name")
+            is_personal_api = bool(self.token and self.token.startswith("lin_api_"))
             return {
                 "status": "connected",
-                "auth_type": "api_key" if self.token.startswith("lin_api_") else "oauth_token",
+                "auth_type": "api_key" if is_personal_api else "oauth_token",
+                "identity_type": "personal_account" if is_personal_api else "organization_app",
                 "connected_account": acct,
                 "organization": org.get("name"),
-                "external_org_id": org.get("id"),
-                "external_org_name": org.get("name"),
+                "external_org_id": None if is_personal_api else org.get("id"),
+                "external_org_name": None if is_personal_api else org.get("name"),
                 "scopes": ["read"],
             }
         except Exception as exc:

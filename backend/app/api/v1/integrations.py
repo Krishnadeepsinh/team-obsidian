@@ -3,7 +3,7 @@ import os
 import re
 import secrets
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -104,11 +104,26 @@ def _to_response(
     if current_project_id:
         is_assigned = (current_project_id in assigned_pids) or (i.project_id == current_project_id)
 
+    cfg = i.config or {}
+    identity_type = cfg.get("identity_type")
+    if not identity_type:
+        if i.connection_type == "personal":
+            identity_type = "personal_account"
+        elif i.provider == "slack":
+            identity_type = "workspace_bot"
+        elif i.provider in ("jira", "confluence"):
+            identity_type = "organization_tenant"
+        elif i.provider == "gitlab":
+            identity_type = "group_level" if i.external_org_id else "personal_account"
+        else:
+            identity_type = "organization_app"
+
     return IntegrationResponse(
         id=i.id,
         project_id=i.project_id,
         workspace_id=getattr(i, "workspace_id", None),
         connection_type=getattr(i, "connection_type", "organization") or "organization",
+        identity_type=identity_type,
         external_org_id=getattr(i, "external_org_id", None),
         external_org_name=getattr(i, "external_org_name", None),
         authorized_by_user_id=getattr(i, "authorized_by_user_id", None),
@@ -139,6 +154,89 @@ def _token_from_dict(creds: Optional[Dict[str, Any]]) -> Optional[str]:
     if not creds:
         return None
     return creds.get("access_token") or creds.get("token") or creds.get("api_key") or creds.get("bot_token")
+
+
+def classify_connection_identity(
+    provider: str,
+    check_data: Optional[Dict[str, Any]] = None,
+    creds: Optional[Dict[str, Any]] = None,
+    user_requested_type: Optional[str] = None,
+) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """
+    Classify connection identity and determine whether it is organization-level or personal.
+    Returns: (connection_type, identity_type, external_org_id, external_org_name)
+    
+    connection_type: 'organization' | 'personal'
+    identity_type: 'organization_app' | 'organization_tenant' | 'workspace_bot' | 'group_level' | 'personal_account'
+    """
+    prov = (provider or "").lower().strip()
+    c = creds or {}
+    check = check_data or {}
+    tok = _token_from_dict(c) or ""
+
+    # Explicit user choice for personal is respected
+    if user_requested_type == "personal":
+        return ("personal", "personal_account", None, None)
+
+    if prov == "github":
+        is_app = bool(c.get("installation_id") or check.get("auth_type") == "app_installation" or (c.get("app_id") and c.get("private_key")))
+        if is_app:
+            org_id = check.get("external_org_id") or str(c.get("installation_id") or "")
+            org_name = check.get("external_org_name") or check.get("connected_account") or "GitHub Organization"
+            return ("organization", "organization_app", org_id, org_name)
+        # Personal PAT or OAuth user token
+        return ("personal", "personal_account", None, None)
+
+    if prov == "slack":
+        is_bot = bool(tok.startswith("xoxb-") or c.get("bot_token") or check.get("auth_type") == "bot")
+        if is_bot:
+            team_id = check.get("team_id") or c.get("team_id") or check.get("external_org_id")
+            team_name = check.get("team") or check.get("team_name") or c.get("team_name") or "Slack Workspace"
+            return ("organization", "workspace_bot", team_id, team_name)
+        return ("personal", "personal_account", None, None)
+
+    if prov == "notion":
+        workspace_id = check.get("workspace_id") or c.get("workspace_id")
+        workspace_name = check.get("workspace_name") or c.get("workspace_name") or "Notion Workspace"
+        if user_requested_type == "personal":
+            return ("personal", "personal_account", None, None)
+        return ("organization", "organization_app", workspace_id, workspace_name)
+
+    if prov in ("jira", "confluence"):
+        cloud_id = check.get("cloud_id") or c.get("cloud_id")
+        site_url = check.get("site_url") or c.get("site_url")
+        if cloud_id:
+            return ("organization", "organization_tenant", cloud_id, site_url or f"Atlassian {prov.title()} Site")
+        if c.get("email") and not c.get("cloud_id") and user_requested_type == "personal":
+            return ("personal", "personal_account", None, None)
+        return ("organization", "organization_tenant", cloud_id, site_url)
+
+    if prov == "linear":
+        is_personal_api = bool(tok.startswith("lin_api_") or check.get("auth_type") == "api_key" or check.get("identity_type") == "personal_account")
+        if is_personal_api:
+            return ("personal", "personal_account", None, None)
+        org_id = check.get("external_org_id") or check.get("organization_id")
+        org_name = check.get("external_org_name") or check.get("organization") or "Linear Organization"
+        return ("organization", "organization_app", org_id, org_name)
+
+    if prov == "gitlab":
+        is_pat = bool(tok.startswith("glpat-"))
+        has_group = bool(check.get("external_org_id") and check.get("identity_type") == "group_level")
+        if has_group and not is_pat:
+            return ("organization", "group_level", check.get("external_org_id"), check.get("external_org_name"))
+        return ("personal", "personal_account", None, None)
+
+    if prov == "sentry":
+        is_user_tok = bool(tok.startswith("sntryu_") or check.get("auth_type") == "user_auth_token" or check.get("identity_type") == "personal_account")
+        if is_user_tok:
+            return ("personal", "personal_account", None, None)
+        slug = check.get("org_slug") or c.get("org_slug")
+        return ("organization", "organization_app", slug, slug or "Sentry Organization")
+
+    if user_requested_type:
+        ident = "personal_account" if user_requested_type == "personal" else "organization_app"
+        return (user_requested_type, ident, None, None)
+    return ("organization", "organization_app", None, None)
 
 
 def _build_connector(connector_cls: Any, token: Optional[str], creds: Optional[Dict[str, Any]] = None) -> Any:
@@ -525,6 +623,13 @@ def oauth_callback(
     proj = db.query(Project).filter(Project.id == project_id).first()
     workspace_id = proj.workspace_id if proj else None
 
+    conn_type, ident_type, ext_org_id, ext_org_name = classify_connection_identity(
+        provider=provider,
+        check_data=check,
+        creds=token_bundle,
+        user_requested_type=None,
+    )
+
     if not integ:
         integ = Integration(
             project_id=project_id,
@@ -532,7 +637,8 @@ def oauth_callback(
             user_id=user.id,
             authorized_by_user_id=user.id,
             authorized_by_email=user.email,
-            connection_type="organization",
+            connection_type=conn_type,
+            is_org_level=bool(conn_type == "organization"),
             provider=provider.lower(),
             name=f"{provider.title()} ({check.get('connected_account') or 'OAuth'})",
         )
@@ -546,24 +652,32 @@ def oauth_callback(
     integ.auth_type = "oauth"
     integ.auth_status = "verified"
     integ.status = "connected"
-    integ.connection_type = "organization"
+    integ.connection_type = conn_type
+    integ.is_org_level = bool(conn_type == "organization")
+    cfg = integ.config or {}
+    cfg["identity_type"] = ident_type
+    integ.config = cfg
     integ.connected_account = check.get("connected_account") or token_bundle.get("team_name") or token_bundle.get("workspace_name")
     integ.scopes = check.get("scopes") or []
-    integ.external_org_id = check.get("external_org_id") or token_bundle.get("external_org_id") or token_bundle.get("team_id") or token_bundle.get("workspace_id") or check.get("cloud_id")
-    integ.external_org_name = check.get("external_org_name") or token_bundle.get("external_org_name") or token_bundle.get("team_name") or token_bundle.get("workspace_name") or check.get("organization")
+    integ.external_org_id = ext_org_id or check.get("external_org_id") or token_bundle.get("external_org_id") or token_bundle.get("team_id") or token_bundle.get("workspace_id") or check.get("cloud_id")
+    integ.external_org_name = ext_org_name or check.get("external_org_name") or token_bundle.get("external_org_name") or token_bundle.get("team_name") or token_bundle.get("workspace_name") or check.get("organization")
     if token_bundle.get("expires_in"):
         integ.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(token_bundle["expires_in"]))
 
     integ.credentials = encrypt_credentials(token_bundle)
     integ.error_message = None
 
-    existing_pa = db.query(IntegrationProjectAccess).filter(
-        IntegrationProjectAccess.integration_id == integ.id,
-        IntegrationProjectAccess.project_id == project_id,
-    ).first()
-    if not existing_pa:
-        db.add(IntegrationProjectAccess(integration_id=integ.id, project_id=project_id))
-    integ.assigned_projects = [project_id]
+    if conn_type == "organization":
+        existing_pa = db.query(IntegrationProjectAccess).filter(
+            IntegrationProjectAccess.integration_id == integ.id,
+            IntegrationProjectAccess.project_id == project_id,
+        ).first()
+        if not existing_pa:
+            db.add(IntegrationProjectAccess(integration_id=integ.id, project_id=project_id))
+        integ.assigned_projects = [project_id]
+    else:
+        db.query(IntegrationProjectAccess).filter(IntegrationProjectAccess.integration_id == integ.id).delete()
+        integ.assigned_projects = [project_id]
 
     record_activity(
         db=db,
@@ -721,8 +835,24 @@ def create_integration(
             external_org_name = check.get("external_org_name") or check.get("organization") or check.get("team") or check.get("site_url")
         expires_in = raw_creds.get("expires_in") or check.get("expires_in")
 
+    conn_type, ident_type, ext_org_id, ext_org_name = classify_connection_identity(
+        provider=provider,
+        check_data=check if connector_cls is not None else {},
+        creds=raw_creds,
+        user_requested_type=integ_in.connection_type,
+    )
+    if not external_org_id:
+        external_org_id = ext_org_id
+    if not external_org_name:
+        external_org_name = ext_org_name
+
     target_projects = integ_in.assigned_projects if integ_in.assigned_projects else [integ_in.project_id]
     target_projects = list(set(target_projects))
+    if conn_type == "personal":
+        target_projects = [integ_in.project_id]
+
+    config_dict = dict(integ_in.config or {})
+    config_dict["identity_type"] = ident_type
 
     integ = Integration(
         project_id=integ_in.project_id,
@@ -730,11 +860,11 @@ def create_integration(
         user_id=current_user.id,
         authorized_by_user_id=current_user.id,
         authorized_by_email=current_user.email,
-        connection_type=integ_in.connection_type or "organization",
+        connection_type=conn_type,
         external_org_id=external_org_id,
         external_org_name=external_org_name,
         assigned_projects=target_projects,
-        is_org_level=bool(integ_in.is_org_level or integ_in.connection_type == "organization"),
+        is_org_level=bool(conn_type == "organization"),
         provider=provider,
         name=integ_in.name.strip(),
         auth_type=integ_in.auth_type or "api_token",
@@ -742,7 +872,7 @@ def create_integration(
         connected_account=connected_account,
         scopes=scopes,
         credentials=encrypt_credentials(raw_creds),
-        config=integ_in.config or {},
+        config=config_dict,
         status="connected",
         items_synced=0,
     )
@@ -752,9 +882,10 @@ def create_integration(
     db.add(integ)
     db.flush()
 
-    for pid in target_projects:
-        pa = IntegrationProjectAccess(integration_id=integ.id, project_id=pid)
-        db.add(pa)
+    if conn_type == "organization":
+        for pid in target_projects:
+            pa = IntegrationProjectAccess(integration_id=integ.id, project_id=pid)
+            db.add(pa)
 
     record_activity(
         db=db,
@@ -864,13 +995,32 @@ def verify_integration(
         integ.connected_account = check.get("connected_account") or integ.connected_account
         integ.scopes = check.get("scopes") or integ.scopes
         integ.error_message = None
+
+        conn_type, ident_type, ext_org_id, ext_org_name = classify_connection_identity(
+            provider=integ.provider,
+            check_data=check,
+            creds=creds,
+            user_requested_type=integ.connection_type if integ.connection_type == "personal" else None,
+        )
+        integ.connection_type = conn_type
+        integ.is_org_level = bool(conn_type == "organization")
+        cfg = dict(integ.config or {})
+        cfg["identity_type"] = ident_type
+        integ.config = cfg
+        if ext_org_id:
+            integ.external_org_id = ext_org_id
+        if ext_org_name:
+            integ.external_org_name = ext_org_name
+        if conn_type == "personal":
+            db.query(IntegrationProjectAccess).filter(IntegrationProjectAccess.integration_id == integ.id).delete()
     else:
         integ.auth_status = "error"
         integ.status = "error"
         integ.error_message = check.get("message")
         integ.last_error_at = datetime.now(timezone.utc)
     db.commit()
-    return check
+    db.refresh(integ)
+    return {**check, "integration": _to_response(integ, current_user=current_user)}
 
 
 @router.get("/{integration_id}/events", response_model=List[SourceEventResponse])
@@ -930,6 +1080,20 @@ def trigger_sync(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db, require_write=True)
+
+    # Guard against concurrent duplicate sync jobs if already syncing within the last 60 seconds
+    now_utc = datetime.now(timezone.utc)
+    updated_at = getattr(integ, "updated_at", None)
+    if updated_at and updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    if integ.status == "syncing" and updated_at and (now_utc - updated_at) < timedelta(seconds=60):
+        raise HTTPException(
+            status_code=409,
+            detail="A synchronization job is already running for this integration. Please wait for it to complete.",
+        )
+    integ.status = "syncing"
+    db.commit()
+    db.refresh(integ)
 
     # Ensure token is valid and refreshed prior to sync
     valid_token = ensure_valid_token(integ, db)
@@ -1386,6 +1550,24 @@ def reconnect_integration(
         integ.auth_status = "verified"
         integ.connected_account = check.get("connected_account") or integ.connected_account
         integ.scopes = check.get("scopes") or integ.scopes
+
+        conn_type, ident_type, ext_org_id, ext_org_name = classify_connection_identity(
+            provider=integ.provider,
+            check_data=check,
+            creds=creds_to_check,
+            user_requested_type=integ.connection_type if integ.connection_type == "personal" else None,
+        )
+        integ.connection_type = conn_type
+        integ.is_org_level = bool(conn_type == "organization")
+        cfg = dict(integ.config or {})
+        cfg["identity_type"] = ident_type
+        integ.config = cfg
+        if ext_org_id:
+            integ.external_org_id = ext_org_id
+        if ext_org_name:
+            integ.external_org_name = ext_org_name
+        if conn_type == "personal":
+            db.query(IntegrationProjectAccess).filter(IntegrationProjectAccess.integration_id == integ.id).delete()
 
     if req.credentials:
         integ.credentials = encrypt_credentials(req.credentials)

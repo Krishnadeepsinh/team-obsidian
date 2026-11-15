@@ -120,19 +120,10 @@ class JiraConnector(BaseConnector):
                     "external_org_name": site_url or "Atlassian Jira Site",
                     "scopes": ["read:jira-work", "read:jira-user"],
                 }
-            if self.auth_mode == "oauth":
-                me_res = self._request_with_retry("GET", ATLASSIAN_ME_URL, headers=self.headers, timeout=8)
-                if me_res.status_code == 200:
-                    me = me_res.json()
-                    return {
-                        "status": "connected",
-                        "auth_type": "oauth",
-                        "connected_account": me.get("email") or me.get("name"),
-                        "site_url": site_url,
-                        "cloud_id": self.cloud_id,
-                        "scopes": ["read:jira-work", "read:jira-user"],
-                    }
-            return {"status": "error", "message": f"Jira auth failed ({res.status_code}): {res.text[:200]}"}
+            return {
+                "status": "error",
+                "message": f"Jira REST API check failed ({res.status_code}): {res.text[:200]}",
+            }
         except Exception as exc:
             return {"status": "error", "message": str(exc)}
 

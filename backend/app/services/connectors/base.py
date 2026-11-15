@@ -164,12 +164,23 @@ def ensure_valid_token(integration: Any, db: Any = None) -> Optional[str]:
     lock = _get_integration_lock(integ_id)
 
     with lock:
-        # Re-read database state if db session provided to prevent duplicate refresh across threads
+        # Re-read database state with distributed row lock on PostgreSQL or refresh on SQLite
         if db and hasattr(integration, "id"):
             try:
-                db.refresh(integration)
-            except Exception:
-                pass
+                bind = db.get_bind()
+                is_postgres = bool(bind and getattr(bind.dialect, "name", "") == "postgresql")
+                if is_postgres:
+                    locked = db.query(type(integration)).filter_by(id=integration.id).with_for_update().first()
+                    if locked:
+                        integration = locked
+                else:
+                    db.refresh(integration)
+            except Exception as lock_err:
+                logger.debug("Row lock fallback on refresh for %s: %s", integ_id, lock_err)
+                try:
+                    db.refresh(integration)
+                except Exception:
+                    pass
 
         creds = decrypt_credentials(integration.credentials) if isinstance(integration.credentials, (dict, str)) else {}
         current_token = (
