@@ -7,15 +7,20 @@
 
 # Local Databases & Generated Runtime Artifacts
 *.db
+*.db*
 *.sqlite
 *.sqlite3
+*.bak
 *.pdf
 *.log
+**/*.log
+.dev_mail_outbox.log
+**/.dev_mail_outbox.log
+backend/.dev_mail_outbox.log
 backend/uploads/
 uploads/
 backend/generated_reports/
 generated_reports/
-backend/.dev_mail_outbox.log
 
 # Python
 __pycache__/

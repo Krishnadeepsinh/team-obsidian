@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import (
     APPROVER_ROLES,
@@ -927,6 +928,7 @@ def export_handover_pdf(
     }
 
     out_dir = os.path.join(os.getcwd(), "generated_reports")
+    out_dir = str(settings.REPORTS_DIR)
     os.makedirs(out_dir, exist_ok=True)
     safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in h.departing_employee_name)
     pdf_filename = f"Handover_{safe_name}_{h.id[:8]}.pdf"
@@ -938,7 +940,12 @@ def export_handover_pdf(
         output_path,
         media_type="application/pdf",
         filename=pdf_filename,
-        headers={"X-Document-SHA256": document_digest},
+        headers={
+            "X-Document-SHA256": document_digest,
+            "Content-Disposition": f'attachment; filename="{pdf_filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )
 
 
@@ -1149,7 +1156,11 @@ def export_handover_markdown(
     return Response(
         content=md_content,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )
 
 

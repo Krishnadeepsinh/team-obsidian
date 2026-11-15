@@ -476,15 +476,15 @@ def evaluate_simulation_submission(
     # Automatic Remediation: resolve cleared readiness_remediation gaps when scenario/overall passes;
     # otherwise create open KnowledgeGaps for missed concepts on weak scenarios (< 60%).
     remediation_gaps_created: List[Dict[str, Any]] = []
-    existing_remediation_gaps = (
+    all_project_gaps = (
         db.query(KnowledgeGap)
-        .filter(
-            KnowledgeGap.project_id == handover.project_id,
-            KnowledgeGap.gap_type == "readiness_remediation",
-            KnowledgeGap.status.in_(["open", "identified", "in_progress"]),
-        )
+        .filter(KnowledgeGap.project_id == handover.project_id)
         .all()
     )
+    existing_remediation_gaps = [
+        g for g in all_project_gaps
+        if g.gap_type == "readiness_remediation" and g.status in ("open", "identified", "in_progress")
+    ]
     resolved_titles = {
         f"readiness gap: {(r.get('title') or r.get('scenario_id') or '').strip()}".lower()
         for r in responses_out
@@ -497,7 +497,7 @@ def evaluate_simulation_submission(
     if not passed or any(r["score"] < 60.0 for r in responses_out):
         existing_gap_titles = {
             (g.title or "").strip().lower()
-            for g in db.query(KnowledgeGap).filter(KnowledgeGap.project_id == handover.project_id).all()
+            for g in all_project_gaps
         }
         for r in responses_out:
             if r["score"] >= 60.0:

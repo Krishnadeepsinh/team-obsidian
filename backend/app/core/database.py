@@ -5,11 +5,13 @@ from app.core.config import settings
 
 
 def _normalize_database_url(url: str) -> str:
-    """Ensure SQLAlchemy uses psycopg v3 driver for postgres URLs when psycopg2 is absent."""
+    """Ensure SQLAlchemy uses psycopg v3 driver for postgres URLs and resolves relative SQLite URLs absolutely."""
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     if url.startswith("postgresql://"):
         url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    if url in ("sqlite:///./obsidian.db", "sqlite:///obsidian.db"):
+        url = f"sqlite:///{settings.DEFAULT_DB_FILE.as_posix()}"
     return url
 
 
@@ -105,6 +107,13 @@ def _ensure_runtime_columns() -> None:
         ("evidence_reviews", "idx_evidence_reviews_reviewer_id", "reviewer_id"),
         ("source_records", "idx_source_records_integration_id", "integration_id"),
         ("source_events", "idx_source_events_integration_id", "integration_id"),
+        ("documents", "idx_doc_project_sha256", "project_id, sha256_hash"),
+        ("knowledge_relationships", "idx_kr_project_rel_type", "project_id, relation_type"),
+        ("knowledge_entities", "idx_ke_project_type_name", "project_id, entity_type, name"),
+        ("evidences", "idx_ev_project_status", "project_id, verification_status"),
+        ("decisions", "idx_decisions_project_date", "project_id, created_at"),
+        ("task_items", "idx_tasks_project_status_deadline", "project_id, status, deadline"),
+        ("risk_items", "idx_risks_project_status_sev", "project_id, status, severity"),
     ]
     with engine.begin() as conn:
         for table, col, col_type in migrations:
@@ -119,16 +128,21 @@ def _ensure_runtime_columns() -> None:
                     conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({idx_cols})"))
                 except Exception:
                     pass
-        if not IS_SQLITE and "embedding_records" in existing_tables:
+        if not IS_SQLITE:
             try:
-                conn.execute(
-                    text(
-                        "CREATE INDEX IF NOT EXISTS idx_embedding_vector_hnsw "
-                        "ON embedding_records USING hnsw (embedding_vector vector_cosine_ops)"
-                    )
-                )
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             except Exception:
                 pass
+            if "embedding_records" in existing_tables:
+                try:
+                    conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS idx_embedding_vector_hnsw "
+                            "ON embedding_records USING hnsw (embedding_vector vector_cosine_ops)"
+                        )
+                    )
+                except Exception:
+                    pass
 
 
 def init_db() -> None:

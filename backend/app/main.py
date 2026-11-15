@@ -102,7 +102,8 @@ app.include_router(documents_router, prefix=api_prefix)
 app.include_router(evidence_router, prefix=api_prefix)
 app.include_router(handover_router, prefix=api_prefix)
 app.include_router(team_router, prefix=api_prefix)
-app.include_router(seed_router, prefix=api_prefix)
+if settings.ENABLE_DEMO_SEED:
+    app.include_router(seed_router, prefix=api_prefix)
 app.include_router(webhooks_router, prefix=api_prefix)
 
 

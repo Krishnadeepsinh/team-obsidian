@@ -82,6 +82,16 @@ def get_react_flow_graph(
         for e in raw_entities
     ]
 
+    if allowed_ids:
+        raw_relationships = (
+            r_query.filter(
+                KnowledgeRelationship.source_entity_id.in_(allowed_ids),
+                KnowledgeRelationship.target_entity_id.in_(allowed_ids),
+            ).all()
+        )
+    else:
+        raw_relationships = []
+
     relationships = [
         {
             "id": r.id,
@@ -91,8 +101,7 @@ def get_react_flow_graph(
             "context": r.context,
             "confidence": r.confidence,
         }
-        for r in r_query.all()
-        if r.source_entity_id in allowed_ids and r.target_entity_id in allowed_ids
+        for r in raw_relationships
     ]
 
     return graph_service.to_react_flow(entities, relationships, layout=layout, hide_isolated=hide_isolated)

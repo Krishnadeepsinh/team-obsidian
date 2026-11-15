@@ -133,15 +133,7 @@ class PipelineTracker:
             }
 
     def get(self, project_id: str) -> Dict[str, Any]:
-        with self._lock:
-            item = self._jobs.get(project_id)
-            if item:
-                age = time.time() - float(item.get("updated_at", 0))
-                if item.get("active") or age <= 90:
-                    return dict(item)
-                self._jobs.pop(project_id, None)
-
-        # Fallback to DB for durability across worker restarts
+        # Cross-worker synchronization: query DB first so all backend workers see latest state
         try:
             from app.core.database import SessionLocal
             from app.models.integration import PipelineJob
@@ -161,7 +153,7 @@ class PipelineTracker:
                         upd_ts = upd_ts.replace(tzinfo=timezone.utc)
                     age_sec = (datetime.now(timezone.utc) - upd_ts).total_seconds() if upd_ts else 9999
                     if is_active or age_sec <= 90:
-                        return {
+                        db_res = {
                             "id": latest.id,
                             "project_id": latest.project_id,
                             "integration_id": latest.integration_id,
@@ -172,11 +164,23 @@ class PipelineTracker:
                             "message": latest.message or "",
                             "progress": latest.progress,
                             "details": latest.details or {},
+                            "updated_at": upd_ts.timestamp() if upd_ts else time.time(),
                         }
+                        with self._lock:
+                            self._jobs[project_id] = db_res
+                        return db_res
             finally:
                 session.close()
         except Exception:
             pass
+
+        with self._lock:
+            item = self._jobs.get(project_id)
+            if item:
+                age = time.time() - float(item.get("updated_at", 0))
+                if item.get("active") or age <= 90:
+                    return dict(item)
+                self._jobs.pop(project_id, None)
 
         return {
             "project_id": project_id,

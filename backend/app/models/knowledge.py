@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, Boolean, Integer, JSON, Index
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
 
@@ -192,7 +192,7 @@ class EmbeddingRecord(Base):
     chunk_index = Column(Integer, default=0)
     task_type = Column(String(40), default="RETRIEVAL_DOCUMENT")
     text_content = Column(Text, nullable=False)
-    embedding = Column(JSON, nullable=False)
+    embedding = deferred(Column(JSON, nullable=False))
     embedding_vector = Column(Vector(384).with_variant(JSON(), "sqlite"), nullable=True)
     created_at = Column(DateTime, default=utc_now)
 

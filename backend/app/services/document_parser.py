@@ -413,12 +413,34 @@ class DocumentParser:
             "sections": sections,
         }
 
+    def sanitize_html_content(self, raw_bytes: bytes) -> bytes:
+        """Sanitize HTML/XML/SVG content: strip executable scripts, active tags, and inline handlers."""
+        from bs4 import BeautifulSoup
+
+        try:
+            text = _decode_text_bytes(raw_bytes)
+            soup = BeautifulSoup(text, "html.parser")
+            for tag in soup(["script", "style", "iframe", "object", "embed", "form", "svg", "link", "meta"]):
+                tag.decompose()
+            for el in soup.find_all(True):
+                for attr in list(el.attrs.keys()):
+                    if attr.lower().startswith("on") or "javascript:" in str(el.attrs[attr]).lower():
+                        del el.attrs[attr]
+            sanitized_html = str(soup)
+            return sanitized_html.encode("utf-8")
+        except Exception:
+            return raw_bytes
+
     def parse_html(self, text_str: str) -> Dict[str, Any]:
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup(text_str, "html.parser")
-        for tag in soup(["script", "style"]):
+        for tag in soup(["script", "style", "iframe", "object", "embed", "form", "svg", "link", "meta"]):
             tag.decompose()
+        for el in soup.find_all(True):
+            for attr in list(el.attrs.keys()):
+                if attr.lower().startswith("on") or "javascript:" in str(el.attrs[attr]).lower():
+                    del el.attrs[attr]
         sections: List[Dict[str, Any]] = []
         current_heading: Optional[str] = None
         p_idx = 1

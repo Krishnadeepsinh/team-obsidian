@@ -12,7 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 from app.core.database import Base
 
 
@@ -100,6 +100,9 @@ class SourceEvent(Base):
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("idx_doc_project_sha256", "project_id", "sha256_hash", unique=True),
+    )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -114,7 +117,7 @@ class Document(Base):
     storage_key = Column(String(500), nullable=True)
     sha256_hash = Column(String(64), nullable=False, index=True)
     status = Column(String(50), default="processed")
-    extracted_text = Column(Text, nullable=True)
+    extracted_text = deferred(Column(Text, nullable=True))
     chunk_count = Column(Integer, default=0)
     page_count = Column(Integer, nullable=True)
     sheet_names = Column(JSON, default=list)

@@ -10,6 +10,11 @@ load_dotenv(backend_root / ".env")
 load_dotenv(Path.cwd() / ".env")
 load_dotenv(Path.cwd() / "backend" / ".env")
 
+BACKEND_DIR: Path = backend_root
+DEFAULT_DB_FILE: Path = BACKEND_DIR / "obsidian.db"
+DEFAULT_UPLOAD_DIR: Path = BACKEND_DIR / "uploads"
+DEFAULT_REPORTS_DIR: Path = BACKEND_DIR / "generated_reports"
+
 
 def _parse_cors_origins(raw: str, extra_origin: str = "") -> List[str]:
     origins = [o.strip().rstrip("/") for o in (raw or "").split(",") if o.strip()]
@@ -30,8 +35,23 @@ class Settings:
     APP_ENV: str = os.getenv("APP_ENV", "development").lower()
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
+    ENABLE_DEMO_SEED: bool = os.getenv("ENABLE_DEMO_SEED", "false" if APP_ENV == "production" else "true").lower() == "true"
+
+    # Stable pathlib-based canonical backend directories
+    BACKEND_DIR: Path = BACKEND_DIR
+    DEFAULT_DB_FILE: Path = DEFAULT_DB_FILE
+    DEFAULT_UPLOAD_DIR: Path = DEFAULT_UPLOAD_DIR
+    DEFAULT_REPORTS_DIR: Path = DEFAULT_REPORTS_DIR
+
+    UPLOAD_DIR: Path = Path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR))).resolve()
+    REPORTS_DIR: Path = Path(os.getenv("REPORTS_DIR", str(DEFAULT_REPORTS_DIR))).resolve()
+
     # Database: PostgreSQL (Supabase Session Pooler) in live/staging, SQLite fallback for isolated local dev/tests
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./obsidian.db")
+    _raw_db_url: str = os.getenv("DATABASE_URL", "").strip()
+    if not _raw_db_url or _raw_db_url in ("sqlite:///./obsidian.db", "sqlite:///obsidian.db"):
+        DATABASE_URL: str = f"sqlite:///{DEFAULT_DB_FILE.as_posix()}"
+    else:
+        DATABASE_URL: str = _raw_db_url
 
     # AI Engine: Groq central inference provider + Gemini fallback + local BAAI/bge-small-en-v1.5 embeddings
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")

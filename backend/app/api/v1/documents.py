@@ -29,7 +29,7 @@ from app.services.storage_service import storage_service
 logger = logging.getLogger("team_obsidian.documents")
 router = APIRouter(prefix="/documents", tags=["Document Library"])
 
-UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+UPLOAD_DIR = str(settings.UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
@@ -37,7 +37,7 @@ ALLOWED_EXTENSIONS = {
     "html", "htm", "json", "yaml", "yml", "log", "rst", "sql", "xml",
     "png", "jpg", "jpeg", "webp",
 }
-DANGEROUS_EXTENSIONS = {"exe", "bat", "sh", "cmd", "ps1", "dll", "vbs", "jar", "bin", "msi", "js", "php"}
+DANGEROUS_EXTENSIONS = {"exe", "bat", "sh", "cmd", "ps1", "dll", "vbs", "jar", "bin", "msi", "js", "php", "svg"}
 
 
 def _clean_text(value: Optional[str], max_len: Optional[int] = None) -> str:
@@ -161,6 +161,11 @@ def upload_document(
             status_code=413,
             detail=f"File size exceeds maximum permitted limit of {settings.MAX_UPLOAD_MB} MB.",
         )
+
+    # Sanitize HTML/HTM/XML documents against Stored XSS before storage and hashing
+    if ext in ("html", "htm", "xml"):
+        file_bytes = document_parser.sanitize_html_content(file_bytes)
+        file_size = len(file_bytes)
 
     eff_proj = get_effective_project(project_id, current_user, db, require_write=True)
     if not eff_proj:
@@ -424,6 +429,7 @@ def download_document(
         safe_media_type = (
             "application/octet-stream"
             if any(tok in raw_mime for tok in ("html", "xml", "svg", "javascript", "ecmascript"))
+            or (doc.file_type or "").lower() in ("html", "htm", "xml", "svg", "js")
             else (doc.mime_type or "application/octet-stream")
         )
         return Response(
@@ -432,6 +438,7 @@ def download_document(
             headers={
                 "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(doc.filename or ascii_name)}",
                 "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
                 "X-Obsidian-Source": "supabase-storage" if getattr(doc, "storage_key", None) else "local-storage",
             },
         )
@@ -459,6 +466,7 @@ def download_document(
         headers={
             "Content-Disposition": f"attachment; filename=\"{ascii_download}\"; filename*=UTF-8''{quote(download_name)}",
             "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
             "X-Obsidian-Source": "database-chunks",
         },
     )

@@ -10,7 +10,7 @@ from app.core.config import settings
 
 logger = logging.getLogger("team_obsidian.storage")
 
-UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+UPLOAD_DIR = str(settings.UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -87,16 +87,18 @@ class StorageService:
         file_bytes: bytes,
         content_type: Optional[str] = None,
     ) -> Dict[str, Optional[str]]:
-        """Persist raw binary to Supabase Storage when configured and write local cache path."""
+        """Persist raw binary to Supabase Storage when configured and write local cache path with content-addressable dedup."""
         safe_name = _safe_key_filename(sha256_hash[:16], filename)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         local_path = os.path.join(UPLOAD_DIR, safe_name)[:500]
-        try:
-            with open(local_path, "wb") as fh:
-                fh.write(file_bytes)
-        except Exception as exc:
-            logger.warning("Local cache write skipped for %s: %s", safe_name, exc)
-            local_path = None
+        # Content-addressable deduplication: if exact content exists at local_path, reuse it
+        if not (os.path.exists(local_path) and os.path.getsize(local_path) == len(file_bytes)):
+            try:
+                with open(local_path, "wb") as fh:
+                    fh.write(file_bytes)
+            except Exception as exc:
+                logger.warning("Local cache write skipped for %s: %s", safe_name, exc)
+                local_path = None
 
         bucket_name = settings.SUPABASE_STORAGE_BUCKET
         storage_key = f"{project_id}/{safe_name}"

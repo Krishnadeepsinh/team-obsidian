@@ -1,5 +1,6 @@
 import html
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
@@ -17,6 +18,19 @@ class EmailService:
 
     def __init__(self):
         self._outbox_path = Path(__file__).resolve().parent.parent.parent / ".dev_mail_outbox.log"
+
+    def _is_dev_env(self) -> bool:
+        env = (settings.APP_ENV or "development").strip().lower()
+        return env in ("development", "dev", "test")
+
+    def _sanitize_for_logs(self, text: Optional[str]) -> str:
+        if not text:
+            return ""
+        # Mask numeric OTPs (4-8 digits)
+        redacted = re.sub(r"\b\d{4,8}\b", "[REDACTED_OTP]", str(text))
+        # Mask tokens
+        redacted = re.sub(r"(token=)[a-zA-Z0-9_\-\+]+", r"\1[REDACTED_TOKEN]", redacted)
+        return redacted
 
     def is_smtp_configured(self) -> bool:
         return bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
@@ -51,7 +65,7 @@ class EmailService:
             return "smtp"
         if settings.RESEND_API_KEY:
             return "resend_verified" if self.has_custom_sender_domain() else "resend_sandbox"
-        return "dev_outbox" if settings.APP_ENV != "production" else "unconfigured"
+        return "dev_outbox" if self._is_dev_env() else "unconfigured"
 
     def is_configured(self) -> bool:
         return bool(settings.RESEND_API_KEY or self.is_smtp_configured())
@@ -86,7 +100,7 @@ class EmailService:
                 )
                 if res.status_code == 200 and res.json().get("delivered"):
                     logger.info("Successfully delivered email via HTTPS mail relay to %s", to_email)
-                    if settings.APP_ENV != "production":
+                    if self._is_dev_env():
                         try:
                             with self._outbox_path.open("a", encoding="utf-8") as fh:
                                 fh.write(f"--- TO: {to_email} | SUBJECT: {subject} ---\n{text_body}\n\n")
@@ -120,7 +134,7 @@ class EmailService:
                         server.ehlo()
                         server.login(settings.SMTP_USER, smtp_password)
                         server.send_message(msg)
-                if settings.APP_ENV != "production":
+                if self._is_dev_env():
                     try:
                         with self._outbox_path.open("a", encoding="utf-8") as fh:
                             fh.write(f"--- TO: {to_email} | SUBJECT: {subject} ---\n{text_body}\n\n")
@@ -174,14 +188,15 @@ class EmailService:
                 error_detail = str(exc)[:300]
                 logger.warning("Resend email exception: %s", exc)
 
-        # 3. Development local outbox fallback
-        if settings.APP_ENV != "production":
+        # 3. Development local outbox fallback - strictly restricted to development/test environments
+        if self._is_dev_env():
             try:
                 with self._outbox_path.open("a", encoding="utf-8") as fh:
                     fh.write(f"--- TO: {to_email} | SUBJECT: {subject} ---\n{text_body}\n\n")
             except Exception:
                 pass
-            logger.info("Recorded email in dev outbox for %s (%s)", to_email, subject)
+            sanitized_subj = self._sanitize_for_logs(subject)
+            logger.info("Recorded email in dev outbox for %s (%s)", to_email, sanitized_subj)
             return {
                 "delivered": False,
                 "provider": "dev_outbox",

@@ -412,8 +412,10 @@ def _ensure_candidate_embeddings(
     db: Session,
 ) -> Dict[Tuple[str, str], EmbeddingRecord]:
     """Ensure every candidate entity has a normalized RETRIEVAL_DOCUMENT embedding."""
+    from sqlalchemy.orm import undefer
     existing_records = (
         db.query(EmbeddingRecord)
+        .options(undefer(EmbeddingRecord.embedding))
         .filter(EmbeddingRecord.project_id == project_id)
         .all()
     )
