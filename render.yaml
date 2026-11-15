@@ -64,6 +64,8 @@ services:
         value: ""
       - key: SLACK_BOT_TOKEN
         value: ""
+      - key: SLACK_TEAM_ID
+        value: "T0C4Y4JM83C"
       - key: NOTION_CLIENT_ID
         value: ""
       - key: NOTION_CLIENT_SECRET

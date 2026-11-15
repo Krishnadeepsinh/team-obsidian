@@ -125,6 +125,7 @@ class Settings:
     SLACK_CLIENT_ID: str = os.getenv("SLACK_CLIENT_ID", "")
     SLACK_CLIENT_SECRET: str = os.getenv("SLACK_CLIENT_SECRET", "")
     SLACK_BOT_TOKEN: str = os.getenv("SLACK_BOT_TOKEN", "")
+    SLACK_TEAM_ID: str = os.getenv("SLACK_TEAM_ID", "T0C4Y4JM83C")
 
     NOTION_CLIENT_ID: str = os.getenv("NOTION_CLIENT_ID", "")
     NOTION_CLIENT_SECRET: str = os.getenv("NOTION_CLIENT_SECRET", "")

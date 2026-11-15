@@ -26,13 +26,16 @@ class SlackConnector(BaseConnector):
             raise ConnectorError(
                 "Slack OAuth App is not configured. Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in backend .env."
             )
-        params = urlencode({
+        params_dict = {
             "client_id": settings.SLACK_CLIENT_ID,
             "scope": "channels:read,channels:history,groups:read,groups:history,users:read,team:read",
             "redirect_uri": redirect_uri,
             "state": state,
-        })
-        return f"https://slack.com/oauth/v2/authorize?{params}"
+        }
+        slack_team = (getattr(settings, "SLACK_TEAM_ID", None) or "").strip()
+        if slack_team:
+            params_dict["team"] = slack_team
+        return f"https://slack.com/oauth/v2/authorize?{urlencode(params_dict)}"
 
     @classmethod
     def exchange_oauth_code(cls, code: str, redirect_uri: str) -> Dict[str, Any]:

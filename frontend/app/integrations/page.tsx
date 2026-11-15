@@ -1218,6 +1218,11 @@ function IntegrationsContent() {
                         <span className="capitalize font-semibold">{connectProvider}</span> account via OAuth 2.0.
                         Right after authorization, your {resourceNoun(connectProvider).toLowerCase()} picker opens automatically — no manual API key required.
                       </div>
+                      {connectProvider === "slack" && (
+                        <div className="p-2.5 rounded-lg bg-white/80 border border-violet-200 text-[11px] text-slate-600 leading-snug">
+                          <span className="font-semibold text-slate-800">Multi-Workspace Notice:</span> OAuth targets your development workspace. If you switch devices or encounter Slack&apos;s workspace error, you can also connect instantly via the <button type="button" onClick={() => setConnectAuthTab("token")} className="font-semibold text-violet-700 underline">API / PAT Token</button> tab with your Bot Token (<code className="font-mono bg-violet-100/70 px-1 py-0.5 rounded text-[10px]">xoxb-...</code>).
+                        </div>
+                      )}
                       <div className="flex items-center justify-between gap-2 pt-1">
                         <button
                           type="button"
