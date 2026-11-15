@@ -44,11 +44,12 @@ def get_db():
 
 
 def set_rls_user_context(db: Session, user_id: Optional[str]) -> None:
-    """Propagate authenticated app user identity to PostgreSQL transaction-local GUC for RLS alignment."""
+    """Propagate authenticated app user identity to PostgreSQL session GUC for RLS alignment."""
     if not IS_POSTGRES or not user_id:
         return
     try:
-        db.execute(text("SELECT set_config('app.current_user_id', :uid, true)"), {"uid": str(user_id)})
+        # Use session-scoped GUC (false) so identity persists across mid-request commits
+        db.execute(text("SELECT set_config('app.current_user_id', :uid, false)"), {"uid": str(user_id)})
     except Exception:
         # Avoid breaking requests on dialects/permissions without custom GUC support
         pass

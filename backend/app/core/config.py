@@ -22,9 +22,12 @@ def _parse_cors_origins(raw: str, extra_origin: str = "") -> List[str]:
         clean_extra = extra_origin.strip().rstrip("/")
         if clean_extra and clean_extra not in origins:
             origins.append(clean_extra)
+    prod_origin = "https://team-obsidian.vercel.app"
+    if prod_origin not in origins:
+        origins.append(prod_origin)
     # Never allow wildcard '*' when allow_credentials=True
     filtered = [o for o in origins if o != "*"]
-    return filtered or ["http://localhost:3000", "http://127.0.0.1:3000"]
+    return filtered or ["http://localhost:3000", "http://127.0.0.1:3000", prod_origin]
 
 
 class Settings:
@@ -80,17 +83,18 @@ class Settings:
 
     CREDENTIALS_ENCRYPTION_KEY: str = os.getenv("CREDENTIALS_ENCRYPTION_KEY", "").strip()
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
     PASSWORD_RESET_EXPIRE_MINUTES: int = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
     AUTH_COOKIE_NAME: str = os.getenv("AUTH_COOKIE_NAME", "obsidian_session")
     AUTH_COOKIE_ENABLED: bool = os.getenv("AUTH_COOKIE_ENABLED", "true").lower() == "true"
     COOKIE_SAMESITE: str = (
-        os.getenv("COOKIE_SAMESITE", "none" if APP_ENV == "production" else "lax").strip().lower()
+        os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
     )
     COOKIE_SECURE: bool = (
         os.getenv("COOKIE_SECURE", "true" if APP_ENV == "production" else "false").strip().lower() == "true"
         or COOKIE_SAMESITE == "none"
     )
+    DOCS_ENABLED: bool = os.getenv("DOCS_ENABLED", "false" if APP_ENV == "production" else "true").lower() == "true"
     TRUSTED_PROXY_HOPS: int = max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "1")))
     TRUSTED_PROXIES: List[str] = [
         p.strip()
@@ -98,7 +102,7 @@ class Settings:
         if p.strip()
     ]
 
-    # Deployment URLs & Restricted CORS (supports localhost + configured production Vercel/custom domains)
+    # Deployment URLs & Restricted CORS (exact origins only, no wide regex)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
     BACKEND_URL: str = (
         os.getenv("BACKEND_URL", "").strip()
@@ -110,8 +114,7 @@ class Settings:
         extra_origin=FRONTEND_URL,
     )
     CORS_ORIGIN_REGEX: Optional[str] = (
-        os.getenv("CORS_ORIGIN_REGEX", "").strip()
-        or (r"^https://team-obsidian(-[a-z0-9-]+)?\.vercel\.app$" if APP_ENV == "production" else None)
+        os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
     )
 
     # OAuth Apps & Tokens (GitHub, Slack, Notion)

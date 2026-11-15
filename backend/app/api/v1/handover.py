@@ -927,19 +927,13 @@ def export_handover_pdf(
         ],
     }
 
-    out_dir = os.path.join(os.getcwd(), "generated_reports")
-    out_dir = str(settings.REPORTS_DIR)
-    os.makedirs(out_dir, exist_ok=True)
     safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in h.departing_employee_name)
     pdf_filename = f"Handover_{safe_name}_{h.id[:8]}.pdf"
-    output_path = os.path.join(out_dir, pdf_filename)
-
-    pdf_generator.generate_handover_pdf(handover_data, output_path)
+    pdf_bytes = pdf_generator.generate_handover_pdf_bytes(handover_data)
     document_digest = handover_data.get("document_sha256") or pdf_generator.compute_document_digest(handover_data)
-    return FileResponse(
-        output_path,
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        filename=pdf_filename,
         headers={
             "X-Document-SHA256": document_digest,
             "Content-Disposition": f'attachment; filename="{pdf_filename}"',

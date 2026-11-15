@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -15,8 +16,14 @@ class PromptManager:
 
     @classmethod
     def wrap_untrusted_context(cls, raw_text: str) -> str:
-        """Wrap untrusted user/integration input in explicit delimiters."""
-        clean = (raw_text or "").replace("</untrusted_context>", "")
+        """Wrap untrusted user/integration input in explicit delimiters with recursive tag stripping and angle-bracket neutralization."""
+        clean = str(raw_text or "")
+        pattern = re.compile(r"<\s*/?\s*untrusted_context[^>]*>", re.IGNORECASE)
+        # Recursively strip nested / crafted delimiter injection attempts
+        while pattern.search(clean):
+            clean = pattern.sub("", clean)
+        # Neutralize any remaining closing delimiters to prevent prompt jailbreak breakout
+        clean = clean.replace("</", "&lt;/").replace("/>", "/&gt;")
         return f"<untrusted_context>\n{clean}\n</untrusted_context>"
 
     @classmethod

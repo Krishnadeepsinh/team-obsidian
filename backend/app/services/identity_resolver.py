@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 

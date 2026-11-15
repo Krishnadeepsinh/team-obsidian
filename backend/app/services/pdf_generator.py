@@ -52,8 +52,9 @@ class PDFGenerator:
         serialized = json.dumps(canonical_payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
-    def generate_handover_pdf(self, handover_data: Dict[str, Any], output_path: str) -> str:
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    def generate_handover_pdf(self, handover_data: Dict[str, Any], output_path: Any) -> Any:
+        if isinstance(output_path, str):
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         doc = SimpleDocTemplate(
             output_path,
             pagesize=letter,
@@ -286,6 +287,13 @@ class PDFGenerator:
 
         doc.build(elements)
         return output_path
+
+    def generate_handover_pdf_bytes(self, handover_data: Dict[str, Any]) -> bytes:
+        """Generate tamper-evident handover dossier PDF in-memory as raw bytes without disk writes."""
+        import io
+        buf = io.BytesIO()
+        self.generate_handover_pdf(handover_data, buf)
+        return buf.getvalue()
 
 
 pdf_generator = PDFGenerator()

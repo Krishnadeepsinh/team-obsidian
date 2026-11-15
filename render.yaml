@@ -43,7 +43,7 @@ services:
       - key: CREDENTIALS_ENCRYPTION_KEY
         sync: false
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
-        value: "10080"
+        value: "60"
       # Fill these URLs once Render (backend) and Vercel (frontend) live URLs are assigned
       - key: BACKEND_URL
         value: ""

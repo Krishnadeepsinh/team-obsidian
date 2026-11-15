@@ -20,10 +20,10 @@ from app.core.security import (
     decode_access_token,
     generate_otp_code,
     generate_otp_session_token,
-    generate_reset_token,
     get_current_user,
     get_password_hash,
     hash_otp_code,
+    legacy_hash_otp_code,
     hash_reset_token,
     revoke_token_jti,
     set_auth_cookie,
@@ -35,7 +35,6 @@ from app.schemas.auth import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
-    ResetPasswordWithOtpRequest,
     Token,
     UserLogin,
     UserProfileUpdate,
@@ -551,10 +550,11 @@ def verify_otp(req: VerifyOtpRequest, request: Request, db: Session = Depends(ge
         db.commit()
         raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
 
-    # Compare cryptographic hash
+    # Compare cryptographic hash (supports current HMAC-SHA256 and transparent legacy SHA-256)
     expected_hash = hash_otp_code(clean_otp, user.email)
+    legacy_hash = legacy_hash_otp_code(clean_otp, user.email)
     import hmac
-    if not hmac.compare_digest(token_rec.token_hash, expected_hash):
+    if not (hmac.compare_digest(token_rec.token_hash, expected_hash) or hmac.compare_digest(token_rec.token_hash, legacy_hash)):
         token_rec.attempts_count = (token_rec.attempts_count or 0) + 1
         db.commit()
         remaining = max(0, 5 - token_rec.attempts_count)

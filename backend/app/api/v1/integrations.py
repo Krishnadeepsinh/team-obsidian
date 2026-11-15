@@ -23,7 +23,9 @@ from app.core.security import (
     decrypt_credentials,
     encrypt_credentials,
     get_current_user,
+    is_token_jti_revoked,
     mask_credentials,
+    revoke_token_jti,
 )
 from app.models.integration import Integration, SourceEvent, SourceRecord
 from app.models.workspace import User
@@ -439,6 +441,12 @@ def oauth_callback(
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state token.")
     if (payload.get("provider") or "").lower() != provider.lower():
         raise HTTPException(status_code=400, detail="OAuth state token does not match callback provider.")
+
+    jti = payload.get("jti")
+    if jti:
+        if is_token_jti_revoked(jti, db=db):
+            raise HTTPException(status_code=400, detail="OAuth state token has already been consumed.")
+        revoke_token_jti(jti, exp_ts=payload.get("exp"), db=db)
 
     user_id = payload.get("sub")
     project_id = payload.get("project_id")

@@ -13,8 +13,8 @@ from typing import Any, Dict, Optional
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
-from cryptography.fernet import Fernet, InvalidToken
-from fastapi import Cookie, Depends, Header, HTTPException, Response, status
+from cryptography.fernet import Fernet, MultiFernet, InvalidToken
+from fastapi import Cookie, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -66,15 +66,23 @@ def verify_and_upgrade_password(plain_password: str, user: Any, db: Session) -> 
     return True
 
 
-def _get_fernet() -> Fernet:
-    """Build Fernet cipher from CREDENTIALS_ENCRYPTION_KEY or derive deterministically from SECRET_KEY in dev."""
-    raw = settings.CREDENTIALS_ENCRYPTION_KEY
-    if raw:
-        return Fernet(raw.encode("utf-8"))
+def _get_fernet() -> MultiFernet:
+    """Build MultiFernet cipher supporting key rotation via comma-separated CREDENTIALS_ENCRYPTION_KEY."""
+    raw = (settings.CREDENTIALS_ENCRYPTION_KEY or "").strip()
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if keys:
+        fernets = []
+        for k in keys:
+            try:
+                fernets.append(Fernet(k.encode("utf-8")))
+            except Exception as exc:
+                logger.warning("Invalid Fernet key in CREDENTIALS_ENCRYPTION_KEY: %s", exc)
+        if fernets:
+            return MultiFernet(fernets)
     if settings.APP_ENV == "production":
         raise RuntimeError("CREDENTIALS_ENCRYPTION_KEY is required in production.")
     derived = base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest())
-    return Fernet(derived)
+    return MultiFernet([Fernet(derived)])
 
 
 def encrypt_credentials(creds: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -217,8 +225,8 @@ def is_token_jti_revoked(jti: Optional[str], db: Optional[Session] = None) -> bo
             _VALID_JTIS.pop(jti, None)
         return True
     except SQLAlchemyError as exc:
-        logger.warning("Failed to check JTI revocation in database: %s", exc)
-        return False
+        logger.warning("Failed to check JTI revocation in database, failing closed: %s", exc)
+        return True
     finally:
         if own_session:
             session.close()
@@ -271,7 +279,15 @@ def generate_otp_code() -> str:
 
 
 def hash_otp_code(otp: str, email: str = "") -> str:
-    """Hash an OTP code with SHA-256 bound to recipient email."""
+    """Hash an OTP code using HMAC-SHA256 bound to server secret and recipient email."""
+    normalized_email = (email or "").strip().lower()
+    raw = f"obsidian_otp_{normalized_email}_{otp.strip()}".encode("utf-8")
+    secret = settings.SECRET_KEY.encode("utf-8")
+    return hmac.new(secret, raw, hashlib.sha256).hexdigest()
+
+
+def legacy_hash_otp_code(otp: str, email: str = "") -> str:
+    """Legacy unsalted SHA-256 OTP hashing for transparent backward compatibility."""
     normalized_email = (email or "").strip().lower()
     raw = f"obsidian_otp_{normalized_email}_{otp.strip()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -312,18 +328,21 @@ def clear_auth_cookie(response: Response) -> None:
 
 
 def get_current_user(
+    request: Request,
     authorization: Optional[str] = Header(None),
     session_cookie: Optional[str] = Cookie(None, alias=settings.AUTH_COOKIE_NAME),
     db: Session = Depends(get_db),
 ):
-    """Strict Bearer JWT (or signed HttpOnly cookie fallback) dependency."""
+    """Strict Bearer JWT (or signed HttpOnly cookie fallback with CSRF defense) dependency."""
     from app.models.workspace import User
 
     token: Optional[str] = None
+    is_cookie_auth = False
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1].strip()
     elif session_cookie:
         token = session_cookie.strip()
+        is_cookie_auth = True
 
     if not token:
         raise HTTPException(
@@ -331,6 +350,25 @@ def get_current_user(
             detail="Missing or invalid Authorization header. Bearer token required.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # CSRF defense on state-changing requests authenticated via ambient cookie
+    if is_cookie_auth and request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        origin = request.headers.get("origin")
+        referer = request.headers.get("referer")
+        allowed = set(settings.CORS_ORIGINS or [])
+        if settings.FRONTEND_URL:
+            allowed.add(settings.FRONTEND_URL)
+        valid_origin = False
+        if origin and any(origin == o or origin.startswith(f"{o}/") for o in allowed):
+            valid_origin = True
+        elif referer and any(referer == o or referer.startswith(f"{o}/") for o in allowed):
+            valid_origin = True
+        if not valid_origin and settings.APP_ENV == "production":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF validation failed for cookie-authenticated request.",
+            )
+
     payload = decode_access_token(token)
     if not payload or not payload.get("sub") or payload.get("token_type", "access") != "access":
         raise HTTPException(

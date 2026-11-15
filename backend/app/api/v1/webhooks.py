@@ -260,14 +260,20 @@ async def slack_webhook(
     if not integ:
         raise HTTPException(status_code=404, detail="Slack integration not found")
 
-    delivery_id = request.headers.get("X-Slack-Request-Timestamp")
-    raw_body = await _validate_webhook_request(request, integration_id, delivery_id)
+    raw_body = await _validate_webhook_request(request, integration_id, None)
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid Slack webhook payload.")
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Slack webhook payload must be a JSON object.")
+
+    # Deduplicate distinct events by Slack event_id (falls back to request timestamp)
+    delivery_id = payload.get("event_id") or request.headers.get("X-Slack-Request-Timestamp")
+    if delivery_id and payload.get("type") != "url_verification":
+        if not webhook_replay_guard.check_and_record(f"slack:{integration_id}:{delivery_id}"):
+            logger.info("Ignoring duplicate Slack event %s for integration %s", delivery_id, integration_id)
+            return {"status": "ignored", "reason": "duplicate_delivery"}
 
     secret = _get_webhook_secret(integ)
     if not secret:

@@ -183,7 +183,7 @@ Every handover dossier produced by Team Obsidian adheres to the following struct
 
 - **Tenant Isolation**: Organizations, workspaces, and projects are strictly isolated using PostgreSQL Row-Level Security (RLS) patterns and tenant checks on every query.
 - **Zero Raw Secret Exposure**: Sensitive tokens (GitHub personal access tokens, Slack bot tokens, database credentials) are encrypted at rest using Fernet 256-bit symmetric encryption and masked in all API responses.
-- **Prompt Injection Defense**: User queries and untrusted document contexts are sanitized through delimiter encapsulation (`<<<UNTRUSTED_CONTENT>>>`) to prevent prompt jailbreaks.
+- **Prompt Injection Defense**: User queries and untrusted document contexts are sanitized through recursive delimiter encapsulation (`<untrusted_context>`) with tag stripping and bracket neutralization to prevent prompt jailbreaks.
 - **Dynamic Provider Abstraction**: LLM provider names and fallback notifications are handled centrally without exposing internal provider diagnostics to end users.
 
 ---

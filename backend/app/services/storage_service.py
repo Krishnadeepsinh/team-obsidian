@@ -97,7 +97,9 @@ class StorageService:
         """Persist raw binary to Supabase Storage when configured and write local cache path with content-addressable dedup."""
         safe_name = _safe_key_filename(sha256_hash[:16], filename)
         upload_dir = get_upload_dir()
-        local_path = os.path.join(upload_dir, safe_name)[:500]
+        proj_dir = os.path.join(upload_dir, project_id or "common")
+        os.makedirs(proj_dir, exist_ok=True)
+        local_path = os.path.join(proj_dir, safe_name)[:500]
         # Content-addressable deduplication: if exact content exists at local_path, reuse it
         if not (os.path.exists(local_path) and os.path.getsize(local_path) == len(file_bytes)):
             try:

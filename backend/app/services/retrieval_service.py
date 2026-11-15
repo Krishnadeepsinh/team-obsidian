@@ -6,7 +6,7 @@ import logging
 import math
 import re
 from collections import Counter, defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

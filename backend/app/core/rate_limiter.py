@@ -162,7 +162,8 @@ def get_client_ip(request: Request) -> str:
     if client_host:
         if client_host in trusted_proxies or client_host.startswith("127.") or client_host == "::1":
             is_trusted_proxy = True
-        else:
+        elif getattr(settings, "APP_ENV", "") == "production":
+            # In managed cloud container networks (e.g. Render, AWS ECS), the immediate upstream peer is the ingress load-balancer
             try:
                 ip = ipaddress.ip_address(client_host)
                 if ip.is_private or ip.is_loopback:

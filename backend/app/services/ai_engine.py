@@ -57,19 +57,10 @@ class AIEngine:
         return self._embedding_service._get_embedder()
 
     def _get_client(self):
-        if self._genai_client is None and settings.GEMINI_API_KEY:
-            from google import genai
-            from google.genai import types
-
-            self._genai_client = genai.Client(
-                api_key=settings.GEMINI_API_KEY,
-                http_options=types.HttpOptions(
-                    api_version="v1beta",
-                    timeout=8000,
-                    client_args={"timeout": 8.0},
-                    retry_options=types.HttpRetryOptions(attempts=1),
-                ),
-            )
+        if self._genai_client is not None:
+            return self._genai_client
+        if hasattr(self, "_embedding_service") and self._embedding_service:
+            self._genai_client = self._embedding_service._get_client()
         return self._genai_client
 
     def _generate_content_with_fallback(self, client, preferred_model: str, contents: str, config: Any):
