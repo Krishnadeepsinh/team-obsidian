@@ -43,6 +43,7 @@ class UserResponse(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
+    bot_field: Optional[str] = Field(None, max_length=128)
 
 
 class VerifyOtpRequest(BaseModel):

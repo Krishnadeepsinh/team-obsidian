@@ -22,6 +22,7 @@ function ForgotPasswordForm() {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
   const [cooldown, setCooldown] = useState(0)
+  const [botField, setBotField] = useState("")
 
   // Countdown timer for 60s resend cooldown
   useEffect(() => {
@@ -43,7 +44,7 @@ function ForgotPasswordForm() {
     setError("")
     setSubmittedMsg("")
     try {
-      const res = await api.forgotPassword(email.trim())
+      const res = await api.forgotPassword(email.trim(), botField || undefined)
       setSubmittedMsg(
         res.message || "A 6-digit verification code has been dispatched to your email."
       )
@@ -150,6 +151,18 @@ function ForgotPasswordForm() {
           {/* STEP 1: Email Form */}
           {step === "email" && (
             <form onSubmit={handleRequestOtp} className="space-y-4">
+              {/* Bot Honeypot: Hidden from real users */}
+              <div className="hidden" aria-hidden="true" style={{ display: "none" }}>
+                <input
+                  type="text"
+                  name="bot_field"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={botField}
+                  onChange={(e) => setBotField(e.target.value)}
+                />
+              </div>
+
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-700">Work Email</label>
                 <div className="relative">

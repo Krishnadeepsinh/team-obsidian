@@ -11,8 +11,8 @@ from app.core.database import SessionLocal
 from app.models.workspace import User, PasswordResetToken
 from app.core.security import hash_otp_code, verify_password, get_password_hash
 
-BASE_URL = "http://localhost:8000/api/v1"
-TEST_EMAIL = "yagnadeepsinh.4741@gmail.com"
+BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
+TEST_EMAIL = os.getenv("TEST_AUTH_EMAIL", "test.auth.e2e@team-obsidian.local")
 
 def run_tests():
     print("=" * 60)
@@ -22,8 +22,25 @@ def run_tests():
     db = SessionLocal()
     user = db.query(User).filter(User.email == TEST_EMAIL).first()
     if not user:
-        print(f"FAILED: Test user {TEST_EMAIL} not found in DB")
-        return False
+        from app.models.workspace import Organization
+        org = db.query(Organization).first()
+        if not org:
+            org = Organization(name="Test Org", slug="test-org")
+            db.add(org)
+            db.commit()
+            db.refresh(org)
+        user = User(
+            email=TEST_EMAIL,
+            name="E2E Test User",
+            password_hash=get_password_hash("ObsidianTestPass123!"),
+            role="developer",
+            org_id=org.id,
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        print(f"Created isolated test user: {TEST_EMAIL} (ID: {user.id})")
     original_password_hash = user.password_hash
     db.close()
     print(f"Verified test user exists: {TEST_EMAIL} (ID: {user.id})")

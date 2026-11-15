@@ -18,7 +18,7 @@ def test_ui():
         # Check step 1 email input exists
         email_input = page.locator('input[type="email"]')
         assert email_input.is_visible(), "Email input should be visible in Step 1"
-        email_input.fill("yagnadeepsinh.4741@gmail.com")
+        email_input.fill("test.auth.e2e@team-obsidian.local")
         
         # Check 'Send Verification Code' button
         send_btn = page.locator('button:has-text("Send Verification Code")')

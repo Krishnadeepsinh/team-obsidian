@@ -362,11 +362,38 @@ def get_auth_capabilities() -> Dict[str, Any]:
 @router.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """Create a cryptographically secure 6-digit email OTP and deliver via Gmail SMTP or fallback provider."""
+    # Honeypot check: automated bots or scrapers filling hidden fields are silently deflected
+    if getattr(req, "bot_field", None):
+        return {
+            "status": "success",
+            "message": "If this email is registered, a 6-digit verification code has been dispatched.",
+            "cooldown_seconds": 60,
+            "expires_in_minutes": 5,
+        }
+
     ip = get_client_ip(request)
     normalized_email = req.email.strip().lower()
+
+    # 1. Global per-target-email rate limit: prevent inbox flooding from distributed/bot IPs
+    rate_limiter.check(
+        f"forgot:email:{normalized_email}",
+        limit=4,
+        window_seconds=900,
+        detail="Too many verification requests for this email address. Please check your inbox or try again in 15 minutes.",
+    )
+
+    # 2. Per-IP rate limit: prevent automated scripts from firing multiple OTP requests
+    rate_limiter.check(
+        f"forgot:ip:{ip}",
+        limit=6,
+        window_seconds=600,
+        detail="Too many verification requests from your network. Please try again later.",
+    )
+
+    # 3. IP + Email pair limit: prevent rapid consecutive attempts
     rate_limiter.check(
         f"forgot:{ip}:{normalized_email}",
-        limit=8,
+        limit=4,
         window_seconds=300,
         detail="Too many verification requests. Please try again later.",
     )
@@ -405,6 +432,24 @@ def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = 
                     status_code=429,
                     detail=f"Please wait {wait_time} seconds before requesting a new verification code.",
                 )
+
+        # Flood suppression: Cap at 3 dispatched OTPs per 15 minutes for any account to prevent email bombing
+        fifteen_min_ago = now - timedelta(minutes=15)
+        recent_tokens_count = (
+            db.query(PasswordResetToken)
+            .filter(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.created_at >= fifteen_min_ago,
+            )
+            .count()
+        )
+        if recent_tokens_count >= 3:
+            return {
+                "status": "success",
+                "message": "If this email is registered, a 6-digit verification code has been dispatched.",
+                "cooldown_seconds": 60,
+                "expires_in_minutes": 5,
+            }
 
         # Invalidate any prior unused tokens for this user
         db.query(PasswordResetToken).filter(

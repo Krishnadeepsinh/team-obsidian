@@ -280,10 +280,10 @@ export const api = {
     persistAuthSession(res)
     return res
   },
-  forgotPassword: async (email: string) => {
+  forgotPassword: async (email: string, bot_field?: string) => {
     return fetchJson<any>("/auth/forgot-password", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, bot_field }),
     })
   },
   verifyOtp: async (email: string, otp: string) => {
