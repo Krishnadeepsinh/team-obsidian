@@ -309,6 +309,101 @@ class EmailService:
             text_body=text_body,
         )
 
+    def send_login_otp_email(self, to_email: str, otp_code: str, user_name: Optional[str] = None) -> dict:
+        """Deliver a high-security 6-digit login verification OTP code with expiration and security warning."""
+        greeting = f"Hi {user_name}," if user_name else "Hello,"
+        escaped_user_name = html.escape(user_name, quote=True) if user_name else None
+        html_greeting = f"Hi {escaped_user_name}," if escaped_user_name else "Hello,"
+
+        text_body = (
+            f"{greeting}\n\n"
+            "We received a request to log in to your TEAM OBSIDIAN account.\n\n"
+            f"Your 6-Digit Verification Code: {otp_code}\n\n"
+            "SECURITY NOTICE:\n"
+            "• This code is valid for 5 minutes only.\n"
+            "• It can only be used once.\n"
+            "• Maximum 5 verification attempts are allowed.\n"
+            "• Never share this OTP with anyone, including TEAM OBSIDIAN staff.\n\n"
+            "If you did not request this code, please secure your account immediately.\n\n"
+            "TEAM OBSIDIAN Security Team\n"
+        )
+
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TEAM OBSIDIAN Login Verification</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #0F172A; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #E2E8F0;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #0F172A; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width: 540px; background-color: #1E293B; border: 1px solid #334155; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);">
+          <!-- Header -->
+          <tr>
+            <td style="padding: 32px 32px 24px 32px; background: linear-gradient(135deg, #1E1238 0%, #0F172A 100%); border-bottom: 1px solid #334155;">
+              <table role="presentation" width="100%">
+                <tr>
+                  <td>
+                    <span style="font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: #A78BFA; background-color: rgba(167, 139, 250, 0.12); padding: 4px 10px; border-radius: 9999px; border: 1px solid rgba(167, 139, 250, 0.25);">TEAM OBSIDIAN</span>
+                    <h1 style="margin: 14px 0 4px 0; font-size: 22px; font-weight: 700; color: #FFFFFF; letter-spacing: -0.5px;">Login Verification Code</h1>
+                    <p style="margin: 0; font-size: 12px; color: #94A3B8;">Autonomous Engineering Knowledge &amp; Handover Platform</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          
+          <!-- Content Body -->
+          <tr>
+            <td style="padding: 32px;">
+              <p style="margin: 0 0 16px 0; font-size: 14px; line-height: 1.6; color: #CBD5E1;">{html_greeting}</p>
+              <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #CBD5E1;">
+                We received a request to log in to your TEAM OBSIDIAN account. Use the single-use 6-digit verification code below to complete sign-in:
+              </p>
+              
+              <!-- OTP Box -->
+              <div style="background-color: #0B0F19; border: 1.5px solid #7C3AED; border-radius: 14px; padding: 24px 16px; text-align: center; margin: 24px 0 28px 0;">
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94A3B8; margin-bottom: 8px;">Your Verification Code</div>
+                <div style="font-family: 'SF Mono', Monaco, Consolas, 'Courier New', monospace; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #A78BFA; text-indent: 12px;">{otp_code}</div>
+                <div style="font-size: 11px; color: #64748B; margin-top: 8px;">Expires in 5 minutes &bull; Single-use only</div>
+              </div>
+
+              <!-- Security Information -->
+              <div style="background-color: rgba(239, 68, 68, 0.08); border-left: 3px solid #EF4444; border-radius: 6px; padding: 12px 14px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #FCA5A5;">
+                  <strong>Security Notice:</strong> Never share this code with anyone. TEAM OBSIDIAN staff will never ask for your verification code.
+                </p>
+              </div>
+
+              <p style="margin: 0; font-size: 12px; line-height: 1.6; color: #64748B;">
+                If you did not request this login, please change your password and secure your account immediately.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 32px; background-color: #0B0F19; border-top: 1px solid #334155; text-align: center;">
+              <p style="margin: 0; font-size: 11px; color: #475569;">
+                &copy; TEAM OBSIDIAN &bull; Continuous Knowledge Reconstruction &amp; Engineering Continuity Engine
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+        return self.send_email(
+            to_email=to_email,
+            subject="Welcome to TEAM OBSIDIAN — Your Login Verification Code",
+            html_body=html_body,
+            text_body=text_body,
+        )
+
     def send_password_reset_email(self, to_email: str, reset_token: str, user_name: Optional[str] = None) -> dict:
         query = urlencode({"token": reset_token, "email": to_email})
         reset_link = f"{settings.FRONTEND_URL}/forgot-password?{query}"

@@ -340,8 +340,15 @@ class SlackConnector(BaseConnector):
         if tokens:
             for tok in tokens:
                 matched = [c for c in channels_list if c.get("id") == tok or c.get("name") == tok]
-                target_channels.extend(matched or [{"id": tok, "name": tok}])
-        else:
+                if matched:
+                    target_channels.extend(matched)
+                elif tok.startswith("C") or tok.startswith("G"):
+                    # Might be a valid channel ID not in first page of list_channels
+                    target_channels.append({"id": tok, "name": tok})
+                else:
+                    logger.info("Target '%s' is not a recognized channel in Slack workspace. Using accessible channels.", tok)
+
+        if not target_channels:
             # 1. Prefer channels the bot is already a member of
             target_channels = [c for c in channels_list if c.get("is_member")][:10]
 

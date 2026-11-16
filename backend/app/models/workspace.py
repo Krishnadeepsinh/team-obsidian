@@ -94,6 +94,7 @@ class PasswordResetToken(Base):
     attempts_count = Column(Integer, default=0, nullable=False)
     verified_at = Column(DateTime, nullable=True)
     reset_session_token = Column(String(64), nullable=True, index=True)
+    purpose = Column(String(50), default="password_reset", nullable=True)
 
     user = relationship("User", back_populates="reset_tokens")
 

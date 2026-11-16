@@ -15,6 +15,16 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
     password: str = Field(..., min_length=1, max_length=128)
+    otp: Optional[str] = Field(default=None, max_length=6)
+
+
+class LoginOtpRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    otp: str = Field(..., min_length=6, max_length=6)
+
+
+class ResendLoginOtpRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
 
 
 class Token(BaseModel):

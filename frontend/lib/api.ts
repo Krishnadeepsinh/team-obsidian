@@ -267,15 +267,33 @@ function persistAuthSession(res: any): void {
 export const api = {
   // Auth & Multi-Tenant Context
   getAuthCapabilities: async () => fetchJson<any>("/auth/capabilities"),
-  login: async (credentials: { email: string; password: string }) => {
+  login: async (credentials: { email: string; password: string; otp?: string }) => {
     invalidateProjectsCache()
     invalidateUserContextCache()
     const res = await fetchJson<any>("/auth/login", {
       method: "POST",
       body: JSON.stringify(credentials),
     })
+    if (res?.access_token) {
+      persistAuthSession(res)
+    }
+    return res
+  },
+  verifyLoginOtp: async (email: string, otp: string) => {
+    invalidateProjectsCache()
+    invalidateUserContextCache()
+    const res = await fetchJson<any>("/auth/login/verify-otp", {
+      method: "POST",
+      body: JSON.stringify({ email, otp }),
+    })
     persistAuthSession(res)
     return res
+  },
+  resendLoginOtp: async (email: string) => {
+    return fetchJson<any>("/auth/login/resend-otp", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    })
   },
   register: async (userData: any) => {
     invalidateProjectsCache()

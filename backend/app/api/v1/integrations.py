@@ -81,7 +81,7 @@ NANGO_PROVIDER_MAP: Dict[str, str] = {
     "linear": "linear",
     "gitlab": "gitlab",
     "jira": "jira",
-    "confluence": "jira",
+    "confluence": "confluence",
     "sentry": "sentry",
     "google_drive": "google-drive",
     "google-drive": "google-drive",
@@ -879,7 +879,12 @@ def start_oauth_flow(
     # Unified Nango Connect Routing for all enterprise providers
     from app.services.nango_service import nango_service
     norm_provider = provider.lower().strip()
-    if nango_service.is_configured and norm_provider in NANGO_PROVIDER_MAP:
+    if norm_provider in NANGO_PROVIDER_MAP:
+        if not nango_service.is_configured:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Nango authentication engine is required for {norm_provider.title()}. Configure NANGO_API_KEY in the backend environment.",
+            )
         nango_slug = NANGO_PROVIDER_MAP[norm_provider]
         try:
             end_user_id = f"user_{current_user.id}_proj_{project_id}"

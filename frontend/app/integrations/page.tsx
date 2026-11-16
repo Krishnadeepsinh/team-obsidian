@@ -1133,7 +1133,15 @@ function IntegrationsContent() {
                       </div>
                     )}
                     {integ.error_message && (
-                      <div className="text-rose-600 font-medium pt-1">Error: {integ.error_message}</div>
+                      <div className="text-rose-600 font-medium pt-1 text-xs">
+                        {integ.error_message.includes("not_in_channel") ? (
+                          <span>
+                            Bot has not been invited to channel. In Slack, type <code className="bg-rose-50 px-1 py-0.5 rounded text-rose-700 font-mono">/invite @Team Obsidian</code> in your channel, or click <strong>Verify Auth</strong>.
+                          </span>
+                        ) : (
+                          <span>Error: {integ.error_message}</span>
+                        )}
+                      </div>
                     )}
                   </div>
 
