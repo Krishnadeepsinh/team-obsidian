@@ -36,7 +36,7 @@ export default function ReadinessSimulatorPage() {
       else setLoading(true)
       setError("")
       const pid = getStoredProjectId() || undefined
-      let hs = await api.getHandovers(pid).catch(() => [])
+      const hs = await api.getHandovers(pid).catch(() => [])
       let list = Array.isArray(hs) ? hs : []
       if (list.length === 0) {
         const allHs = await api.getHandovers().catch(() => [])
