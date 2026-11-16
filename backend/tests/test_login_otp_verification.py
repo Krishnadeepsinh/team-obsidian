@@ -191,3 +191,48 @@ def test_login_otp_max_attempts_lockout(test_user, db_session: Session):
     # Token should now be marked used
     db_session.refresh(token)
     assert token.used_at is not None
+
+
+def test_judge_demo_account_access(db_session: Session):
+    """Judge demo account receives instant 1-click access and supports universal 000000 code."""
+    # Ensure judge demo user exists in test db
+    judge = db_session.query(User).filter(User.email == "team.obsidian44@gmail.com").first()
+    if not judge:
+        org = Organization(name="Judge Demo Org", slug=f"judge-demo-org-{uuid.uuid4().hex[:6]}")
+        db_session.add(org)
+        db_session.flush()
+        ws = Workspace(name="Judge Demo WS", slug=f"judge-demo-ws-{uuid.uuid4().hex[:6]}", org_id=org.id)
+        db_session.add(ws)
+        db_session.flush()
+        judge = User(
+            name="Judge Evaluator",
+            email="team.obsidian44@gmail.com",
+            password_hash=get_password_hash("demo1234"),
+            org_id=org.id,
+            personal_workspace_id=ws.id,
+            role="admin",
+            is_active=True,
+        )
+        db_session.add(judge)
+        db_session.commit()
+
+    # 1. 1-Click Login test
+    res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "team.obsidian44@gmail.com", "password": "demo1234"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "access_token" in data
+    assert data["user"]["email"] == "team.obsidian44@gmail.com"
+
+    # 2. Universal OTP bypass code test
+    res_otp = client.post(
+        "/api/v1/auth/login/verify-otp",
+        json={"email": "team.obsidian44@gmail.com", "otp": "000000"},
+    )
+    assert res_otp.status_code == 200
+    otp_data = res_otp.json()
+    assert "access_token" in otp_data
+    assert otp_data["user"]["email"] == "team.obsidian44@gmail.com"
+

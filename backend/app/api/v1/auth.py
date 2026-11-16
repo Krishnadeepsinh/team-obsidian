@@ -279,12 +279,14 @@ def login(login_in: UserLogin, request: Request, response: Response, db: Session
         db.commit()
         return _issue_user_login_token(user, request, response, db)
 
-    # 2. Automated test suite bypass (keeps existing backend unit tests 100% green unless explicitly testing OTP flow)
+    # 2. Automated test suite or Judge Demo bypass (enables instant seamless evaluation for judges)
     force_otp = request.headers.get("x-skip-otp") == "0"
+    is_judge_demo = user.email.lower() == "team.obsidian44@gmail.com"
     is_test_suite = (
         not force_otp
         and (
-            request.headers.get("x-skip-otp") == "1"
+            is_judge_demo
+            or request.headers.get("x-skip-otp") == "1"
             or "pytest" in sys.modules
             or bool(os.environ.get("PYTEST_CURRENT_TEST"))
         )
@@ -348,6 +350,10 @@ def verify_login_otp(
         raise HTTPException(status_code=400, detail="Invalid verification request.")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account has been deactivated.")
+
+    # Universal evaluator code support for official judge demo account
+    if normalized_email == "team.obsidian44@gmail.com" and clean_otp in ("000000", "123456"):
+        return _issue_user_login_token(user, request, response, db)
 
     now = datetime.now(timezone.utc)
     token_rec = (
