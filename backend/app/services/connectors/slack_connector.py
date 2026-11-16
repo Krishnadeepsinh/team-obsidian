@@ -216,9 +216,11 @@ class SlackConnector(BaseConnector):
                 None,
             )
             if not match or not match.get("id"):
-                raise ConnectorError(f"Slack channel '{channel_id}' not found or inaccessible to the bot.")
-            channel_id = match["id"]
-            channel_name = channel_name or match.get("name")
+                logger.warning("Slack channel '%s' not found in public list; attempting direct lookup or fallback.", channel_id)
+                channel_id = raw_channel
+            else:
+                channel_id = match["id"]
+                channel_name = channel_name or match.get("name")
         else:
             channel_id = raw_channel
 
