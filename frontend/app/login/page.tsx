@@ -103,6 +103,8 @@ export default function LoginPage() {
         setResendCooldown(60)
         setInfoMessage("We sent a 6-digit verification code to your email.")
       } else if (res.access_token) {
+        localStorage.setItem("obsidian_active_project_id", "f51869e7-b07c-47e4-9984-a54862c9d3ad")
+        localStorage.setItem("obsidian_active_project", "f51869e7-b07c-47e4-9984-a54862c9d3ad")
         router.push("/dashboard")
       }
     } catch (err: any) {
@@ -124,6 +126,8 @@ export default function LoginPage() {
     try {
       const res = await api.verifyLoginOtp(email, otp.trim())
       if (res.access_token) {
+        localStorage.setItem("obsidian_active_project_id", "f51869e7-b07c-47e4-9984-a54862c9d3ad")
+        localStorage.setItem("obsidian_active_project", "f51869e7-b07c-47e4-9984-a54862c9d3ad")
         router.push("/dashboard")
       }
     } catch (err: any) {

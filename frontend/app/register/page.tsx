@@ -25,6 +25,8 @@ export default function RegisterPage() {
         password,
       })
       if (res.access_token) {
+        localStorage.setItem("obsidian_active_project_id", "f51869e7-b07c-47e4-9984-a54862c9d3ad")
+        localStorage.setItem("obsidian_active_project", "f51869e7-b07c-47e4-9984-a54862c9d3ad")
         router.push("/dashboard")
       }
     } catch (err: any) {

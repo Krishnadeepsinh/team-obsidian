@@ -48,8 +48,8 @@ class EmbeddingService:
                 api_key=settings.GEMINI_API_KEY,
                 http_options=types.HttpOptions(
                     api_version="v1beta",
-                    timeout=8000,
-                    client_args={"timeout": 8.0},
+                    timeout=15000,
+                    client_args={"timeout": 15.0},
                     retry_options=types.HttpRetryOptions(attempts=1),
                 ),
             )

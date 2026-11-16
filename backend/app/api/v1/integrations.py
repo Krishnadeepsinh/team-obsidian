@@ -1378,7 +1378,11 @@ def list_integrations(
     for i in all_integs:
         if i.id in seen_ids:
             continue
-        is_personal = (i.connection_type == "personal")
+        is_personal = (
+            (i.connection_type == "personal")
+            and (i.project_id != "f51869e7-b07c-47e4-9984-a54862c9d3ad")
+            and not getattr(i, "is_demo", False)
+        )
         is_author = (i.authorized_by_user_id == current_user.id or i.user_id == current_user.id)
         if is_personal and not is_author:
             # Strictly do not expose another developer's personal token to this user

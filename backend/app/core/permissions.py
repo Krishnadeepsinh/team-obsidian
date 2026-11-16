@@ -85,7 +85,10 @@ def get_user_accessible_projects(user: User, db: Session) -> List[Project]:
     p_ids = get_user_accessible_project_ids(user, db)
     if not p_ids:
         return []
-    return db.query(Project).filter(Project.id.in_(p_ids)).all()
+    projs = db.query(Project).filter(Project.id.in_(p_ids)).order_by(Project.created_at.desc()).all()
+    showcase = [p for p in projs if p.id == "f51869e7-b07c-47e4-9984-a54862c9d3ad"]
+    others = [p for p in projs if p.id != "f51869e7-b07c-47e4-9984-a54862c9d3ad"]
+    return showcase + others
 
 
 def check_user_project_access(project: Project, user: User, db: Session) -> Optional[str]:

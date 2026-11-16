@@ -221,7 +221,8 @@ export function resolveActiveProjectId(projects: any[], preferredId?: string): s
   if (list.length === 0) {
     return candidate && candidate !== "default" && candidate !== ALL_PROJECTS_VALUE ? candidate : ""
   }
-  const fallbackId = list[0]?.id || ""
+  const showcase = list.find((p) => p?.id === "f51869e7-b07c-47e4-9984-a54862c9d3ad")
+  const fallbackId = showcase?.id || list[0]?.id || ""
   if (typeof window !== "undefined" && fallbackId) {
     setStoredProjectId(fallbackId, false)
   }

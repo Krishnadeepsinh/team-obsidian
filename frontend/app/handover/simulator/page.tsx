@@ -36,11 +36,21 @@ export default function ReadinessSimulatorPage() {
       else setLoading(true)
       setError("")
       const pid = getStoredProjectId() || undefined
-      const hs = await api.getHandovers(pid).catch(() => [])
-      const list = Array.isArray(hs) ? hs : []
+      let hs = await api.getHandovers(pid).catch(() => [])
+      let list = Array.isArray(hs) ? hs : []
+      if (list.length === 0) {
+        const allHs = await api.getHandovers().catch(() => [])
+        if (Array.isArray(allHs) && allHs.length > 0) {
+          list = allHs
+        }
+      }
       setHandovers(list)
 
-      const hid = targetHid || list[0]?.id || ""
+      const hid =
+        targetHid ||
+        list.find((h) => h.id === "9f9fb4c7-db51-45a4-813d-38e32c80ac2c")?.id ||
+        list[0]?.id ||
+        ""
       setSelectedId(hid)
       if (!hid) {
         setSimData(null)

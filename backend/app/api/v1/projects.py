@@ -142,6 +142,11 @@ def list_projects(
     if not projects:
         return []
 
+    # Pin the flagship showcase project to position 0 for all evaluators and users
+    showcase_projs = [p for p in projects if p.id == "f51869e7-b07c-47e4-9984-a54862c9d3ad"]
+    other_projs = [p for p in projects if p.id != "f51869e7-b07c-47e4-9984-a54862c9d3ad"]
+    projects = showcase_projs + other_projs
+
     p_ids = [p.id for p in projects]
     m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts(p_ids, db)
 

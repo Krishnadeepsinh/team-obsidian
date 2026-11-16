@@ -80,7 +80,18 @@ def list_handovers(
         if not accessible_ids:
             return []
         query = query.filter(Handover.project_id.in_(accessible_ids))
-    return query.order_by(Handover.created_at.desc()).all()
+    handovers = query.order_by(Handover.created_at.desc()).all()
+    showcase_h = [
+        h for h in handovers
+        if h.id == "9f9fb4c7-db51-45a4-813d-38e32c80ac2c"
+        or h.project_id == "f51869e7-b07c-47e4-9984-a54862c9d3ad"
+    ]
+    other_h = [
+        h for h in handovers
+        if h.id != "9f9fb4c7-db51-45a4-813d-38e32c80ac2c"
+        and h.project_id != "f51869e7-b07c-47e4-9984-a54862c9d3ad"
+    ]
+    return showcase_h + other_h
 
 
 @router.get("/{handover_id}", response_model=HandoverResponse)

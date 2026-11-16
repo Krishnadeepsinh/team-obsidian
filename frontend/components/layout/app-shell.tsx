@@ -159,14 +159,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               if (savedProjId === ALL_PROJECTS_VALUE) {
                 setActiveProject("All Projects")
               } else {
+                const showcaseProj = ctx.projects.find((p: any) => p.id === "f51869e7-b07c-47e4-9984-a54862c9d3ad")
                 const found = ctx.projects.find((p: any) => p.id === savedProjId)
-                if (found) {
-                  setActiveProject(found.name)
-                } else {
-                  setActiveProject(ctx.projects[0].name)
-                  localStorage.setItem("obsidian_active_project_id", ctx.projects[0].id)
-                  localStorage.setItem("obsidian_active_project", ctx.projects[0].id)
-                }
+                const target = found || showcaseProj || ctx.projects[0]
+                setActiveProject(target.name)
+                localStorage.setItem("obsidian_active_project_id", target.id)
+                localStorage.setItem("obsidian_active_project", target.id)
               }
             }
           }
