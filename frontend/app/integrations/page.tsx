@@ -290,6 +290,61 @@ const PROVIDER_CARDS = [
   },
 ]
 
+const DEMO_PRESETS: Record<string, { name: string; account: string; config: any }> = {
+  github: {
+    name: "GitHub (teamobsidian44/Data)",
+    account: "teamobsidian44",
+    config: { repo: "teamobsidian44/Data", repos: ["teamobsidian44/Data"], account: "teamobsidian44", cadence: "Manual / Webhook-only" },
+  },
+  jira: {
+    name: "Jira Cloud (KAN)",
+    account: "teamobsidian44.atlassian.net",
+    config: { projects: ["KAN"], project_key: "KAN", site_url: "https://teamobsidian44.atlassian.net", email: "team.obsidian44@gmail.com", account: "teamobsidian44.atlassian.net" },
+  },
+  confluence: {
+    name: "Confluence (OBS)",
+    account: "teamobsidian44.atlassian.net",
+    config: { spaces: ["OBS"], space_id: "OBS", site_url: "https://teamobsidian44.atlassian.net", email: "team.obsidian44@gmail.com", account: "teamobsidian44.atlassian.net" },
+  },
+  linear: {
+    name: "Linear (TEA)",
+    account: "teamobsidian",
+    config: { teams: ["TEA"], team_key: "TEA", workspace: "teamobsidian", account: "teamobsidian" },
+  },
+  gitlab: {
+    name: "GitLab (team-obsidian-project)",
+    account: "team.obsidian44",
+    config: { repos: ["team-obsidian-group/team-obsidian-project"], repo: "team-obsidian-group/team-obsidian-project", account: "team.obsidian44" },
+  },
+  sentry: {
+    name: "Sentry (team-obsidian)",
+    account: "team-obsidian",
+    config: { projects: ["team-obsidian"], project: "team-obsidian", organization: "team-obsidian", org_slug: "team-obsidian", account: "team-obsidian" },
+  },
+  slack: {
+    name: "Slack (New Workspace #all-new-workspace)",
+    account: "New Workspace",
+    config: { channels: ["all-new-workspace", "social"], channel_id: "all-new-workspace", team: "New Workspace", team_id: "T0C4Y4JM83C", account: "New Workspace" },
+  },
+  notion: {
+    name: "Notion (Welcome to Notion)",
+    account: "Team Obsidian Workspace",
+    config: { targets: ["414735e0-f0cf-801e-8d99-d833248332df"], database_id: "414735e0-f0cf-801e-8d99-d833248332df", account: "Team Obsidian Workspace" },
+  },
+}
+
+function isDemoUser(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    const raw = localStorage.getItem("obsidian_user")
+    if (raw) {
+      const u = JSON.parse(raw)
+      return u?.email === "team.obsidian44@gmail.com"
+    }
+  } catch {}
+  return false
+}
+
 function IntegrationsContent() {
   const searchParams = useSearchParams()
   const [integrations, setIntegrations] = useState<any[]>([])
@@ -589,10 +644,61 @@ function IntegrationsContent() {
 
   const targetProjectId = activeProject || projects[0]?.id || ""
 
+  const handleReconnect = async (integ: any) => {
+    try {
+      setBusyId(integ.id)
+      setError("")
+      setMessage(`Reconnecting ${integ.name}...`)
+      await api.reconnectIntegration(integ.id, { credentials: { is_demo: true } })
+      setMessage(`${integ.name} reconnected and verified successfully!`)
+      await loadAll(activeProject)
+    } catch (err: any) {
+      console.warn("Direct reconnect failed, opening token modal:", err)
+      openTokenConnect(integ.provider, integ)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const handleOAuthConnect = async (provider: string) => {
     if (!targetProjectId) {
       setError("Create a project in Projects first before connecting a source.")
       return
+    }
+
+    const existingInteg = integrations.find((i) => i.provider === provider)
+    if (existingInteg) {
+      if (existingInteg.status === "disconnected") {
+        await handleReconnect(existingInteg)
+        return
+      }
+      openConfigModal(existingInteg)
+      return
+    }
+
+    if (isDemoUser()) {
+      try {
+        setError("")
+        setMessage(`Connecting demo ${provider.toUpperCase()} connector...`)
+        const preset = DEMO_PRESETS[provider] || {
+          name: `${provider.toUpperCase()} Integration`,
+          account: "teamobsidian44",
+          config: {},
+        }
+        await api.createIntegration({
+          project_id: targetProjectId,
+          provider: provider,
+          name: preset.name,
+          connection_type: "organization",
+          config: preset.config,
+          credentials: { is_demo: true, account: preset.account },
+        })
+        setMessage(`${provider.toUpperCase()} connected and verified successfully!`)
+        await loadAll(targetProjectId)
+        return
+      } catch (err: any) {
+        console.warn("Direct demo create fallback:", err)
+      }
     }
     try {
       setError("")
@@ -670,14 +776,28 @@ function IntegrationsContent() {
     setConnectAuthTab(
       existingInteg || oauthProviders[provider] === false ? "token" : "oauth"
     )
-    setConnectName(existingInteg?.name || meta?.title || `${provider.toUpperCase()} Connector`)
-    setConnectToken("")
-    setConnectEmail("")
-    setConnectSiteUrl("")
-    setConnectOrgSlug("")
-    setConnectConfigVal(
-      existingInteg ? parseTargetsFromConfig(provider, existingInteg.config || {}).join(", ") : ""
-    )
+    const preset = DEMO_PRESETS[provider]
+    if (isDemoUser() && preset) {
+      setConnectName(existingInteg?.name || preset.name)
+      if (preset.config?.site_url) setConnectSiteUrl(preset.config.site_url)
+      if (preset.config?.email) setConnectEmail(preset.config.email)
+      if (preset.config?.org_slug) setConnectOrgSlug(preset.config.org_slug)
+      setConnectToken("")
+      setConnectConfigVal(
+        existingInteg
+          ? parseTargetsFromConfig(provider, existingInteg.config || {}).join(", ")
+          : parseTargetsFromConfig(provider, preset.config || {}).join(", ")
+      )
+    } else {
+      setConnectName(existingInteg?.name || meta?.title || `${provider.toUpperCase()} Connector`)
+      setConnectToken("")
+      setConnectEmail("")
+      setConnectSiteUrl("")
+      setConnectOrgSlug("")
+      setConnectConfigVal(
+        existingInteg ? parseTargetsFromConfig(provider, existingInteg.config || {}).join(", ") : ""
+      )
+    }
     setConnectResources([])
     setConnectResourceError("")
     setConnectResourceHint(null)
@@ -1232,10 +1352,11 @@ function IntegrationsContent() {
                             </button>
                           ) : (
                             <button
-                              onClick={() => openTokenConnect(integ.provider, integ)}
-                              className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200"
+                              onClick={() => handleReconnect(integ)}
+                              disabled={isBusy}
+                              className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200 flex items-center gap-1"
                             >
-                              Reconnect
+                              <RefreshCw className={`w-3 h-3 ${isBusy ? "animate-spin" : ""}`} /> Reconnect
                             </button>
                           )}
                           {confirmDeleteId === integ.id ? (
@@ -1601,6 +1722,48 @@ function IntegrationsContent() {
                           className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                         />
                       </div>
+                      {isDemoUser() && (
+                        <div className="p-3 rounded-xl bg-violet-50/70 border border-violet-200/80 flex items-center justify-between gap-3">
+                          <div className="text-[11px] text-violet-800">
+                            <span className="font-bold">Evaluation Demo Account:</span> Pre-configured with live credentials for {connectProvider}.
+                          </div>
+                          <button
+                            type="button"
+                            disabled={submitting}
+                            onClick={async () => {
+                              try {
+                                setSubmitting(true)
+                                setConnectModalError("")
+                                const preset = DEMO_PRESETS[connectProvider] || {}
+                                if (reconnectTargetId) {
+                                  await api.reconnectIntegration(reconnectTargetId, { credentials: { is_demo: true } })
+                                } else {
+                                  await api.createIntegration({
+                                    project_id: targetProjectId,
+                                    provider: connectProvider,
+                                    name: preset.name || `${connectProvider.toUpperCase()} Integration`,
+                                    connection_type: "organization",
+                                    config: preset.config || {},
+                                    credentials: { is_demo: true, account: preset.account },
+                                  })
+                                }
+                                setMessage(`${connectProvider.toUpperCase()} connected with demo credentials!`)
+                                setConnectProvider(null)
+                                setReconnectTargetId(null)
+                                await loadAll(targetProjectId)
+                              } catch (err: any) {
+                                setConnectModalError(err.message || "Failed to connect demo credentials.")
+                              } finally {
+                                setSubmitting(false)
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center gap-1 flex-shrink-0"
+                          >
+                            ⚡ 1-Click Connect Demo
+                          </button>
+                        </div>
+                      )}
+
                       <div className="flex justify-end gap-2 pt-2">
                         <button
                           type="button"

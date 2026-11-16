@@ -78,6 +78,31 @@ services:
         value: ""
       - key: NOTION_API_KEY
         value: ""
+      # Enterprise Platform Connector Credentials for Live Demo & Production
+      - key: ATLASSIAN_EMAIL
+        value: "team.obsidian44@gmail.com"
+      - key: ATLASSIAN_SITE_URL
+        value: "https://teamobsidian44.atlassian.net"
+      - key: JIRA_SITE_URL
+        value: "https://teamobsidian44.atlassian.net"
+      - key: JIRA_EMAIL
+        value: "team.obsidian44@gmail.com"
+      - key: JIRA_API_TOKEN
+        sync: false
+      - key: CONFLUENCE_SITE_URL
+        value: "https://teamobsidian44.atlassian.net"
+      - key: CONFLUENCE_EMAIL
+        value: "team.obsidian44@gmail.com"
+      - key: CONFLUENCE_API_TOKEN
+        sync: false
+      - key: LINEAR_API_TOKEN
+        sync: false
+      - key: GITLAB_TOKEN
+        sync: false
+      - key: SENTRY_AUTH_TOKEN
+        sync: false
+      - key: SENTRY_ORG_SLUG
+        value: "team-obsidian"
       # Optional email delivery for password resets & invitations
       - key: RESEND_API_KEY
         value: ""

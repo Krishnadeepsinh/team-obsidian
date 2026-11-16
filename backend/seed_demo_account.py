@@ -234,6 +234,12 @@ def run():
 
         db.commit()
         print("All demo integrations, decisions, risks, and handover assets successfully saved to Supabase!")
+
+        try:
+            from seed_rich_demo_project import run as run_rich_seed
+            run_rich_seed()
+        except Exception as seed_err:
+            print(f"Rich seed error (non-fatal): {seed_err}")
     finally:
         db.close()
 
