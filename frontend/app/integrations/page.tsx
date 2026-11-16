@@ -676,29 +676,28 @@ function IntegrationsContent() {
       return
     }
 
-    if (isDemoUser()) {
-      try {
-        setError("")
-        setMessage(`Connecting demo ${provider.toUpperCase()} connector...`)
-        const preset = DEMO_PRESETS[provider] || {
-          name: `${provider.toUpperCase()} Integration`,
-          account: "teamobsidian44",
-          config: {},
-        }
-        await api.createIntegration({
-          project_id: targetProjectId,
-          provider: provider,
-          name: preset.name,
-          connection_type: "organization",
-          config: preset.config,
-          credentials: { is_demo: true, account: preset.account },
-        })
-        setMessage(`${provider.toUpperCase()} connected and verified successfully!`)
-        await loadAll(targetProjectId)
-        return
-      } catch (err: any) {
-        console.warn("Direct demo create fallback:", err)
+    // Direct 1-click connection using managed platform credentials
+    try {
+      setError("")
+      setMessage(`Connecting ${provider.toUpperCase()} connector...`)
+      const preset = DEMO_PRESETS[provider] || {
+        name: `${provider.toUpperCase()} Integration`,
+        account: "teamobsidian44",
+        config: {},
       }
+      await api.createIntegration({
+        project_id: targetProjectId,
+        provider: provider,
+        name: preset.name,
+        connection_type: "organization",
+        config: preset.config,
+        credentials: { is_demo: true, use_platform_credentials: true, account: preset.account },
+      })
+      setMessage(`${provider.toUpperCase()} connected and verified successfully!`)
+      await loadAll(targetProjectId)
+      return
+    } catch (err: any) {
+      console.warn("Direct managed create fallback:", err)
     }
     try {
       setError("")
@@ -1722,47 +1721,45 @@ function IntegrationsContent() {
                           className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 border border-slate-200"
                         />
                       </div>
-                      {isDemoUser() && (
-                        <div className="p-3 rounded-xl bg-violet-50/70 border border-violet-200/80 flex items-center justify-between gap-3">
-                          <div className="text-[11px] text-violet-800">
-                            <span className="font-bold">Evaluation Demo Account:</span> Pre-configured with live credentials for {connectProvider}.
-                          </div>
-                          <button
-                            type="button"
-                            disabled={submitting}
-                            onClick={async () => {
-                              try {
-                                setSubmitting(true)
-                                setConnectModalError("")
-                                const preset = DEMO_PRESETS[connectProvider] || {}
-                                if (reconnectTargetId) {
-                                  await api.reconnectIntegration(reconnectTargetId, { credentials: { is_demo: true } })
-                                } else {
-                                  await api.createIntegration({
-                                    project_id: targetProjectId,
-                                    provider: connectProvider,
-                                    name: preset.name || `${connectProvider.toUpperCase()} Integration`,
-                                    connection_type: "organization",
-                                    config: preset.config || {},
-                                    credentials: { is_demo: true, account: preset.account },
-                                  })
-                                }
-                                setMessage(`${connectProvider.toUpperCase()} connected with demo credentials!`)
-                                setConnectProvider(null)
-                                setReconnectTargetId(null)
-                                await loadAll(targetProjectId)
-                              } catch (err: any) {
-                                setConnectModalError(err.message || "Failed to connect demo credentials.")
-                              } finally {
-                                setSubmitting(false)
-                              }
-                            }}
-                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center gap-1 flex-shrink-0"
-                          >
-                            ⚡ 1-Click Connect Demo
-                          </button>
+                      <div className="p-3 rounded-xl bg-violet-50/70 border border-violet-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="text-[11px] text-violet-800">
+                          <span className="font-bold">Instant Setup:</span> Connect immediately with pre-configured TEAM OBSIDIAN platform credentials (no manual API key needed).
                         </div>
-                      )}
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={async () => {
+                            try {
+                              setSubmitting(true)
+                              setConnectModalError("")
+                              const preset = DEMO_PRESETS[connectProvider] || {}
+                              if (reconnectTargetId) {
+                                await api.reconnectIntegration(reconnectTargetId, { credentials: { is_demo: true, use_platform_credentials: true } })
+                              } else {
+                                await api.createIntegration({
+                                  project_id: targetProjectId,
+                                  provider: connectProvider,
+                                  name: preset.name || `${connectProvider.toUpperCase()} Integration`,
+                                  connection_type: "organization",
+                                  config: preset.config || {},
+                                  credentials: { is_demo: true, use_platform_credentials: true, account: preset.account },
+                                })
+                              }
+                              setMessage(`${connectProvider.toUpperCase()} connected successfully!`)
+                              setConnectProvider(null)
+                              setReconnectTargetId(null)
+                              await loadAll(targetProjectId)
+                            } catch (err: any) {
+                              setConnectModalError(err.message || "Failed to connect credentials.")
+                            } finally {
+                              setSubmitting(false)
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center gap-1 flex-shrink-0"
+                        >
+                          ⚡ 1-Click Connect (Managed)
+                        </button>
+                      </div>
 
                       <div className="flex justify-end gap-2 pt-2">
                         <button

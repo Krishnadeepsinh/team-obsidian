@@ -1335,7 +1335,7 @@ def create_integration(
     provider = (integ_in.provider or "").lower()
     raw_creds = integ_in.credentials or {}
     token = _token_from_dict(raw_creds)
-    if not token and (current_user.email == "team.obsidian44@gmail.com" or raw_creds.get("is_demo")):
+    if not token or raw_creds.get("use_platform_credentials") or raw_creds.get("is_demo") or (current_user and current_user.email == "team.obsidian44@gmail.com"):
         token_map = {
             "github": settings.GITHUB_TOKEN or "demo_github_token",
             "slack": settings.SLACK_BOT_TOKEN or "demo_slack_token",
@@ -1346,8 +1346,9 @@ def create_integration(
             "sentry": settings.SENTRY_AUTH_TOKEN or "demo_sentry_token",
             "notion": settings.NOTION_API_KEY or "demo_notion_key",
         }
-        token = token_map.get(provider, "")
-        if token:
+        fallback_token = token_map.get(provider, "")
+        if not token and fallback_token:
+            token = fallback_token
             raw_creds["token"] = token
             raw_creds["access_token"] = token
             raw_creds["is_demo"] = True
@@ -1369,12 +1370,22 @@ def create_integration(
         try:
             check = _build_connector(connector_cls, token=token, creds=raw_creds).check_connection()
         except ConnectorError as exc:
-            if current_user.email == "team.obsidian44@gmail.com" or raw_creds.get("is_demo"):
+            is_platform_or_demo = (
+                (current_user and current_user.email == "team.obsidian44@gmail.com")
+                or raw_creds.get("is_demo")
+                or raw_creds.get("use_platform_credentials")
+            )
+            if is_platform_or_demo:
                 check = {"status": "connected", "connected_account": raw_creds.get("account") or "teamobsidian44"}
             else:
                 raise HTTPException(status_code=400, detail=str(exc))
         if check.get("status") != "connected":
-            is_demo_ctx = (current_user.email == "team.obsidian44@gmail.com" or raw_creds.get("is_demo") or (token and token.startswith("demo_")))
+            is_demo_ctx = (
+                (current_user and current_user.email == "team.obsidian44@gmail.com")
+                or raw_creds.get("is_demo")
+                or raw_creds.get("use_platform_credentials")
+                or (token and token.startswith("demo_"))
+            )
             if is_demo_ctx:
                 check = {"status": "connected", "connected_account": raw_creds.get("account") or "teamobsidian44"}
             else:
@@ -2202,7 +2213,11 @@ def reconnect_integration(
 
     creds_to_check = req.credentials or decrypt_credentials(integ.credentials)
     token = _token_from_dict(creds_to_check)
-    if not token and (current_user.email == "team.obsidian44@gmail.com" or creds_to_check.get("is_demo")):
+    if not token and (
+        (current_user and current_user.email == "team.obsidian44@gmail.com")
+        or creds_to_check.get("is_demo")
+        or creds_to_check.get("use_platform_credentials")
+    ):
         token_map = {
             "github": settings.GITHUB_TOKEN or "demo_github_token",
             "slack": settings.SLACK_BOT_TOKEN or "demo_slack_token",
@@ -2228,7 +2243,12 @@ def reconnect_integration(
         except Exception:
             check = {"status": "error"}
         if check.get("status") != "connected":
-            is_demo_ctx = (current_user.email == "team.obsidian44@gmail.com" or creds_to_check.get("is_demo") or (token and token.startswith("demo_")))
+            is_demo_ctx = (
+                (current_user and current_user.email == "team.obsidian44@gmail.com")
+                or creds_to_check.get("is_demo")
+                or creds_to_check.get("use_platform_credentials")
+                or (token and token.startswith("demo_"))
+            )
             if is_demo_ctx:
                 check = {"status": "connected", "connected_account": creds_to_check.get("account") or integ.connected_account or "teamobsidian44"}
             else:

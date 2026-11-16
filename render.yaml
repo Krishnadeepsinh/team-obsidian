@@ -59,25 +59,25 @@ services:
       - key: NANGO_SLACK_INTEGRATION_ID
         value: slack
       - key: GITHUB_CLIENT_ID
-        value: ""
+        sync: false
       - key: GITHUB_CLIENT_SECRET
-        value: ""
+        sync: false
       - key: GITHUB_TOKEN
-        value: ""
+        sync: false
       - key: SLACK_CLIENT_ID
-        value: ""
+        sync: false
       - key: SLACK_CLIENT_SECRET
-        value: ""
+        sync: false
       - key: SLACK_BOT_TOKEN
-        value: ""
+        sync: false
       - key: SLACK_TEAM_ID
-        value: ""
+        sync: false
       - key: NOTION_CLIENT_ID
-        value: ""
+        sync: false
       - key: NOTION_CLIENT_SECRET
-        value: ""
+        sync: false
       - key: NOTION_API_KEY
-        value: ""
+        sync: false
       # Enterprise Platform Connector Credentials for Live Demo & Production
       - key: ATLASSIAN_EMAIL
         value: "team.obsidian44@gmail.com"
