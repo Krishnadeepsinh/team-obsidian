@@ -155,6 +155,7 @@ def generate_scenarios_for_handover(db: Session, handover: Handover) -> List[Dic
     ] + ([rag_block] if rag_block else [])
 
     client = ai_engine._get_client()
+    gemini_scenarios: List[Dict[str, Any]] = []
     if client is not None and (spofs or decisions or risks or deps or rag_snippets):
         try:
             from google.genai import types
@@ -176,8 +177,10 @@ def generate_scenarios_for_handover(db: Session, handover: Handover) -> List[Dic
                 ),
             )
             parsed = ScenarioBundle.model_validate_json(resp.text)
-            if parsed.scenarios:
+            if parsed.scenarios and len(parsed.scenarios) >= 3:
                 return [s.model_dump() for s in parsed.scenarios[:3]]
+            elif parsed.scenarios:
+                gemini_scenarios = [s.model_dump() for s in parsed.scenarios]
         except Exception as exc:
             logger.warning("Gemini scenario generation fallback: %s", str(exc)[:140])
 
@@ -297,6 +300,9 @@ def generate_scenarios_for_handover(db: Session, handover: Handover) -> List[Dic
             else:
                 sc["follow_up_question"] = "Who is the secondary escalation owner or backup contact, and what handoff evidence would you record afterward?"
 
+    if gemini_scenarios:
+        combined = gemini_scenarios + [d for d in scenarios if d["id"] not in {g["id"] for g in gemini_scenarios}]
+        return combined[:3]
     return scenarios[:3]
 
 
