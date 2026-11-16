@@ -28,8 +28,8 @@ def run():
                 'provider': 'github',
                 'name': 'GitHub (teamobsidian44/Data)',
                 'account': 'teamobsidian44',
-                'config': {'repo': 'teamobsidian44/Data', 'repos': ['teamobsidian44/Data']},
-                'token': settings.GITHUB_TOKEN or 'demo_github_token',
+                'config': {'repo': 'teamobsidian44/Data', 'repos': ['teamobsidian44/Data'], 'account': 'teamobsidian44'},
+                'token': 'demo_github_token',
                 'items': 34,
             },
             {

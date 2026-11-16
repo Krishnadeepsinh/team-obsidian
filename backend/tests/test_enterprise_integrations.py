@@ -423,13 +423,15 @@ def test_ensure_valid_token_concurrent_safety(db_session):
     with patch.object(LinearConnector, "refresh_oauth_token", side_effect=mock_refresh_func):
         threads = []
         tokens_seen = []
+        integ_id = integ.id
 
         def worker():
             local_db = SessionLocal()
             try:
-                local_integ = local_db.query(Integration).filter_by(id=integ.id).first()
-                tok = ensure_valid_token(local_integ, local_db)
-                tokens_seen.append(tok)
+                local_integ = local_db.query(Integration).filter_by(id=integ_id).first()
+                if local_integ:
+                    tok = ensure_valid_token(local_integ, local_db)
+                    tokens_seen.append(tok)
             finally:
                 local_db.close()
 

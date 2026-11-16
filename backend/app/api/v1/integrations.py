@@ -333,13 +333,28 @@ def _discover_provider_resources(
 ) -> Dict[str, Any]:
     prov = (provider or "").lower().strip()
     c = creds or {}
-    is_demo = bool(token and token.startswith("demo_")) or c.get("auth_provider") == "demo"
+    is_demo = (
+        bool(token and token.startswith("demo_"))
+        or c.get("auth_provider") == "demo"
+        or bool(c.get("is_demo"))
+        or bool(c.get("account") and "teamobsidian" in str(c.get("account")).lower())
+    )
 
     if prov == "github":
+        target_account = (c.get("account") or c.get("external_account_name") or "").lower().strip()
         if is_demo or (token and token.startswith("demo_")):
             repos = []
         else:
-            repos = GitHubConnector(token=token).list_repositories(max_pages=3)
+            try:
+                repos = GitHubConnector(token=token).list_repositories(max_pages=3)
+            except ConnectorError:
+                if not is_demo:
+                    raise
+                repos = []
+            except Exception:
+                repos = []
+            if target_account == "teamobsidian44":
+                repos = [r for r in repos if (r.get("full_name") or "").lower().startswith("teamobsidian44/")]
         
         configured_repo = c.get("repo") or (c.get("repos", [None])[0])
         if not repos and is_demo:
@@ -1417,8 +1432,16 @@ def discover_resources_with_token(
             status_code=400,
             detail=f"Please enter a valid {req.provider.title()} token first to load available resources.",
         )
+    disc_creds = {
+        **(req.credentials or {}),
+        "is_demo": (
+            req.credentials.get("is_demo")
+            if req.credentials and "is_demo" in req.credentials
+            else (current_user.email == "team.obsidian44@gmail.com")
+        ),
+    }
     try:
-        return _discover_provider_resources(req.provider, token, creds=req.credentials)
+        return _discover_provider_resources(req.provider, token, creds=disc_creds)
     except ConnectorError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1442,13 +1465,30 @@ def list_integration_resources(
             status_code=400,
             detail=f"Integration '{integ.name}' has no saved credentials. Please reconnect or enter a token.",
         )
+    account_name = getattr(integ, "connected_account", None) or (integ.config or {}).get("account")
+    is_demo_context = (
+        (current_user and current_user.email == "team.obsidian44@gmail.com")
+        or getattr(integ, "is_demo", False)
+        or bool(account_name and "teamobsidian" in str(account_name).lower())
+        or bool(token and token.startswith("demo_"))
+    )
+    merged_creds = {
+        **(integ.config or {}),
+        **creds,
+        "account": creds.get("account") or account_name,
+        "is_demo": is_demo_context,
+    }
     try:
-        return _discover_provider_resources(integ.provider, token, creds=creds)
+        return _discover_provider_resources(integ.provider, token, creds=merged_creds)
     except ConnectorError as exc:
         refreshed = _refresh_oauth_token_if_possible(db, integ)
         if refreshed:
             try:
-                return _discover_provider_resources(integ.provider, refreshed, creds=decrypt_credentials(integ.credentials))
+                refreshed_creds = {
+                    **merged_creds,
+                    **decrypt_credentials(integ.credentials),
+                }
+                return _discover_provider_resources(integ.provider, refreshed, creds=refreshed_creds)
             except ConnectorError as exc2:
                 raise HTTPException(status_code=400, detail=str(exc2))
         raise HTTPException(status_code=400, detail=str(exc))
