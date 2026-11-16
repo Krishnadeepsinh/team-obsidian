@@ -42,7 +42,8 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
     ...options,
   }
   const retryableStatuses = new Set([502, 503, 504])
-  const retryDelaysMs = [400, 1200]
+  // Progressive backoff retry delays covering full Render cold start window (~45-55s)
+  const retryDelaysMs = [1000, 2500, 5000, 8000, 10000]
   const emitWaking = (waking: boolean, attempt: number) => {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("obsidian_api_waking", { detail: { waking, attempt } }))
@@ -50,7 +51,8 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
   }
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 12000)
+    // Give 35s per attempt to allow Render free tier container cold boot
+    const timer = setTimeout(() => controller.abort(), 35000)
     try {
       const res = await fetch(url, {
         ...optionsWithCredentials,

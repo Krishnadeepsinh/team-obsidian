@@ -1,0 +1,24 @@
+name: Keep Render Backend Awake
+
+on:
+  schedule:
+    # Run every 10 minutes to prevent Render free-tier from idling/sleeping (sleep timeout is 15 min)
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-backend:
+    name: Ping Render Health Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send keep-alive ping to Render backend
+        run: |
+          TARGET_URL="${{ secrets.RENDER_BACKEND_URL || 'https://team-obsidian-api.onrender.com' }}/health"
+          echo "Pinging $TARGET_URL to keep instance active..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$TARGET_URL" || echo "failed")
+          echo "Response HTTP Status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "Render backend is healthy and awake!"
+          else
+            echo "Ping sent (Status: $HTTP_STATUS) — Render container is kept warm."
+          fi
