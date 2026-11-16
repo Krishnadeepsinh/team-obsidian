@@ -336,23 +336,24 @@ def _discover_provider_resources(
     is_demo = bool(token and token.startswith("demo_")) or c.get("auth_provider") == "demo"
 
     if prov == "github":
-        repos = []
-        if token and not token.startswith("demo_"):
-            try:
-                repos = GitHubConnector(token=token).list_repositories(max_pages=3)
-            except Exception:
-                repos = []
+        if is_demo or (token and token.startswith("demo_")):
+            repos = []
+        else:
+            repos = GitHubConnector(token=token).list_repositories(max_pages=3)
         
-        # Always prioritize target repository from config/creds (e.g. teamobsidian44/Data)
-        configured_repo = c.get("repo") or (c.get("repos") or ["teamobsidian44/Data"])[0]
-        repo_names = {r.get("full_name") for r in repos if r.get("full_name")}
-        if configured_repo and configured_repo not in repo_names:
-            repos.insert(0, {
-                "full_name": configured_repo,
-                "private": False,
-                "default_branch": "main",
-                "html_url": f"https://github.com/{configured_repo}",
-            })
+        configured_repo = c.get("repo") or (c.get("repos", [None])[0])
+        if not repos and is_demo:
+            configured_repo = configured_repo or "teamobsidian44/Data"
+
+        if configured_repo:
+            repo_names = {r.get("full_name") for r in repos if r.get("full_name")}
+            if configured_repo not in repo_names:
+                repos.insert(0, {
+                    "full_name": configured_repo,
+                    "private": False,
+                    "default_branch": "main",
+                    "html_url": f"https://github.com/{configured_repo}",
+                })
 
         resources = [
             {
@@ -376,10 +377,14 @@ def _discover_provider_resources(
 
     if prov == "slack":
         channels = []
-        try:
-            channels = SlackConnector(token=token).list_channels()
-        except Exception:
+        if is_demo or (token and token.startswith("demo_")):
             channels = []
+        else:
+            try:
+                channels = SlackConnector(token=token).list_channels()
+            except ConnectorError:
+                if not is_demo:
+                    raise
         
         # Ensure configured demo channels (e.g. new-channel) are present
         configured_ch = c.get("channel_id") or (c.get("channels") or ["new-channel"])[0]
@@ -415,6 +420,8 @@ def _discover_provider_resources(
         try:
             items = NotionConnector(token=token).list_accessible_resources(max_pages=2)
         except Exception:
+            if not is_demo and not (token and token.startswith("demo_")):
+                raise
             items = [
                 {"id": "41a02419a9f480349a91c8b66fe4ed39", "title": "Welcome to Notion", "object": "page"}
             ]
@@ -442,7 +449,8 @@ def _discover_provider_resources(
             conn = _build_connector(JiraConnector, token, creds)
             projects = conn.list_projects()
         except Exception:
-            # Fallback for demo workspace or when external OAuth 3LO callback is not configured
+            if not is_demo and not (token and token.startswith("demo_")):
+                raise
             pkey = c.get("project_key") or "KAN"
             projects = [
                 {
@@ -471,6 +479,8 @@ def _discover_provider_resources(
             conn = _build_connector(ConfluenceConnector, token, creds)
             spaces = conn.list_spaces()
         except Exception:
+            if not is_demo and not (token and token.startswith("demo_")):
+                raise
             skey = c.get("space_id") or "OBS"
             spaces = [
                 {
@@ -499,6 +509,8 @@ def _discover_provider_resources(
         try:
             teams = LinearConnector(token=token).list_teams()
         except Exception:
+            if not is_demo and not (token and token.startswith("demo_")):
+                raise
             teams = [{"key": "TEA", "name": "Team Obsidian", "description": "Active Engineering Team"}]
         resources = [
             {
@@ -518,6 +530,8 @@ def _discover_provider_resources(
             conn = _build_connector(GitLabConnector, token, creds)
             projects = conn.list_projects(max_pages=2)
         except Exception:
+            if not is_demo and not (token and token.startswith("demo_")):
+                raise
             projects = [
                 {
                     "path_with_namespace": "teamobsidian44/Data",
