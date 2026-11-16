@@ -147,6 +147,27 @@ class SlackConnector(BaseConnector):
         self._user_cache[user_id] = user_id
         return user_id
 
+    def join_channel(self, channel_id: str) -> bool:
+        """Attempt to join a public Slack channel so the bot can read messages without requiring manual /invite."""
+        if not self.token or not channel_id:
+            return False
+        try:
+            res = self._request_with_retry(
+                "POST",
+                f"{self.base_url}/conversations.join",
+                headers=self.headers,
+                json={"channel": channel_id},
+            )
+            data = res.json() if res.text else {}
+            if data.get("ok"):
+                logger.info("Successfully joined Slack channel: %s", channel_id)
+                return True
+            logger.debug("Slack join channel %s response: %s", channel_id, data.get("error"))
+            return False
+        except Exception as exc:
+            logger.debug("Slack join channel %s failed: %s", channel_id, exc)
+            return False
+
     def list_channels(self) -> List[Dict[str, Any]]:
         if not self.token:
             return []
@@ -213,9 +234,23 @@ class SlackConnector(BaseConnector):
             res = self._request_with_retry(
                 "GET", f"{self.base_url}/conversations.history", headers=self.headers, params=params
             )
-            data = res.json()
+            data = res.json() if res.text else {}
             if not data.get("ok"):
-                raise ConnectorError(f"Slack history error on channel '{label}': {data.get('error', 'unknown')}")
+                err_code = data.get("error", "unknown")
+                if err_code == "not_in_channel":
+                    # Attempt to auto-join the channel
+                    if self.join_channel(channel_id):
+                        res = self._request_with_retry(
+                            "GET", f"{self.base_url}/conversations.history", headers=self.headers, params=params
+                        )
+                        data = res.json() if res.text else {}
+                if not data.get("ok"):
+                    logger.warning(
+                        "Slack channel '%s' could not be read (%s). Invite bot to channel in Slack with /invite @Team Obsidian.",
+                        label,
+                        data.get("error", "unknown"),
+                    )
+                    break
 
             messages = data.get("messages", [])
             for msg in messages:
@@ -307,15 +342,23 @@ class SlackConnector(BaseConnector):
                 matched = [c for c in channels_list if c.get("id") == tok or c.get("name") == tok]
                 target_channels.extend(matched or [{"id": tok, "name": tok}])
         else:
+            # 1. Prefer channels the bot is already a member of
             target_channels = [c for c in channels_list if c.get("is_member")][:10]
+
+            # 2. If bot is not in any channel yet, attempt to auto-join accessible public channels
             if not target_channels and channels_list:
-                raise ConnectorError(
-                    "Slack app is connected, but @Team Obsidian has not been invited to any channel yet. "
-                    "In Slack, run /invite @Team Obsidian in the channels you want to sync (or specify a Channel ID)."
-                )
+                for ch in channels_list[:10]:
+                    if self.join_channel(ch["id"]):
+                        ch["is_member"] = True
+                        target_channels.append(ch)
+
+            # 3. If still empty, fall back to accessible public channels in the workspace
+            if not target_channels and channels_list:
+                target_channels = [c for c in channels_list if not c.get("is_private")][:5] or channels_list[:5]
 
         if not target_channels:
-            raise ConnectorError("No accessible Slack channels found. Invite the bot to channels first.")
+            logger.info("No accessible Slack channels found to sync. Bot is connected and ready.")
+            return [], cursor
 
         all_records: List[Dict[str, Any]] = []
         for ch in target_channels:

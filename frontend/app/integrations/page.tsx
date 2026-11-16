@@ -600,7 +600,57 @@ function IntegrationsContent() {
       const res = await api.getOAuthUrl(provider, targetProjectId)
       const safeUrl = safeHref(res?.authorize_url)
       if (safeUrl) {
-        window.location.assign(safeUrl)
+        if (res?.auth_engine === "nango") {
+          const popup = window.open(safeUrl, "nango_connect", "width=600,height=750")
+          if (!popup || popup.closed) {
+            window.location.assign(safeUrl)
+            return
+          }
+          const providerTitle = provider.charAt(0).toUpperCase() + provider.slice(1).replace("-", " ")
+          setMessage(`Nango Connect window opened. Complete your ${providerTitle} authorization to finish connecting.`)
+
+          // Listen for Nango postMessage completion events
+          const onMessage = async (evt: MessageEvent) => {
+            if (
+              evt.origin.includes("nango.dev") ||
+              evt.data?.type === "connect" ||
+              evt.data?.connectionId ||
+              evt.data?.payload?.connectionId
+            ) {
+              const connectionId = evt.data?.connectionId || evt.data?.payload?.connectionId || ""
+              try {
+                setMessage(`Finalizing ${providerTitle} authorization...`)
+                await api.completeNangoConnection(targetProjectId, connectionId, provider)
+                setMessage(`${providerTitle} successfully authorized and connected!`)
+                await loadAll(targetProjectId)
+              } catch (finishErr: any) {
+                console.debug("Nango message finish error:", finishErr)
+              } finally {
+                window.removeEventListener("message", onMessage)
+                if (popup && !popup.closed) popup.close()
+              }
+            }
+          }
+          window.addEventListener("message", onMessage)
+
+          // Poll for popup closure to finalize and refresh
+          const pollTimer = setInterval(async () => {
+            if (popup.closed) {
+              clearInterval(pollTimer)
+              window.removeEventListener("message", onMessage)
+              try {
+                setMessage(`Checking ${providerTitle} authorization status...`)
+                await api.completeNangoConnection(targetProjectId, "", provider)
+                setMessage(`${providerTitle} connected!`)
+                await loadAll(targetProjectId)
+              } catch {
+                await loadAll(targetProjectId)
+              }
+            }
+          }, 1500)
+        } else {
+          window.location.assign(safeUrl)
+        }
       }
     } catch (err: any) {
       setError(
@@ -937,30 +987,19 @@ function IntegrationsContent() {
                   </>
                 ) : (
                   <>
-                    {oauthProviders[card.key] === false && card.key === "sentry" ? (
-                      <button
-                        onClick={() => openTokenConnect(card.key)}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center justify-center gap-1"
-                      >
-                        <KeyRound className="w-3 h-3" /> Connect Token
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => handleOAuthConnect(card.key)}
-                          className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm truncate"
-                        >
-                          {oauthProviders[card.key] === false ? "OAuth Setup" : "OAuth"}
-                        </button>
-                        <button
-                          onClick={() => openTokenConnect(card.key)}
-                          title="Connect with API Token"
-                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1 flex-shrink-0"
-                        >
-                          <KeyRound className="w-3 h-3" /> Token
-                        </button>
-                      </>
-                    )}
+                    <button
+                      onClick={() => handleOAuthConnect(card.key)}
+                      className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm truncate"
+                    >
+                      {nangoStatus?.is_configured ? "Connect (Nango)" : (oauthProviders[card.key] === false ? "OAuth Setup" : "OAuth")}
+                    </button>
+                    <button
+                      onClick={() => openTokenConnect(card.key)}
+                      title="Connect with API Token"
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1 flex-shrink-0"
+                    >
+                      <KeyRound className="w-3 h-3" /> Token
+                    </button>
                   </>
                 )}
               </div>

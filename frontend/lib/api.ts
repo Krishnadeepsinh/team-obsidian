@@ -654,8 +654,36 @@ export const api = {
     const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
     return fetchJson<any[]>(`/integrations${params}`)
   },
+  getNangoStatus: async () =>
+    fetchJson<{ is_configured: boolean; integrations: any[]; base_url?: string }>("/integrations/nango/status"),
+  createNangoConnectSession: async (projectId: string, provider: string = "slack") =>
+    fetchJson<{ token: string; connect_link: string; expires_at: string; end_user_id: string; provider: string }>(
+      "/integrations/nango/connect-session",
+      {
+        method: "POST",
+        body: JSON.stringify({ project_id: projectId, provider }),
+      }
+    ),
+  completeNangoConnection: async (projectId: string, connectionId: string, provider: string = "slack") =>
+    fetchJson<any>("/integrations/nango/callback", {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId, connection_id: connectionId, provider_config_key: provider }),
+    }),
+  createNangoAgentSession: async (projectId?: string, toolset: string = "*") =>
+    fetchJson<{
+      status: string
+      session_id: string
+      session_token: string
+      mcp_url: string
+      expires_at: string
+      toolset: Record<string, any>
+      meta_tools: Record<string, any>
+    }>("/integrations/nango/agent-session", {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId, toolset }),
+    }),
   getOAuthUrl: async (provider: string, projectId: string) =>
-    fetchJson<{ authorize_url: string; redirect_uri: string }>(
+    fetchJson<{ authorize_url: string; redirect_uri: string; auth_engine?: string; session_token?: string }>(
       `/integrations/oauth/${provider}/authorize?project_id=${encodeURIComponent(projectId)}`
     ),
   createIntegration: async (data: any) =>

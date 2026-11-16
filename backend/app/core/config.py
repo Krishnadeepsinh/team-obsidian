@@ -127,7 +127,7 @@ class Settings:
     SLACK_CLIENT_ID: str = os.getenv("SLACK_CLIENT_ID", "")
     SLACK_CLIENT_SECRET: str = os.getenv("SLACK_CLIENT_SECRET", "")
     SLACK_BOT_TOKEN: str = os.getenv("SLACK_BOT_TOKEN", "")
-    SLACK_TEAM_ID: str = os.getenv("SLACK_TEAM_ID", "T0C4Y4JM83C")
+    SLACK_TEAM_ID: str = os.getenv("SLACK_TEAM_ID", "")
 
     NOTION_CLIENT_ID: str = os.getenv("NOTION_CLIENT_ID", "")
     NOTION_CLIENT_SECRET: str = os.getenv("NOTION_CLIENT_SECRET", "")
@@ -160,6 +160,11 @@ class Settings:
     GOOGLE_DRIVE_CLIENT_ID: str = os.getenv("GOOGLE_DRIVE_CLIENT_ID", "")
     GOOGLE_DRIVE_CLIENT_SECRET: str = os.getenv("GOOGLE_DRIVE_CLIENT_SECRET", "")
     GOOGLE_DRIVE_API_KEY: str = os.getenv("GOOGLE_DRIVE_API_KEY", "")
+
+    # Nango Unified Integration Platform
+    NANGO_API_KEY: str = os.getenv("NANGO_API_KEY", os.getenv("NANGO_SECRET_KEY", ""))
+    NANGO_BASE_URL: str = os.getenv("NANGO_BASE_URL", "https://api.nango.dev")
+    NANGO_SLACK_INTEGRATION_ID: str = os.getenv("NANGO_SLACK_INTEGRATION_ID", "slack")
 
     # Email Delivery (Password Reset & Invitations)
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")

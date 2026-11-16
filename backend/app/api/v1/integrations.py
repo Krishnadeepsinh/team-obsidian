@@ -262,6 +262,26 @@ def _extract_token(integ: Integration) -> Optional[str]:
 
 
 def _refresh_oauth_token_if_possible(db: Session, integ: Integration) -> Optional[str]:
+    # Check if this integration is managed by Nango
+    if (integ.config or {}).get("auth_provider") == "nango":
+        from app.services.nango_service import nango_service
+        creds = decrypt_credentials(integ.credentials)
+        conn_id = creds.get("nango_connection_id") or (integ.config or {}).get("nango_connection_id")
+        if conn_id and nango_service.is_configured:
+            try:
+                nango_conn = nango_service.get_connection(conn_id, provider_config_key=integ.provider)
+                conn_creds = nango_conn.get("credentials") or {}
+                new_tok = conn_creds.get("access_token") or conn_creds.get("token") or conn_creds.get("bot_token")
+                if new_tok:
+                    merged = {**creds, **conn_creds, "access_token": new_tok, "token": new_tok, "bot_token": new_tok}
+                    integ.credentials = encrypt_credentials(merged)
+                    integ.error_message = None
+                    db.commit()
+                    db.refresh(integ)
+                    return new_tok
+            except Exception as e:
+                logger.warning("Failed refreshing token from Nango for %s: %s", integ.id, e)
+
     connector_cls = get_connector_class(integ.provider)
     if not connector_cls or not hasattr(connector_cls, "refresh_oauth_token"):
         return None
@@ -533,6 +553,271 @@ def _resolve_backend_base_url(request: Request) -> str:
     return configured or str(request.base_url).rstrip("/")
 
 
+@router.get("/nango/status")
+def get_nango_status(
+    current_user: User = Depends(get_current_user),
+):
+    """Check Nango integration status and list configured integrations."""
+    from app.services.nango_service import nango_service
+
+    if not nango_service.is_configured:
+        return {"is_configured": False, "integrations": [], "base_url": settings.NANGO_BASE_URL}
+
+    try:
+        integrations = nango_service.get_integrations()
+        return {
+            "is_configured": True,
+            "integrations": integrations,
+            "base_url": nango_service.base_url,
+        }
+    except Exception as exc:
+        return {"is_configured": False, "error": str(exc), "integrations": []}
+
+
+@router.post("/nango/connect-session")
+def create_nango_connect_session(
+    payload: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a Nango Connect session token and hosted connect URL.
+    Follows Nango Quickstart: https://nango.dev/docs/getting-started/quickstart
+    """
+    project_id = payload.get("project_id")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="Missing required field: project_id")
+
+    verify_project_access(project_id, current_user, db, require_write=True)
+
+    provider = (payload.get("provider") or "slack").lower().strip()
+    from app.services.nango_service import nango_service
+
+    if not nango_service.is_configured:
+        raise HTTPException(status_code=400, detail="Nango API key is not configured.")
+
+    try:
+        end_user_id = f"user_{current_user.id}_proj_{project_id}"
+        session_data = nango_service.create_connect_session(
+            end_user_id=end_user_id,
+            email=current_user.email,
+            allowed_integrations=[provider],
+        )
+        return {
+            "token": session_data.get("token"),
+            "connect_link": session_data.get("connect_link"),
+            "expires_at": session_data.get("expires_at"),
+            "end_user_id": end_user_id,
+            "provider": provider,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create Nango connect session: {exc}")
+
+
+@router.post("/nango/agent-session")
+def create_nango_agent_session(
+    payload: Optional[Dict[str, Any]] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a Nango Agent Session with a remote MCP server URL and session token.
+    Follows Nango Quickstart: https://nango.dev/docs/getting-started/quickstart.md
+    POST https://api.nango.dev/sessions
+    """
+    from app.services.nango_service import nango_service
+
+    if not nango_service.is_configured:
+        raise HTTPException(status_code=400, detail="Nango API key is not configured.")
+
+    p = payload or {}
+    project_id = p.get("project_id")
+    if project_id:
+        verify_project_access(project_id, current_user, db)
+
+    end_user_id = p.get("end_user_id") or current_user.email or str(current_user.id)
+    toolset = p.get("toolset", "*")
+
+    try:
+        session = nango_service.create_agent_session(
+            end_user_id=end_user_id,
+            toolset=toolset,
+            enable_create_connection=p.get("enable_create_connection", True),
+        )
+        return {
+            "status": "success",
+            "session_id": session.get("session_id"),
+            "session_token": session.get("session_token"),
+            "mcp_url": session.get("mcp_url"),
+            "expires_at": session.get("expires_at"),
+            "toolset": session.get("toolset"),
+            "meta_tools": session.get("meta_tools"),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create Nango agent session: {exc}")
+
+
+@router.post("/nango/callback")
+def complete_nango_connection(
+    payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Register or update an integration authorized through Nango Connect.
+    Retrieves verified credentials from Nango API and performs channel/workspace verification.
+    """
+    project_id = payload.get("project_id")
+    connection_id = payload.get("connection_id")
+    provider = (payload.get("provider_config_key") or payload.get("provider") or "slack").lower().strip()
+
+    if not project_id:
+        raise HTTPException(status_code=400, detail="Missing project_id")
+
+    verify_project_access(project_id, current_user, db, require_write=True)
+
+    from app.services.nango_service import nango_service
+
+    if not nango_service.is_configured:
+        raise HTTPException(status_code=400, detail="Nango API key is not configured.")
+
+    expected_end_user_id = f"user_{current_user.id}_proj_{project_id}"
+
+    if not connection_id:
+        # Check if a connection exists for this specific user & project first
+        try:
+            user_conn = nango_service.get_connection(expected_end_user_id, provider_config_key=provider)
+            if user_conn:
+                connection_id = expected_end_user_id
+        except Exception:
+            pass
+
+        # If not, check list_connections but ONLY match connections belonging strictly to this user/project
+        if not connection_id:
+            try:
+                active_conns = nango_service.list_connections()
+                matching = [
+                    c for c in active_conns
+                    if (c.get("provider_config_key") or c.get("provider") or "").lower() == provider
+                    and (c.get("connection_id") == expected_end_user_id or str(current_user.id) in str(c.get("connection_id", "")))
+                ]
+                if matching:
+                    matching.sort(key=lambda x: str(x.get("created_at") or x.get("updated_at") or ""), reverse=True)
+                    connection_id = matching[0].get("connection_id") or matching[0].get("id")
+            except Exception as exc:
+                logger.debug("Failed listing connections: %s", exc)
+
+    if not connection_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing connection_id and no recent active connection found for your user account in Nango."
+        )
+
+    try:
+        nango_data = nango_service.get_connection(connection_id, provider_config_key=provider)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not retrieve connection from Nango: {exc}")
+
+    creds_raw = nango_data.get("credentials") or {}
+    token = (
+        creds_raw.get("access_token")
+        or creds_raw.get("token")
+        or creds_raw.get("bot_token")
+        or creds_raw.get("api_key")
+        or creds_raw.get("apiKey")
+    )
+    if not token:
+        raise HTTPException(status_code=400, detail="Nango connection did not return a valid access token or API key.")
+
+    connector_cls = get_connector_class(provider)
+    if not connector_cls:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider '{provider}'.")
+
+    conn = _build_connector(connector_cls, token=token, creds=creds_raw)
+    check = conn.check_connection()
+    if check.get("status") != "connected":
+        raise HTTPException(status_code=400, detail=check.get("message", "Provider connection check failed."))
+
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    workspace_id = proj.workspace_id if proj else None
+
+    conn_type, ident_type, ext_org_id, ext_org_name = classify_connection_identity(
+        provider=provider,
+        check_data=check,
+        creds=creds_raw,
+        user_requested_type=None,
+    )
+
+    integ = (
+        db.query(Integration)
+        .filter(Integration.project_id == project_id, Integration.provider == provider)
+        .first()
+    )
+
+    cred_bundle = {
+        **creds_raw,
+        "nango_connection_id": connection_id,
+        "access_token": token,
+        "token": token,
+        "bot_token": token,
+    }
+
+    if not integ:
+        integ = Integration(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            user_id=current_user.id,
+            authorized_by_user_id=current_user.id,
+            authorized_by_email=current_user.email,
+            connection_type=conn_type,
+            is_org_level=bool(conn_type == "organization"),
+            provider=provider,
+            name=f"{provider.title()} ({check.get('connected_account') or 'Nango Connect'})",
+        )
+        db.add(integ)
+        db.flush()
+    else:
+        integ.workspace_id = workspace_id or integ.workspace_id
+        integ.authorized_by_user_id = current_user.id
+        integ.authorized_by_email = current_user.email
+
+    integ.auth_type = "oauth"
+    integ.auth_status = "verified"
+    integ.status = "connected"
+    integ.connection_type = conn_type
+    integ.is_org_level = bool(conn_type == "organization")
+
+    cfg = integ.config or {}
+    cfg["auth_provider"] = "nango"
+    cfg["nango_connection_id"] = connection_id
+    cfg["identity_type"] = ident_type
+    integ.config = cfg
+
+    integ.connected_account = check.get("connected_account") or check.get("team") or "Slack Workspace"
+    integ.scopes = check.get("scopes") or []
+    integ.external_org_id = ext_org_id or check.get("external_org_id") or check.get("team_id")
+    integ.external_org_name = ext_org_name or check.get("external_org_name") or check.get("team")
+    integ.credentials = encrypt_credentials(cred_bundle)
+    integ.error_message = None
+
+    if conn_type == "organization":
+        existing_pa = db.query(IntegrationProjectAccess).filter(
+            IntegrationProjectAccess.integration_id == integ.id,
+            IntegrationProjectAccess.project_id == project_id,
+        ).first()
+        if not existing_pa:
+            db.add(IntegrationProjectAccess(integration_id=integ.id, project_id=project_id))
+        integ.assigned_projects = [project_id]
+
+    db.commit()
+    db.refresh(integ)
+
+    background_tasks.add_task(_run_background_sync_extraction, integ.id, project_id)
+
+    return _to_response(integ, current_user=current_user, current_project_id=project_id)
+
+
 @router.get("/oauth/{provider}/authorize")
 def start_oauth_flow(
     provider: str,
@@ -549,6 +834,51 @@ def start_oauth_flow(
 
     base_url = _resolve_backend_base_url(request)
     redirect_uri = f"{base_url}{settings.API_V1_STR}/integrations/oauth/{provider.lower()}/callback"
+
+    # Unified Nango Connect Routing for all enterprise providers
+    from app.services.nango_service import nango_service
+    nango_provider_map = {
+        "slack": "slack",
+        "github": "github",
+        "notion": "notion",
+        "linear": "linear",
+        "gitlab": "gitlab",
+        "jira": "jira",
+        "confluence": "jira",
+        "sentry": "sentry",
+        "google_drive": "google-drive",
+        "google-drive": "google-drive",
+        "google": "google-drive",
+    }
+    norm_provider = provider.lower().strip()
+    if nango_service.is_configured and norm_provider in nango_provider_map:
+        nango_slug = nango_provider_map[norm_provider]
+        try:
+            end_user_id = f"user_{current_user.id}_proj_{project_id}"
+            cs = nango_service.create_connect_session(
+                end_user_id=end_user_id,
+                email=current_user.email,
+                allowed_integrations=[nango_slug],
+            )
+            if not cs.get("connect_link"):
+                raise HTTPException(status_code=502, detail=f"Nango did not return a valid connect_link for '{norm_provider}'.")
+            return {
+                "authorize_url": cs["connect_link"],
+                "redirect_uri": redirect_uri,
+                "provider": norm_provider,
+                "auth_engine": "nango",
+                "session_token": cs.get("token"),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Nango Connect session creation failed for %s: %s", norm_provider, e)
+            if norm_provider == "slack":
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to generate Slack Connect session with Nango: {e}",
+                )
+
     state = create_oauth_state_token({
         "sub": current_user.id,
         "project_id": project_id,
@@ -1252,16 +1582,25 @@ def trigger_sync(
         background_tasks.add_task(_run_background_sync_extraction, integ.project_id, current_user.id, integ.id)
         extracted = {"status": "scheduled", "message": "Knowledge graph extraction scheduled in background."}
     else:
+        if provider == "slack" and len(synced_records) == 0:
+            sync_msg = f"Slack connected & verified. Bot is active. (To sync private channels, invite @Team Obsidian in Slack)."
+        else:
+            sync_msg = f"Synced {integ.name}: up to date ({counts.get('skipped', len(synced_records))} records verified)."
+
         pipeline_tracker.update(
             integ.project_id,
             stage="completed",
-            message=f"Synced {integ.name}: up to date ({counts.get('skipped', len(synced_records))} records verified).",
+            message=sync_msg,
             progress=100,
             active=False,
             job_type="integration_sync_extraction",
             integration_id=integ.id,
             details={"integration_id": integ.id, "added": counts["added"], "updated": counts["updated"], "skipped": counts.get("skipped", 0)},
         )
+
+    details_msg = f"Synced {integ.name}: {counts['added']} added, {counts['updated']} updated, {counts['skipped']} deduplicated."
+    if provider == "slack" and len(synced_records) == 0:
+        details_msg = "Slack connected & verified. Bot joined public channels / ready. (To sync private channels, invite @Team Obsidian in Slack)."
 
     return SyncResultResponse(
         integration_id=integ.id,
@@ -1271,7 +1610,7 @@ def trigger_sync(
         records_updated=counts["updated"],
         records_skipped=counts["skipped"],
         details={
-            "message": f"Synced {integ.name}: {counts['added']} added, {counts['updated']} updated, {counts['skipped']} deduplicated.",
+            "message": details_msg,
             "extracted_knowledge": extracted,
             "ast_facts_added": ast_graph_added,
             "drift_detected": drift_result.get("detected", 0),
@@ -1562,6 +1901,16 @@ def disconnect_integration(
 
     integ.status = "disconnected"
     integ.auth_status = "revoked"
+
+    if (integ.config or {}).get("auth_provider") == "nango":
+        from app.services.nango_service import nango_service
+        conn_id = (integ.config or {}).get("nango_connection_id")
+        if conn_id and nango_service.is_configured:
+            try:
+                nango_service.delete_connection(conn_id, provider_config_key=integ.provider)
+            except Exception as e:
+                logger.warning("Failed to delete Nango connection on disconnect: %s", e)
+
     integ.credentials = {}
     record_activity(
         db=db,

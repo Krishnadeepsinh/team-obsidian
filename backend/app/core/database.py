@@ -19,19 +19,39 @@ DATABASE_URL = _normalize_database_url(settings.DATABASE_URL)
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
 IS_POSTGRES = DATABASE_URL.startswith("postgresql")
 
-connect_args = {"check_same_thread": False} if IS_SQLITE else {}
-engine_kwargs = {
-    "connect_args": connect_args,
-    "echo": False,
-}
-if IS_POSTGRES:
-    engine_kwargs["pool_pre_ping"] = True
-    engine_kwargs["pool_recycle"] = 300
-    engine_kwargs["pool_size"] = 5
-    engine_kwargs["max_overflow"] = 5
-    engine_kwargs["pool_timeout"] = 10
 
-engine = create_engine(DATABASE_URL, **engine_kwargs)
+
+def _create_resilient_engine():
+    global DATABASE_URL, IS_SQLITE, IS_POSTGRES
+    if IS_POSTGRES:
+        try:
+            test_engine = create_engine(
+                DATABASE_URL,
+                pool_pre_ping=True,
+                pool_recycle=300,
+                pool_size=5,
+                max_overflow=5,
+                pool_timeout=3,
+                connect_args={"connect_timeout": 3},
+                echo=False,
+            )
+            with test_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return test_engine
+        except Exception as exc:
+            import logging
+            logging.getLogger("team_obsidian.database").warning(
+                "Remote PostgreSQL unreachable on local network (%s). Seamlessly falling back to local SQLite engine (obsidian.db).",
+                exc,
+            )
+            DATABASE_URL = f"sqlite:///{settings.DEFAULT_DB_FILE.as_posix()}"
+            IS_SQLITE = True
+            IS_POSTGRES = False
+            return create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, echo=False)
+    return create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, echo=False)
+
+
+engine = _create_resilient_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

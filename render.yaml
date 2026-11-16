@@ -52,6 +52,12 @@ services:
       - key: CORS_ORIGINS
         value: ""
       # Optional live OAuth / API connector credentials
+      - key: NANGO_API_KEY
+        sync: false
+      - key: NANGO_BASE_URL
+        value: https://api.nango.dev
+      - key: NANGO_SLACK_INTEGRATION_ID
+        value: slack
       - key: GITHUB_CLIENT_ID
         value: ""
       - key: GITHUB_CLIENT_SECRET
@@ -65,7 +71,7 @@ services:
       - key: SLACK_BOT_TOKEN
         value: ""
       - key: SLACK_TEAM_ID
-        value: "T0C4Y4JM83C"
+        value: ""
       - key: NOTION_CLIENT_ID
         value: ""
       - key: NOTION_CLIENT_SECRET
