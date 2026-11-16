@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import {
+  Activity,
   Layers,
   Link2,
   Compass,
@@ -16,6 +17,7 @@ import {
   ChevronRight,
   Clock,
   FileText,
+  RefreshCw,
   Sparkles,
   Send,
   ShieldCheck,
@@ -32,7 +34,7 @@ import {
   Pie,
   Cell
 } from "recharts"
-import { api, getStoredProjectId, setStoredProjectId } from "@/lib/api"
+import { api, getStoredProjectId, isAllProjectsSelected, setStoredProjectId } from "@/lib/api"
 import { useDashboardStats, useDashboardActivity } from "@/hooks/use-queries"
 import { FormattedMarkdown } from "@/components/formatted-markdown"
 
@@ -50,6 +52,8 @@ export default function OverviewPage() {
   const [quickAnswer, setQuickAnswer] = useState<any>(null)
   const [quickAsking, setQuickAsking] = useState(false)
   const [seedingDemo, setSeedingDemo] = useState(false)
+  const [pipelineJobs, setPipelineJobs] = useState<any[]>([])
+  const [refreshingJobs, setRefreshingJobs] = useState(false)
 
   useEffect(() => {
     const handleProjectChange = () => {
@@ -130,6 +134,29 @@ export default function OverviewPage() {
     color: "text-violet-600"
   }))
 
+  // Live Pipeline & Sync Jobs
+  useEffect(() => {
+    if (Array.isArray(data?.pipeline_jobs)) {
+      setPipelineJobs(data.pipeline_jobs)
+    }
+  }, [data?.pipeline_jobs])
+
+  const handleRefreshJobs = async () => {
+    try {
+      setRefreshingJobs(true)
+      const allSelected = isAllProjectsSelected()
+      const pidToFetch = allSelected ? undefined : (activeProjId || undefined)
+      const jobs = await api.getIntegrationJobs(pidToFetch, 12)
+      if (Array.isArray(jobs)) {
+        setPipelineJobs(jobs)
+      }
+    } catch (err) {
+      console.error("Failed to refresh jobs:", err)
+    } finally {
+      setRefreshingJobs(false)
+    }
+  }
+
   // Recent Decisions (from real decisions)
   const recentDecisions = data?.recent_decisions || []
 
@@ -137,7 +164,9 @@ export default function OverviewPage() {
   const integrationsList = (data?.integrations || []).map((i: any) => ({
     name: i.name || i.provider?.toUpperCase(),
     sync: i.last_sync ? new Date(i.last_sync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Never",
-    status: i.status === "connected" ? "Connected" : "Disconnected"
+    status: i.status === "connected" ? "Connected" : "Disconnected",
+    authStatus: i.auth_status || "unverified",
+    connectionType: i.connection_type || "organization"
   }))
 
   const toggleAction = async (id: string) => {
@@ -725,11 +754,16 @@ export default function OverviewPage() {
             <div className="space-y-2.5">
               {integrationsList.map((item: any, idx: number) => (
                 <div key={idx} className="flex items-center justify-between gap-2 text-xs">
-                  <div>
-                    <p className="font-bold text-slate-800 text-xs">{item.name}</p>
-                    <p className="text-[10px] text-slate-400">Last sync: {item.sync}</p>
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-800 text-xs truncate">{item.name}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-slate-400">Sync: {item.sync}</span>
+                      {item.connectionType === "organization" && (
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-violet-50 text-violet-700 border border-violet-100 uppercase">ORG</span>
+                      )}
+                    </div>
                   </div>
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${item.status === "Connected"
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border flex-shrink-0 ${item.status === "Connected"
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : "bg-slate-50 text-slate-600 border-slate-200"
                     }`}>
@@ -741,6 +775,78 @@ export default function OverviewPage() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* 4.5 Recent Ingestion & Pipeline Jobs (Telemetry) */}
+      <div className="apple-card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-violet-600" />
+              <span>Recent Ingestion &amp; Pipeline Jobs ({pipelineJobs.length})</span>
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              Durable sync telemetry persisted across workers and server restarts.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={refreshingJobs}
+            onClick={handleRefreshJobs}
+            className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
+          >
+            <RefreshCw className={`w-3 h-3 ${refreshingJobs ? "animate-spin text-violet-600" : ""}`} />
+            <span>{refreshingJobs ? "Refreshing..." : "Refresh Jobs"}</span>
+          </button>
+        </div>
+
+        {pipelineJobs.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+            <RefreshCw className="w-6 h-6 text-slate-300 mx-auto mb-1.5" />
+            <p className="font-medium text-slate-600">No recent pipeline jobs</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Syncing an integration or uploading documents will record durable background jobs here.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {pipelineJobs.slice(0, 5).map((job: any) => (
+              <div key={job.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                        job.status === "completed"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : job.status === "failed"
+                          ? "bg-rose-50 text-rose-700 border-rose-200"
+                          : "bg-violet-50 text-violet-700 border-violet-200"
+                      }`}
+                    >
+                      {job.status}
+                    </span>
+                    <span className="font-semibold text-slate-800 truncate">{job.stage || job.job_type}</span>
+                    {job.message && <span className="text-[11px] text-slate-500 truncate">{job.message}</span>}
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {Math.round(Number(job.progress ?? 0))}% • {job.updated_at ? new Date(job.updated_at).toLocaleString() : ""}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      job.status === "failed" ? "bg-rose-500" : job.status === "completed" ? "bg-emerald-500" : "bg-violet-600"
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, Number(job.progress ?? 0)))}%` }}
+                  />
+                </div>
+                {job.error_message && (
+                  <p className="text-[11px] text-rose-600 font-medium">{job.error_message}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 5. Inline AI Project Assistant Quick-Ask */}

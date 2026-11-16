@@ -1,18 +1,18 @@
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import case, func
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import SessionLocal, get_db
 from app.core.permissions import get_user_accessible_project_ids, verify_project_access
+from app.core.pipeline_tracker import pipeline_tracker
 from app.core.security import get_current_user
 from app.models.evidence import Evidence
 from app.models.handover import Handover
-from app.models.integration import Document, Integration, SourceRecord
+from app.models.integration import Document, Integration, IntegrationProjectAccess, SourceRecord
 from app.models.knowledge import Decision, Dependency, KnowledgeEntity, KnowledgeGap, RiskItem, TaskItem
 from app.models.workspace import ActivityLog, Project, User
 
@@ -50,11 +50,14 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Return real database statistics aggregated strictly across the user's permitted projects."""
-    if project_id:
-        verify_project_access(project_id, current_user, db)
-        p_ids = [project_id]
+    clean_pid = (project_id or "").strip()
+    if clean_pid and clean_pid != "__all__":
+        verify_project_access(clean_pid, current_user, db)
+        p_ids = [clean_pid]
+        active_pid = clean_pid
     else:
         p_ids = get_user_accessible_project_ids(current_user, db)
+        active_pid = None
 
     if not p_ids:
         empty_trend = list(_last_six_months_buckets().values())
@@ -82,12 +85,43 @@ def get_dashboard_stats(
             "recent_decisions": [],
             "upcoming_tasks": [],
             "integrations": [],
+            "pipeline_jobs": [],
             "distribution": [],
             "activity_trend": empty_trend,
         }
 
     proj_query = db.query(Project).filter(Project.id.in_(p_ids))
-    integ_query = db.query(Integration).filter(Integration.project_id.in_(p_ids))
+    
+    # Dynamic integration query supporting organization integrations & multi-project assignments
+    if active_pid:
+        proj = db.query(Project).filter(Project.id == active_pid).first()
+        workspace_id = proj.workspace_id if proj else None
+        subq_access = db.query(IntegrationProjectAccess.integration_id).filter(
+            IntegrationProjectAccess.project_id == active_pid
+        )
+        integ_conditions = [
+            Integration.id.in_(subq_access),
+            Integration.project_id == active_pid,
+        ]
+        if workspace_id:
+            integ_conditions.append(
+                and_(
+                    Integration.workspace_id == workspace_id,
+                    Integration.connection_type == "organization",
+                )
+            )
+        integ_query = db.query(Integration).filter(or_(*integ_conditions))
+    else:
+        subq_access = db.query(IntegrationProjectAccess.integration_id).filter(
+            IntegrationProjectAccess.project_id.in_(p_ids)
+        )
+        integ_query = db.query(Integration).filter(
+            or_(
+                Integration.id.in_(subq_access),
+                Integration.project_id.in_(p_ids),
+            )
+        )
+
     ent_query = db.query(KnowledgeEntity).filter(KnowledgeEntity.project_id.in_(p_ids))
     dec_query = db.query(Decision).filter(Decision.project_id.in_(p_ids))
     task_query = db.query(TaskItem).filter(TaskItem.project_id.in_(p_ids))
@@ -99,24 +133,47 @@ def get_dashboard_stats(
     doc_query = db.query(Document).filter(Document.project_id.in_(p_ids))
     rec_query = db.query(SourceRecord).filter(SourceRecord.project_id.in_(p_ids))
 
-    total_projects = 1 if project_id else len(p_ids)
+    total_projects = 1 if active_pid else len(p_ids)
 
-    integrations = integ_query.all()
-    integrations_list = [
-        {
-            "id": i.id,
-            "provider": i.provider,
-            "name": i.name,
-            "status": i.status,
-            "auth_status": getattr(i, "auth_status", "unverified"),
-            "connected_account": getattr(i, "connected_account", None),
-            "items_synced": i.items_synced,
-            "last_sync": i.last_sync.isoformat() if i.last_sync else None,
-        }
-        for i in integrations
-    ]
-    connected_sources = sum(1 for i in integrations if i.status == "connected")
-    total_sources = len(integrations)
+    raw_integrations = (
+        integ_query.options(selectinload(Integration.project_access))
+        .order_by(Integration.created_at.desc())
+        .all()
+    )
+    integrations_list = []
+    seen_ids = set()
+    for i in raw_integrations:
+        if i.id in seen_ids:
+            continue
+        is_personal = (i.connection_type == "personal")
+        is_author = (i.authorized_by_user_id == current_user.id or i.user_id == current_user.id)
+        if is_personal and not is_author:
+            # Strictly isolate individual developer personal tokens
+            continue
+        seen_ids.add(i.id)
+        integrations_list.append(
+            {
+                "id": i.id,
+                "provider": i.provider,
+                "name": i.name,
+                "status": i.status,
+                "auth_status": getattr(i, "auth_status", "unverified"),
+                "connected_account": getattr(i, "connected_account", None),
+                "connection_type": getattr(i, "connection_type", "organization"),
+                "items_synced": i.items_synced,
+                "last_sync": i.last_sync.isoformat() if i.last_sync else None,
+            }
+        )
+    connected_sources = sum(1 for i in integrations_list if i["status"] == "connected")
+    total_sources = len(integrations_list)
+
+    # Durable pipeline & ingestion sync jobs
+    recent_jobs = pipeline_tracker.list_jobs(
+        project_id=active_pid,
+        project_ids=None if active_pid else p_ids,
+        limit=6,
+        db=db,
+    )
 
     counts_row = db.query(
         db.query(func.count(KnowledgeEntity.id)).filter(KnowledgeEntity.project_id.in_(p_ids)).as_scalar(),
@@ -302,6 +359,7 @@ def get_dashboard_stats(
         "recent_decisions": decisions_list,
         "upcoming_tasks": tasks_list,
         "integrations": integrations_list,
+        "pipeline_jobs": recent_jobs,
         "distribution": distribution,
         "activity_trend": activity_trend,
     }
@@ -313,9 +371,10 @@ def get_dashboard_activity(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    if project_id:
-        verify_project_access(project_id, current_user, db)
-        p_ids = [project_id]
+    clean_pid = (project_id or "").strip()
+    if clean_pid and clean_pid != "__all__":
+        verify_project_access(clean_pid, current_user, db)
+        p_ids = [clean_pid]
     else:
         p_ids = get_user_accessible_project_ids(current_user, db)
 

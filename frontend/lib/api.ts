@@ -696,7 +696,7 @@ export const api = {
     }),
   getIntegrationJobs: async (projectId?: string, limit: number = 20) => {
     const params = new URLSearchParams()
-    if (projectId) params.set("project_id", projectId)
+    if (projectId && projectId !== "__all__") params.set("project_id", projectId)
     if (limit) params.set("limit", String(limit))
     return fetchJson<any[]>(`/integrations/jobs?${params.toString()}`)
   },

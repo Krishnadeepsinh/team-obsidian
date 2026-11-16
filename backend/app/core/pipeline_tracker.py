@@ -200,12 +200,14 @@ class PipelineTracker:
         project_ids: Optional[List[str]] = None,
         integration_id: Optional[str] = None,
         limit: int = 20,
+        db: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         try:
             from app.core.database import SessionLocal
             from app.models.integration import PipelineJob
 
-            session = SessionLocal()
+            session = db or SessionLocal()
+            close_session = db is None
             try:
                 q = session.query(PipelineJob)
                 if project_id:
@@ -234,8 +236,11 @@ class PipelineTracker:
                     for r in rows
                 ]
             finally:
-                session.close()
-        except Exception:
+                if close_session:
+                    session.close()
+        except Exception as exc:
+            import logging
+            logging.getLogger("team_obsidian").warning("PipelineTracker.list_jobs failed: %s", exc)
             return []
 
 

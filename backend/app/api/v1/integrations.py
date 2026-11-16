@@ -764,13 +764,14 @@ def list_pipeline_jobs(
     db: Session = Depends(get_db),
 ):
     """List durable background sync & extraction jobs across accessible projects."""
-    if project_id:
-        verify_project_access(project_id, current_user, db)
-        return pipeline_tracker.list_jobs(project_id=project_id, limit=limit)
+    clean_pid = (project_id or "").strip()
+    if clean_pid and clean_pid != "__all__":
+        verify_project_access(clean_pid, current_user, db)
+        return pipeline_tracker.list_jobs(project_id=clean_pid, limit=limit, db=db)
     accessible_ids = get_user_accessible_project_ids(current_user, db)
     if not accessible_ids:
         return []
-    return pipeline_tracker.list_jobs(project_ids=accessible_ids, limit=limit)
+    return pipeline_tracker.list_jobs(project_ids=accessible_ids, limit=limit, db=db)
 
 
 @router.get("/{integration_id}/jobs")
@@ -785,7 +786,7 @@ def list_integration_jobs(
     if not integ:
         raise HTTPException(status_code=404, detail="Integration not found")
     verify_project_access(integ.project_id, current_user, db)
-    return pipeline_tracker.list_jobs(project_id=integ.project_id, integration_id=integ.id, limit=limit)
+    return pipeline_tracker.list_jobs(project_id=integ.project_id, integration_id=integ.id, limit=limit, db=db)
 
 
 @router.post("", response_model=IntegrationResponse)

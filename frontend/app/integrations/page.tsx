@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { api, getStoredProjectId, isAllProjectsSelected, resolveActiveProjectId, safeHref, setStoredProjectId } from "@/lib/api"
 import { ProviderLogo } from "@/components/ProviderLogo"
 import {
+  Activity,
   RefreshCw,
   CheckCircle2,
   XCircle,
@@ -292,9 +293,26 @@ function IntegrationsContent() {
   const searchParams = useSearchParams()
   const [integrations, setIntegrations] = useState<any[]>([])
   const [pipelineJobs, setPipelineJobs] = useState<any[]>([])
+  const [refreshingJobs, setRefreshingJobs] = useState(false)
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState<string>("")
   const [loading, setLoading] = useState(true)
+
+  const handleRefreshJobs = async () => {
+    try {
+      setRefreshingJobs(true)
+      const allSelected = isAllProjectsSelected()
+      const pidToFetch = allSelected ? undefined : (activeProject || undefined)
+      const jobs = await api.getIntegrationJobs(pidToFetch, 12)
+      if (Array.isArray(jobs)) {
+        setPipelineJobs(jobs)
+      }
+    } catch (err) {
+      console.error("Failed to refresh jobs:", err)
+    } finally {
+      setRefreshingJobs(false)
+    }
+  }
   const [message, setMessage] = useState(() => {
     const connected = searchParams.get("connected")
     if (connected) {
@@ -1160,25 +1178,35 @@ function IntegrationsContent() {
       </div>
 
       {/* Durable Pipeline & Sync Jobs */}
-      {pipelineJobs.length > 0 && (
-        <div className="apple-card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">Recent Ingestion &amp; Pipeline Jobs ({pipelineJobs.length})</h2>
-              <p className="text-[11px] text-slate-500">Durable sync telemetry persisted across workers and server restarts.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                api.getIntegrationJobs(activeProject || undefined, 12)
-                  .then((jobs) => { if (Array.isArray(jobs)) setPipelineJobs(jobs) })
-                  .catch(() => {})
-              }
-              className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" /> Refresh Jobs
-            </button>
+      <div className="apple-card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-violet-600" />
+              <span>Recent Ingestion &amp; Pipeline Jobs ({pipelineJobs.length})</span>
+            </h2>
+            <p className="text-[11px] text-slate-500">Durable sync telemetry persisted across workers and server restarts.</p>
           </div>
+          <button
+            type="button"
+            disabled={refreshingJobs}
+            onClick={handleRefreshJobs}
+            className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
+          >
+            <RefreshCw className={`w-3 h-3 ${refreshingJobs ? "animate-spin text-violet-600" : ""}`} />
+            <span>{refreshingJobs ? "Refreshing..." : "Refresh Jobs"}</span>
+          </button>
+        </div>
+
+        {pipelineJobs.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+            <RefreshCw className="w-6 h-6 text-slate-300 mx-auto mb-1.5" />
+            <p className="font-medium text-slate-600">No recent pipeline jobs</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Syncing an integration or uploading documents will record durable background jobs here.
+            </p>
+          </div>
+        ) : (
           <div className="space-y-2">
             {pipelineJobs.slice(0, 6).map((job: any) => (
               <div key={job.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
@@ -1216,8 +1244,8 @@ function IntegrationsContent() {
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Token Connect Modal */}
       {connectProvider && (
