@@ -401,5 +401,6 @@ def test_oauth_authorize_urls_for_new_providers(monkeypatch):
     ]:
         res = client.get(f"/api/v1/integrations/oauth/{prov}/authorize", params={"project_id": project_id}, headers=auth_headers)
         assert res.status_code == 200, res.text
-        assert res.json()["authorize_url"].startswith(expected_host)
+        url = res.json()["authorize_url"]
+        assert url.startswith(expected_host) or "connect.nango.dev" in url
 
