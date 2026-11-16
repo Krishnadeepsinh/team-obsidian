@@ -238,71 +238,40 @@ export default function LoginPage() {
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
 
-              {/* Hackathon Judge & Evaluator Demo Box */}
-              <div className="pt-2">
-                <div className="rounded-2xl border border-violet-200/90 bg-gradient-to-br from-violet-50/80 via-indigo-50/50 to-slate-50 p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-violet-900">
-                      <Sparkles className="w-3.5 h-3.5 text-violet-600" /> Judge & Evaluator Demo Access
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700 border border-violet-200">
-                      Pre-Configured
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 leading-relaxed">
-                    Official evaluation account with pre-connected GitHub, Slack, Jira, Linear, Notion & Sentry integrations:
-                  </p>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-white/90 p-2.5 rounded-xl border border-violet-100 shadow-sm">
-                    <div>
-                      <span className="text-[10px] font-sans font-semibold text-slate-400 block uppercase tracking-wider">Email</span>
-                      <span className="text-slate-800 font-semibold truncate block">team.obsidian44@gmail.com</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-sans font-semibold text-slate-400 block uppercase tracking-wider">Password</span>
-                      <span className="text-slate-800 font-semibold block">demo1234</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEmail("team.obsidian44@gmail.com")
-                        setPassword("demo1234")
-                        setError("")
-                      }}
-                      className="flex-1 py-2 px-3 rounded-xl text-[11px] font-semibold bg-white border border-violet-200 hover:bg-violet-50 text-violet-700 transition-colors shadow-xs"
-                    >
-                      Auto-Fill Demo
-                    </button>
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={async () => {
-                        setEmail("team.obsidian44@gmail.com")
-                        setPassword("demo1234")
-                        setLoading(true)
-                        setError("")
-                        try {
-                          const res = await api.login({ email: "team.obsidian44@gmail.com", password: "demo1234" })
-                          if (res.access_token) {
-                            router.push("/dashboard")
-                          } else if (res.otp_required) {
-                            setStep("otp")
-                            setMaskedEmail("team.obsidian44@gmail.com")
-                            setCountdown(res.expires_in || 300)
-                            setResendCooldown(60)
-                          }
-                        } catch (err: any) {
-                          setError(err.message || "Failed signing into demo account.")
-                        } finally {
-                          setLoading(false)
-                        }
-                      }}
-                      className="flex-1 py-2 px-3 rounded-xl text-[11px] font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-md shadow-violet-500/20 transition-all flex items-center justify-center gap-1.5"
-                    >
-                      <Sparkles className="w-3 h-3" /> 1-Click Judge Sign-In
-                    </button>
-                  </div>
+              {/* Sleek 1-Click Demo Evaluation Access */}
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={async () => {
+                    setEmail("team.obsidian44@gmail.com")
+                    setPassword("demo1234")
+                    setLoading(true)
+                    setError("")
+                    try {
+                      const res = await api.login({ email: "team.obsidian44@gmail.com", password: "demo1234" })
+                      if (res.access_token) {
+                        router.push("/dashboard")
+                      } else if (res.otp_required) {
+                        setStep("otp")
+                        setMaskedEmail("team.obsidian44@gmail.com")
+                        setCountdown(res.expires_in || 300)
+                        setResendCooldown(60)
+                      }
+                    } catch (err: any) {
+                      setError(err.message || "Failed signing into demo account.")
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  className="w-full py-2.5 px-3 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                  <span>1-Click Demo Evaluation Sign-In</span>
+                </button>
+                <div className="flex items-center justify-between px-1 text-[11px] text-slate-400">
+                  <span>Pre-connected test workspace</span>
+                  <span className="font-mono text-slate-500">team.obsidian44@gmail.com</span>
                 </div>
               </div>
             </form>
@@ -334,10 +303,9 @@ export default function LoginPage() {
                   />
                 </div>
                 {email.toLowerCase() === "team.obsidian44@gmail.com" ? (
-                  <div className="p-2.5 rounded-xl bg-violet-50 border border-violet-200 text-violet-800 text-[11px] text-center space-y-1">
-                    <p className="font-semibold text-violet-900">✨ Judge Demo Mode Active</p>
-                    <p>Enter universal evaluation code <code className="font-bold font-mono bg-violet-100 px-1 py-0.5 rounded text-violet-900">000000</code> to verify instantly.</p>
-                  </div>
+                  <p className="text-[11px] text-violet-700 text-center font-medium">
+                    Demo Mode: enter code <code className="font-bold font-mono bg-violet-100 px-1 py-0.5 rounded text-violet-900">000000</code> to verify.
+                  </p>
                 ) : (
                   <p className="text-[11px] text-slate-500 text-center">
                     Check your inbox for the code sent from TEAM OBSIDIAN Security.

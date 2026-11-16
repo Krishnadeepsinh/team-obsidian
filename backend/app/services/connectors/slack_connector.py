@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -5,6 +6,8 @@ from urllib.parse import urlencode
 
 from app.core.config import settings
 from app.services.connectors.base import BaseConnector, ConnectorError, compute_sha256
+
+logger = logging.getLogger("team_obsidian.connectors.slack")
 
 
 class SlackConnector(BaseConnector):
