@@ -751,6 +751,17 @@ def list_integrations(
             # Strictly do not expose another developer's personal token to this user
             continue
         seen_ids.add(i.id)
+
+        # Auto-heal any stale "syncing" status if a background process was interrupted (>90s ago)
+        if i.status == "syncing":
+            upd = i.updated_at.replace(tzinfo=timezone.utc) if (i.updated_at and i.updated_at.tzinfo is None) else i.updated_at
+            if not upd or (datetime.now(timezone.utc) - upd) > timedelta(seconds=90):
+                i.status = "connected" if i.last_sync else "error"
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
         results.append(_to_response(i, current_user=current_user, current_project_id=project_id))
 
     return results
@@ -1132,64 +1143,70 @@ def trigger_sync(
     creds = decrypt_credentials(integ.credentials)
     connector = _build_connector(connector_cls, token=token, creds=creds)
     try:
-        synced_records, new_cursor = connector.sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
-    except ConnectorError as exc:
-        refreshed = _refresh_oauth_token_if_possible(db, integ)
-        if refreshed:
-            try:
-                synced_records, new_cursor = _build_connector(
-                    connector_cls, token=refreshed, creds=decrypt_credentials(integ.credentials)
-                ).sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
-            except ConnectorError as exc2:
-                exc = exc2
-            else:
-                exc = None
-        if exc is not None:
-            integ.status = "error"
-            integ.error_message = str(exc)
-            integ.last_error_at = datetime.now(timezone.utc)
+        try:
+            synced_records, new_cursor = connector.sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
+        except ConnectorError as exc:
+            refreshed = _refresh_oauth_token_if_possible(db, integ)
+            if refreshed:
+                try:
+                    synced_records, new_cursor = _build_connector(
+                        connector_cls, token=refreshed, creds=decrypt_credentials(integ.credentials)
+                    ).sync(config=integ.config or {}, sync_cursor=integ.sync_cursor or {})
+                except ConnectorError as exc2:
+                    exc = exc2
+                else:
+                    exc = None
+            if exc is not None:
+                raise exc
+
+        counts = upsert_source_records(
+            db=db,
+            integration=integ,
+            raw_records=synced_records,
+            actor_user_id=current_user.id,
+            actor_email=current_user.email,
+        )
+
+        # Persist AST graph facts directly when repository AST summary records were indexed
+        ast_graph_added = 0
+        for rec in synced_records:
+            if rec.get("source_type") in ("github_ast", "gitlab_ast"):
+                meta = rec.get("metadata") or {}
+                repo_name = meta.get("repository") or integ.name
+                ast_facts = meta.get("ast_facts") or {}
+                if ast_facts:
+                    try:
+                        from app.services.code_ast_indexer import persist_ast_graph_facts
+
+                        ast_graph_added += persist_ast_graph_facts(db, integ.project_id, repo_name, ast_facts)
+                    except Exception:
+                        pass
+
+        integ.sync_cursor = new_cursor
+        integ.status = "connected"
+        integ.auth_status = "verified"
+        integ.error_message = None
+        integ.last_sync = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:
+        integ.status = "error"
+        integ.error_message = str(exc)
+        integ.last_error_at = datetime.now(timezone.utc)
+        try:
             db.add(
                 SourceEvent(
                     integration_id=integ.id,
                     event_type="sync_failed",
                     status="error",
                     records_added=0,
-                    error_message=str(exc),
+                    error_message=str(exc)[:500],
                     details={"provider": provider},
                 )
             )
             db.commit()
-            raise HTTPException(status_code=400, detail=str(exc))
-
-    counts = upsert_source_records(
-        db=db,
-        integration=integ,
-        raw_records=synced_records,
-        actor_user_id=current_user.id,
-        actor_email=current_user.email,
-    )
-
-    # Persist AST graph facts directly when repository AST summary records were indexed
-    ast_graph_added = 0
-    for rec in synced_records:
-        if rec.get("source_type") in ("github_ast", "gitlab_ast"):
-            meta = rec.get("metadata") or {}
-            repo_name = meta.get("repository") or integ.name
-            ast_facts = meta.get("ast_facts") or {}
-            if ast_facts:
-                try:
-                    from app.services.code_ast_indexer import persist_ast_graph_facts
-
-                    ast_graph_added += persist_ast_graph_facts(db, integ.project_id, repo_name, ast_facts)
-                except Exception:
-                    pass
-
-    integ.sync_cursor = new_cursor
-    integ.status = "connected"
-    integ.auth_status = "verified"
-    integ.error_message = None
-    integ.last_sync = datetime.now(timezone.utc)
-    db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
 
     drift_result = {"detected": 0}
     if counts["added"] > 0 or counts["updated"] > 0:

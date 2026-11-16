@@ -8,6 +8,7 @@ import {
   Activity,
   RefreshCw,
   CheckCircle2,
+  Check,
   XCircle,
   KeyRound,
   Settings2,
@@ -294,6 +295,7 @@ function IntegrationsContent() {
   const [integrations, setIntegrations] = useState<any[]>([])
   const [pipelineJobs, setPipelineJobs] = useState<any[]>([])
   const [refreshingJobs, setRefreshingJobs] = useState(false)
+  const [recentlySynced, setRecentlySynced] = useState<Record<string, boolean>>({})
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState<string>("")
   const [loading, setLoading] = useState(true)
@@ -735,6 +737,7 @@ function IntegrationsContent() {
         res?.items_processed ??
         (res?.records_added ?? 0) + (res?.records_updated ?? 0) + (res?.records_skipped ?? 0)
       setMessage(res?.details?.message || res?.message || `Synced ${count} records from ${integ.name}.`)
+      setRecentlySynced((prev) => ({ ...prev, [integ.id]: true }))
       window.dispatchEvent(new Event("obsidian_pipeline_updated"))
       await loadAll(activeProject)
     } catch (err: any) {
@@ -779,6 +782,7 @@ function IntegrationsContent() {
             syncRes?.items_processed ??
             (syncRes?.records_added ?? 0) + (syncRes?.records_updated ?? 0) + (syncRes?.records_skipped ?? 0)
           setMessage(syncRes?.details?.message || `Configuration saved and synced ${count} records.`)
+          setRecentlySynced((prev) => ({ ...prev, [targetInteg.id]: true }))
           window.dispatchEvent(new Event("obsidian_pipeline_updated"))
         } finally {
           setBusyId(null)
@@ -967,6 +971,8 @@ function IntegrationsContent() {
             {integrations.map((integ) => {
               const isConn = integ.status === "connected"
               const isBusy = busyId === integ.id
+              const isSyncing = isBusy || integ.status === "syncing"
+              const isSynced = !isSyncing && (Boolean(recentlySynced[integ.id]) || Boolean(integ.last_sync && (integ.status === "connected" || (integ.items_synced ?? 0) > 0)))
               return (
                 <div key={integ.id} className="apple-card p-5 space-y-3.5">
                   <div className="flex items-start justify-between gap-3">
@@ -1002,7 +1008,13 @@ function IntegrationsContent() {
                                 : "bg-rose-50 text-rose-700 border-rose-200"
                             }`}
                           >
-                            {isConn ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                            {isConn ? (
+                              <CheckCircle2 className="w-3 h-3" />
+                            ) : integ.status === "syncing" ? (
+                              <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />
+                            ) : (
+                              <XCircle className="w-3 h-3" />
+                            )}
                             {integ.status}
                           </span>
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 font-semibold">
@@ -1080,13 +1092,36 @@ function IntegrationsContent() {
                       >
                         <ShieldCheck className="w-3 h-3" /> Verify Auth
                       </button>
-                      <button
-                        disabled={isBusy}
-                        onClick={() => handleSync(integ)}
-                        className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white flex items-center gap-1"
-                      >
-                        <RefreshCw className={`w-3 h-3 ${isBusy ? "animate-spin" : ""}`} /> Sync Now
-                      </button>
+                      {isSyncing ? (
+                        <button
+                          disabled={true}
+                          className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-violet-500 text-white flex items-center gap-1.5 cursor-wait opacity-90 shadow-sm"
+                        >
+                          <RefreshCw className="w-3 h-3 animate-spin" /> Syncing...
+                        </button>
+                      ) : isSynced ? (
+                        <button
+                          disabled={isBusy}
+                          onClick={() => handleSync(integ)}
+                          title="Integration is synced. Click to re-sync now."
+                          className="group px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center gap-1.5 transition-all shadow-sm"
+                        >
+                          <span className="flex items-center gap-1.5 group-hover:hidden">
+                            <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" /> Synced
+                          </span>
+                          <span className="hidden group-hover:flex items-center gap-1.5 text-emerald-800">
+                            <RefreshCw className="w-3.5 h-3.5 text-emerald-600" /> Re-sync
+                          </span>
+                        </button>
+                      ) : (
+                        <button
+                          disabled={isBusy}
+                          onClick={() => handleSync(integ)}
+                          className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white flex items-center gap-1.5 shadow-sm transition-all"
+                        >
+                          <RefreshCw className="w-3 h-3" /> Sync Now
+                        </button>
+                      )}
                       <button
                         onClick={() => handleViewEvents(integ)}
                         className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
