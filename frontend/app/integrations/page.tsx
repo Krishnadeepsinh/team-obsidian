@@ -991,7 +991,7 @@ function IntegrationsContent() {
                       onClick={() => handleOAuthConnect(card.key)}
                       className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm truncate"
                     >
-                      {nangoStatus?.is_configured ? "Connect (Nango)" : (oauthProviders[card.key] === false ? "OAuth Setup" : "OAuth")}
+                      Connect
                     </button>
                     <button
                       onClick={() => openTokenConnect(card.key)}
