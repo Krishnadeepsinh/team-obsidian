@@ -785,6 +785,26 @@ def list_pipeline_jobs(
     return pipeline_tracker.list_jobs(project_ids=accessible_ids, limit=limit, db=db)
 
 
+@router.delete("/jobs")
+@router.post("/jobs/clear")
+def clear_pipeline_jobs(
+    project_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clear finished/completed pipeline jobs for accessible projects."""
+    clean_pid = (project_id or "").strip()
+    if clean_pid and clean_pid != "__all__":
+        verify_project_access(clean_pid, current_user, db, require_write=True)
+        count = pipeline_tracker.clear_jobs(project_id=clean_pid, only_completed=True, db=db)
+    else:
+        accessible_ids = get_user_accessible_project_ids(current_user, db)
+        if not accessible_ids:
+            return {"status": "success", "cleared": 0}
+        count = pipeline_tracker.clear_jobs(project_ids=accessible_ids, only_completed=True, db=db)
+    return {"status": "success", "cleared": count}
+
+
 @router.get("/{integration_id}/jobs")
 def list_integration_jobs(
     integration_id: str,
@@ -1231,6 +1251,17 @@ def trigger_sync(
         )
         background_tasks.add_task(_run_background_sync_extraction, integ.project_id, current_user.id, integ.id)
         extracted = {"status": "scheduled", "message": "Knowledge graph extraction scheduled in background."}
+    else:
+        pipeline_tracker.update(
+            integ.project_id,
+            stage="completed",
+            message=f"Synced {integ.name}: up to date ({counts.get('skipped', len(synced_records))} records verified).",
+            progress=100,
+            active=False,
+            job_type="integration_sync_extraction",
+            integration_id=integ.id,
+            details={"integration_id": integ.id, "added": counts["added"], "updated": counts["updated"], "skipped": counts.get("skipped", 0)},
+        )
 
     return SyncResultResponse(
         integration_id=integ.id,

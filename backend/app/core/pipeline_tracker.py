@@ -39,10 +39,13 @@ class PipelineTracker:
                 q = session.query(PipelineJob).filter(
                     PipelineJob.project_id == project_id,
                     PipelineJob.job_type == job_type,
-                    PipelineJob.status.in_(["queued", "running"]),
                 )
                 if integration_id:
                     q = q.filter(PipelineJob.integration_id == integration_id)
+                else:
+                    q = q.filter(PipelineJob.integration_id.is_(None))
+
+                # Match existing active job or latest job for this specific project+type+integration
                 row = q.order_by(PipelineJob.updated_at.desc()).first()
 
                 if row is None:
@@ -74,6 +77,21 @@ class PipelineTracker:
                         row.error_message = error_message
                     row.completed_at = None if active else now
                     row.updated_at = now
+
+                session.flush()
+
+                # Clean up any older duplicate rows for this exact same target
+                dup_q = session.query(PipelineJob).filter(
+                    PipelineJob.project_id == project_id,
+                    PipelineJob.job_type == job_type,
+                    PipelineJob.id != row.id,
+                )
+                if integration_id:
+                    dup_q = dup_q.filter(PipelineJob.integration_id == integration_id)
+                else:
+                    dup_q = dup_q.filter(PipelineJob.integration_id.is_(None))
+                dup_q.delete(synchronize_session=False)
+
                 session.commit()
                 return row.id
             except Exception as exc:
@@ -201,6 +219,7 @@ class PipelineTracker:
         integration_id: Optional[str] = None,
         limit: int = 20,
         db: Optional[Any] = None,
+        max_age_hours: Optional[int] = 48,
     ) -> List[Dict[str, Any]]:
         try:
             from app.core.database import SessionLocal
@@ -216,7 +235,24 @@ class PipelineTracker:
                     q = q.filter(PipelineJob.project_id.in_(project_ids))
                 if integration_id:
                     q = q.filter(PipelineJob.integration_id == integration_id)
-                rows = q.order_by(PipelineJob.updated_at.desc()).limit(max(1, min(100, limit))).all()
+                rows = q.order_by(PipelineJob.updated_at.desc()).limit(max(1, min(100, limit * 3))).all()
+                now_utc = datetime.now(timezone.utc)
+                seen_keys = set()
+                deduped = []
+                for r in rows:
+                    if max_age_hours and r.status in ("completed", "failed") and r.updated_at:
+                        upd = r.updated_at.replace(tzinfo=timezone.utc) if r.updated_at.tzinfo is None else r.updated_at
+                        if (now_utc - upd).total_seconds() > (max_age_hours * 3600):
+                            continue
+
+                    key = (r.project_id, r.job_type, r.integration_id or "")
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    deduped.append(r)
+                    if len(deduped) >= limit:
+                        break
+
                 return [
                     {
                         "id": r.id,
@@ -233,7 +269,7 @@ class PipelineTracker:
                         "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
                     }
-                    for r in rows
+                    for r in deduped
                 ]
             finally:
                 if close_session:
@@ -242,6 +278,41 @@ class PipelineTracker:
             import logging
             logging.getLogger("team_obsidian").warning("PipelineTracker.list_jobs failed: %s", exc)
             return []
+
+    def clear_jobs(
+        self,
+        *,
+        project_id: Optional[str] = None,
+        project_ids: Optional[List[str]] = None,
+        integration_id: Optional[str] = None,
+        only_completed: bool = True,
+        db: Optional[Any] = None,
+    ) -> int:
+        try:
+            from app.core.database import SessionLocal
+            from app.models.integration import PipelineJob
+
+            session = db or SessionLocal()
+            close_session = db is None
+            try:
+                q = session.query(PipelineJob)
+                if project_id:
+                    q = q.filter(PipelineJob.project_id == project_id)
+                elif project_ids:
+                    q = q.filter(PipelineJob.project_id.in_(project_ids))
+                if integration_id:
+                    q = q.filter(PipelineJob.integration_id == integration_id)
+                if only_completed:
+                    q = q.filter(PipelineJob.status.in_(["completed", "failed"]))
+                deleted = q.delete(synchronize_session=False)
+                session.commit()
+                return deleted
+            finally:
+                if close_session:
+                    session.close()
+        except Exception as exc:
+            logger.warning("PipelineTracker.clear_jobs failed: %s", exc)
+            return 0
 
 
 pipeline_tracker = PipelineTracker()

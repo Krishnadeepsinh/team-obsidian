@@ -21,7 +21,8 @@ import {
   Sparkles,
   Send,
   ShieldCheck,
-  Database
+  Database,
+  Trash2
 } from "lucide-react"
 import {
   ResponsiveContainer,
@@ -140,6 +141,21 @@ export default function OverviewPage() {
       setPipelineJobs(data.pipeline_jobs)
     }
   }, [data?.pipeline_jobs])
+
+  const [clearingJobs, setClearingJobs] = useState(false)
+  const handleClearJobs = async () => {
+    try {
+      setClearingJobs(true)
+      const allSelected = isAllProjectsSelected()
+      const pidToFetch = allSelected ? undefined : (activeProjId || undefined)
+      await api.clearIntegrationJobs(pidToFetch)
+      setPipelineJobs([])
+    } catch (err) {
+      console.error("Failed to clear pipeline jobs:", err)
+    } finally {
+      setClearingJobs(false)
+    }
+  }
 
   const handleRefreshJobs = async () => {
     try {
@@ -789,15 +805,29 @@ export default function OverviewPage() {
               Durable sync telemetry persisted across workers and server restarts.
             </p>
           </div>
-          <button
-            type="button"
-            disabled={refreshingJobs}
-            onClick={handleRefreshJobs}
-            className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
-          >
-            <RefreshCw className={`w-3 h-3 ${refreshingJobs ? "animate-spin text-violet-600" : ""}`} />
-            <span>{refreshingJobs ? "Refreshing..." : "Refresh Jobs"}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {pipelineJobs.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearJobs}
+                disabled={clearingJobs}
+                className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-600 hover:text-rose-600 flex items-center gap-1.5 transition-all shadow-sm"
+                title="Clear completed pipeline jobs"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>{clearingJobs ? "Clearing..." : "Clear Completed"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={refreshingJobs}
+              onClick={handleRefreshJobs}
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
+            >
+              <RefreshCw className={`w-3 h-3 ${refreshingJobs ? "animate-spin text-violet-600" : ""}`} />
+              <span>{refreshingJobs ? "Refreshing..." : "Refresh Jobs"}</span>
+            </button>
+          </div>
         </div>
 
         {pipelineJobs.length === 0 ? (

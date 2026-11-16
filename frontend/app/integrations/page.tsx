@@ -295,6 +295,7 @@ function IntegrationsContent() {
   const [integrations, setIntegrations] = useState<any[]>([])
   const [pipelineJobs, setPipelineJobs] = useState<any[]>([])
   const [refreshingJobs, setRefreshingJobs] = useState(false)
+  const [clearingJobs, setClearingJobs] = useState(false)
   const [recentlySynced, setRecentlySynced] = useState<Record<string, boolean>>({})
   const [projects, setProjects] = useState<any[]>([])
   const [activeProject, setActiveProject] = useState<string>("")
@@ -313,6 +314,20 @@ function IntegrationsContent() {
       console.error("Failed to refresh jobs:", err)
     } finally {
       setRefreshingJobs(false)
+    }
+  }
+
+  const handleClearJobs = async () => {
+    try {
+      setClearingJobs(true)
+      const allSelected = isAllProjectsSelected()
+      const pidToFetch = allSelected ? undefined : (activeProject || undefined)
+      await api.clearIntegrationJobs(pidToFetch)
+      setPipelineJobs([])
+    } catch (err) {
+      console.error("Failed to clear pipeline jobs:", err)
+    } finally {
+      setClearingJobs(false)
     }
   }
   const [message, setMessage] = useState(() => {
@@ -1222,15 +1237,29 @@ function IntegrationsContent() {
             </h2>
             <p className="text-[11px] text-slate-500">Durable sync telemetry persisted across workers and server restarts.</p>
           </div>
-          <button
-            type="button"
-            disabled={refreshingJobs}
-            onClick={handleRefreshJobs}
-            className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
-          >
-            <RefreshCw className={`w-3 h-3 ${refreshingJobs ? "animate-spin text-violet-600" : ""}`} />
-            <span>{refreshingJobs ? "Refreshing..." : "Refresh Jobs"}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {pipelineJobs.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearJobs}
+                disabled={clearingJobs}
+                className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-600 hover:text-rose-600 flex items-center gap-1.5 transition-all shadow-sm"
+                title="Clear completed pipeline jobs"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>{clearingJobs ? "Clearing..." : "Clear Completed"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={refreshingJobs}
+              onClick={handleRefreshJobs}
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60 text-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
+            >
+              <RefreshCw className={`w-3 h-3 ${refreshingJobs ? "animate-spin text-violet-600" : ""}`} />
+              <span>{refreshingJobs ? "Refreshing..." : "Refresh Jobs"}</span>
+            </button>
+          </div>
         </div>
 
         {pipelineJobs.length === 0 ? (

@@ -700,6 +700,13 @@ export const api = {
     if (limit) params.set("limit", String(limit))
     return fetchJson<any[]>(`/integrations/jobs?${params.toString()}`)
   },
+  clearIntegrationJobs: async (projectId?: string) => {
+    const params = new URLSearchParams()
+    if (projectId && projectId !== "__all__") params.set("project_id", projectId)
+    return fetchJson<{ status: string; cleared: number }>(`/integrations/jobs?${params.toString()}`, {
+      method: "DELETE",
+    })
+  },
   getIntegrationJobsById: async (integrationId: string, limit: number = 15) =>
     fetchJson<any[]>(`/integrations/${integrationId}/jobs?limit=${limit}`),
 
