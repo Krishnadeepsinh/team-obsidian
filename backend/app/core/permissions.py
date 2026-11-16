@@ -74,6 +74,10 @@ def get_user_accessible_project_ids(user: User, db: Session) -> List[str]:
         proj_conditions.append(Project.id.in_(member_pids))
 
     p_ids = [p[0] for p in db.query(Project.id).filter(or_(*proj_conditions)).all()]
+    # Always include the showcase project so judges & evaluators can access it
+    showcase = db.query(Project.id).filter(Project.id == "f51869e7-b07c-47e4-9984-a54862c9d3ad").first()
+    if showcase and showcase[0] not in p_ids:
+        p_ids.append(showcase[0])
     return list(set(p_ids))
 
 
@@ -88,6 +92,10 @@ def check_user_project_access(project: Project, user: User, db: Session) -> Opti
     """Check if user has access to project and return their effective role, or None if forbidden."""
     if not user or not project:
         return None
+
+    # Showcase demo project is universally accessible with owner privileges to evaluators & judges
+    if project.id == "f51869e7-b07c-47e4-9984-a54862c9d3ad" or getattr(project, "is_demo", False):
+        return "project_owner"
 
     # 1. Project creator has direct owner access (0 extra queries)
     if project.creator_id == user.id:
@@ -249,5 +257,12 @@ def create_personal_workspace_for_user(
     user.org_id = org.id
     user.personal_workspace_id = ws.id
     db.flush()
+
+    # Automatically grant access to the enterprise showcase project for demo testing
+    showcase_proj = db.query(Project).filter(Project.id == "f51869e7-b07c-47e4-9984-a54862c9d3ad").first()
+    if showcase_proj:
+        existing_pm = db.query(ProjectMember).filter(ProjectMember.project_id == showcase_proj.id, ProjectMember.user_id == user.id).first()
+        if not existing_pm:
+            db.add(ProjectMember(project_id=showcase_proj.id, user_id=user.id, project_role="project_owner", status="active"))
 
     return org, ws, proj

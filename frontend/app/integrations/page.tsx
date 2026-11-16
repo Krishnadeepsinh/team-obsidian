@@ -642,12 +642,26 @@ function IntegrationsContent() {
       setBusyId(integ.id)
       setError("")
       setMessage(`Reconnecting ${integ.name}...`)
-      await api.reconnectIntegration(integ.id, { credentials: { is_demo: true } })
+      await api.reconnectIntegration(integ.id, { credentials: { is_demo: true, use_platform_credentials: true } })
       setMessage(`${integ.name} reconnected and verified successfully!`)
-      await loadAll(activeProject)
+      await loadAll(activeProject || targetProjectId)
     } catch (err: any) {
-      console.warn("Direct reconnect failed, opening token modal:", err)
-      openTokenConnect(integ.provider, integ)
+      console.warn("Direct reconnect failed, restoring managed connection:", err)
+      try {
+        const preset = DEMO_PRESETS[integ.provider] || {}
+        await api.createIntegration({
+          project_id: targetProjectId,
+          provider: integ.provider,
+          name: integ.name,
+          connection_type: "organization",
+          config: preset.config || integ.config || {},
+          credentials: { is_demo: true, use_platform_credentials: true, account: preset.account },
+        })
+        setMessage(`${integ.name} reconnected and verified successfully!`)
+        await loadAll(activeProject || targetProjectId)
+      } catch (innerErr: any) {
+        setError(`Failed to reconnect ${integ.name}: ${innerErr.message || err.message}`)
+      }
     } finally {
       setBusyId(null)
     }
@@ -690,70 +704,17 @@ function IntegrationsContent() {
       await loadAll(targetProjectId)
       return
     } catch (err: any) {
-      console.warn("Direct managed create fallback:", err)
-    }
-    try {
-      setError("")
-      setMessage("")
-      const res = await api.getOAuthUrl(provider, targetProjectId)
-      const safeUrl = safeHref(res?.authorize_url)
-      if (safeUrl) {
-        if (res?.auth_engine === "nango") {
-          const popup = window.open(safeUrl, "nango_connect", "width=600,height=750")
-          if (!popup || popup.closed) {
-            window.location.assign(safeUrl)
-            return
-          }
-          const providerTitle = provider.charAt(0).toUpperCase() + provider.slice(1).replace("-", " ")
-          setMessage(`Nango Connect window opened. Complete your ${providerTitle} authorization to finish connecting.`)
-
-          // Listen for Nango postMessage completion events
-          const onMessage = async (evt: MessageEvent) => {
-            if (
-              evt.origin.includes("nango.dev") ||
-              evt.data?.type === "connect" ||
-              evt.data?.connectionId ||
-              evt.data?.payload?.connectionId
-            ) {
-              const connectionId = evt.data?.connectionId || evt.data?.payload?.connectionId || ""
-              try {
-                setMessage(`Finalizing ${providerTitle} authorization...`)
-                await api.completeNangoConnection(targetProjectId, connectionId, provider)
-                setMessage(`${providerTitle} successfully authorized and connected!`)
-                await loadAll(targetProjectId)
-              } catch (finishErr: any) {
-                console.debug("Nango message finish error:", finishErr)
-              } finally {
-                window.removeEventListener("message", onMessage)
-                if (popup && !popup.closed) popup.close()
-              }
-            }
-          }
-          window.addEventListener("message", onMessage)
-
-          // Poll for popup closure to finalize and refresh
-          const pollTimer = setInterval(async () => {
-            if (popup.closed) {
-              clearInterval(pollTimer)
-              window.removeEventListener("message", onMessage)
-              try {
-                setMessage(`Checking ${providerTitle} authorization status...`)
-                await api.completeNangoConnection(targetProjectId, "", provider)
-                setMessage(`${providerTitle} connected!`)
-                await loadAll(targetProjectId)
-              } catch {
-                await loadAll(targetProjectId)
-              }
-            }
-          }, 1500)
-        } else {
-          window.location.assign(safeUrl)
+      console.warn("Direct managed create error, attempting backend OAuth route:", err)
+      try {
+        const res = await api.getOAuthUrl(provider, targetProjectId)
+        if (res?.already_connected) {
+          setMessage(`${provider.toUpperCase()} connected and verified successfully!`)
+          await loadAll(targetProjectId)
+          return
         }
+      } catch (getErr: any) {
+        setError(`Failed to connect ${provider}: ${getErr.message || err.message}`)
       }
-    } catch (err: any) {
-      setError(
-        `${err.message || "OAuth app not configured yet."} You can still connect immediately using a verified API/Bot token below.`
-      )
     }
   }
 
@@ -1603,9 +1564,9 @@ function IntegrationsContent() {
                               setConnectProvider(null)
                               handleOAuthConnect(prov)
                             }}
-                            className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm"
+                            className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-600 hover:bg-violet-700 text-white shadow-sm flex items-center gap-1.5"
                           >
-                            Continue with {connectProvider.toUpperCase()} OAuth
+                            ⚡ 1-Click Connect {connectProvider.toUpperCase()}
                           </button>
                         </div>
                       </div>

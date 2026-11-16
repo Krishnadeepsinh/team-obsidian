@@ -703,7 +703,7 @@ export const api = {
       body: JSON.stringify({ project_id: projectId, toolset }),
     }),
   getOAuthUrl: async (provider: string, projectId: string) =>
-    fetchJson<{ authorize_url: string; redirect_uri: string; auth_engine?: string; session_token?: string }>(
+    fetchJson<{ authorize_url: string; redirect_uri: string; auth_engine?: string; session_token?: string; already_connected?: boolean; provider?: string }>(
       `/integrations/oauth/${provider}/authorize?project_id=${encodeURIComponent(projectId)}`
     ),
   createIntegration: async (data: any) =>
