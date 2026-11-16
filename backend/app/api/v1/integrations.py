@@ -74,6 +74,26 @@ class DiscoverResourcesRequest(BaseModel):
     credentials: Optional[Dict[str, Any]] = None
 
 
+NANGO_PROVIDER_MAP: Dict[str, str] = {
+    "slack": "slack",
+    "github": "github",
+    "notion": "notion",
+    "linear": "linear",
+    "gitlab": "gitlab",
+    "jira": "jira",
+    "confluence": "jira",
+    "sentry": "sentry",
+    "google_drive": "google-drive",
+    "google-drive": "google-drive",
+    "google": "google-drive",
+    "google_calendar": "google-calendar",
+    "google-calendar": "google-calendar",
+    "google_mail": "google-mail",
+    "google-mail": "google-mail",
+    "gmail": "google-mail",
+}
+
+
 def check_can_manage_integration(integ: Integration, user: Optional[User], db: Optional[Session] = None) -> bool:
     """Enforce Enterprise RBAC: only org admins, workspace owners, tech leads, or the authorizing developer can manage an integration."""
     if not user:
@@ -670,7 +690,9 @@ def complete_nango_connection(
     """
     project_id = payload.get("project_id")
     connection_id = payload.get("connection_id")
-    provider = (payload.get("provider_config_key") or payload.get("provider") or "slack").lower().strip()
+    raw_provider = (payload.get("provider_config_key") or payload.get("provider") or "slack").lower().strip()
+    nango_slug = NANGO_PROVIDER_MAP.get(raw_provider, raw_provider)
+    provider = raw_provider
 
     if not project_id:
         raise HTTPException(status_code=400, detail="Missing project_id")
@@ -686,12 +708,14 @@ def complete_nango_connection(
 
     if not connection_id:
         # Check if a connection exists for this specific user & project first
-        try:
-            user_conn = nango_service.get_connection(expected_end_user_id, provider_config_key=provider)
-            if user_conn:
-                connection_id = expected_end_user_id
-        except Exception:
-            pass
+        for key_to_try in (nango_slug, raw_provider):
+            try:
+                user_conn = nango_service.get_connection(expected_end_user_id, provider_config_key=key_to_try)
+                if user_conn:
+                    connection_id = expected_end_user_id
+                    break
+            except Exception:
+                pass
 
         # If not, check list_connections but ONLY match connections belonging strictly to this user/project
         if not connection_id:
@@ -699,7 +723,7 @@ def complete_nango_connection(
                 active_conns = nango_service.list_connections()
                 matching = [
                     c for c in active_conns
-                    if (c.get("provider_config_key") or c.get("provider") or "").lower() == provider
+                    if (c.get("provider_config_key") or c.get("provider") or "").lower() in (nango_slug, raw_provider)
                     and (c.get("connection_id") == expected_end_user_id or str(current_user.id) in str(c.get("connection_id", "")))
                 ]
                 if matching:
@@ -714,10 +738,20 @@ def complete_nango_connection(
             detail="Missing connection_id and no recent active connection found for your user account in Nango."
         )
 
-    try:
-        nango_data = nango_service.get_connection(connection_id, provider_config_key=provider)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not retrieve connection from Nango: {exc}")
+    nango_data = None
+    for key_to_try in (nango_slug, raw_provider):
+        try:
+            nango_data = nango_service.get_connection(connection_id, provider_config_key=key_to_try)
+            if nango_data:
+                break
+        except Exception:
+            pass
+
+    if not nango_data:
+        try:
+            nango_data = nango_service.get_connection(connection_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not retrieve connection from Nango: {exc}")
 
     creds_raw = nango_data.get("credentials") or {}
     token = (
@@ -844,22 +878,9 @@ def start_oauth_flow(
 
     # Unified Nango Connect Routing for all enterprise providers
     from app.services.nango_service import nango_service
-    nango_provider_map = {
-        "slack": "slack",
-        "github": "github",
-        "notion": "notion",
-        "linear": "linear",
-        "gitlab": "gitlab",
-        "jira": "jira",
-        "confluence": "jira",
-        "sentry": "sentry",
-        "google_drive": "google-drive",
-        "google-drive": "google-drive",
-        "google": "google-drive",
-    }
     norm_provider = provider.lower().strip()
-    if nango_service.is_configured and norm_provider in nango_provider_map:
-        nango_slug = nango_provider_map[norm_provider]
+    if nango_service.is_configured and norm_provider in NANGO_PROVIDER_MAP:
+        nango_slug = NANGO_PROVIDER_MAP[norm_provider]
         try:
             end_user_id = f"user_{current_user.id}_proj_{project_id}"
             cs = nango_service.create_connect_session(
@@ -880,11 +901,10 @@ def start_oauth_flow(
             raise
         except Exception as e:
             logger.error("Nango Connect session creation failed for %s: %s", norm_provider, e)
-            if norm_provider == "slack":
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Failed to generate Slack Connect session with Nango: {e}",
-                )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to generate {norm_provider.title()} Connect session with Nango: {e}",
+            )
 
     state = create_oauth_state_token({
         "sub": current_user.id,

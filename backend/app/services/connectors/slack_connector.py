@@ -364,10 +364,17 @@ class SlackConnector(BaseConnector):
         for ch in target_channels:
             ch_id = ch["id"]
             oldest_ts = cursor.get(ch_id)
-            recs, newest_ts = self.sync_channel_messages(ch_id, channel_name=ch.get("name"), oldest_ts=oldest_ts)
-            all_records.extend(recs)
-            if newest_ts:
-                cursor[ch_id] = newest_ts
+            try:
+                recs, newest_ts = self.sync_channel_messages(ch_id, channel_name=ch.get("name"), oldest_ts=oldest_ts)
+                all_records.extend(recs)
+                if newest_ts:
+                    cursor[ch_id] = newest_ts
+            except Exception as exc:
+                logger.warning(
+                    "Skipping Slack channel '%s' during sync (%s). Invite the bot to private channels using /invite in Slack.",
+                    ch.get("name") or ch_id,
+                    exc,
+                )
 
         return all_records, cursor
 

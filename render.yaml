@@ -53,7 +53,7 @@ services:
         value: ""
       # Optional live OAuth / API connector credentials
       - key: NANGO_API_KEY
-        sync: false
+        value: dba9fdd3-c077-4743-a2f5-3565d2a7be63
       - key: NANGO_BASE_URL
         value: https://api.nango.dev
       - key: NANGO_SLACK_INTEGRATION_ID

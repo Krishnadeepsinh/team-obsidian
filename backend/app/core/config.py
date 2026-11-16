@@ -162,7 +162,7 @@ class Settings:
     GOOGLE_DRIVE_API_KEY: str = os.getenv("GOOGLE_DRIVE_API_KEY", "")
 
     # Nango Unified Integration Platform
-    NANGO_API_KEY: str = os.getenv("NANGO_API_KEY", os.getenv("NANGO_SECRET_KEY", ""))
+    NANGO_API_KEY: str = os.getenv("NANGO_API_KEY", os.getenv("NANGO_SECRET_KEY", "dba9fdd3-c077-4743-a2f5-3565d2a7be63"))
     NANGO_BASE_URL: str = os.getenv("NANGO_BASE_URL", "https://api.nango.dev")
     NANGO_SLACK_INTEGRATION_ID: str = os.getenv("NANGO_SLACK_INTEGRATION_ID", "slack")
 

@@ -23,7 +23,10 @@ class NangoService:
     """
 
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
-        self.api_key = settings.NANGO_API_KEY if api_key is None else api_key
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        else:
+            self.api_key = (settings.NANGO_API_KEY or "dba9fdd3-c077-4743-a2f5-3565d2a7be63").strip()
         self.base_url = (base_url or settings.NANGO_BASE_URL or "https://api.nango.dev").rstrip("/")
         self.slack_integration_id = settings.NANGO_SLACK_INTEGRATION_ID or "slack"
 
