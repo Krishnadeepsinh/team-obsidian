@@ -27,8 +27,9 @@ engine_kwargs = {
 if IS_POSTGRES:
     engine_kwargs["pool_pre_ping"] = True
     engine_kwargs["pool_recycle"] = 300
-    engine_kwargs["pool_size"] = 20
-    engine_kwargs["max_overflow"] = 10
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 5
+    engine_kwargs["pool_timeout"] = 10
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -148,19 +149,28 @@ def _ensure_runtime_columns() -> None:
 
 def init_db() -> None:
     """Initialize schema safely; create missing tables and additive columns if needed."""
+    import logging
     import app.models  # noqa: F401 - Ensure all SQLAlchemy models are registered
+    log = logging.getLogger("team_obsidian")
+
     if IS_SQLITE:
         Base.metadata.create_all(bind=engine)
-    else:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
         try:
-            Base.metadata.create_all(bind=engine, checkfirst=True)
+            _ensure_runtime_columns()
         except Exception as exc:
-            import logging
-            logging.getLogger("team_obsidian").warning("Non-fatal Postgres create_all check skipped: %s", exc)
-    try:
-        _ensure_runtime_columns()
-    except Exception as exc:
-        import logging
-        logging.getLogger("team_obsidian").warning("Non-fatal additive column sync skipped: %s", exc)
+            log.warning("Non-fatal additive column sync skipped: %s", exc)
+    else:
+        try:
+            with engine.connect() as conn:
+                tables_exist = conn.execute(
+                    text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users')")
+                ).scalar()
+                if not tables_exist:
+                    Base.metadata.create_all(bind=engine, checkfirst=True)
+                    _ensure_runtime_columns()
+        except Exception as exc:
+            log.warning("Non-fatal Postgres init check failed, attempting baseline create_all: %s", exc)
+            try:
+                Base.metadata.create_all(bind=engine, checkfirst=True)
+            except Exception as e2:
+                log.warning("Non-fatal Postgres create_all check skipped: %s", e2)

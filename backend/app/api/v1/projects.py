@@ -1,12 +1,11 @@
-from concurrent.futures import ThreadPoolExecutor
 import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal, get_db
+from app.core.database import IS_SQLITE, SessionLocal, get_db
 from app.core.permissions import (
     ALL_ROLES,
     create_personal_workspace_for_user,
@@ -33,81 +32,78 @@ from app.services.audit_service import create_notification, record_activity
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
-def _batch_project_counts(p_ids: List[str]):
+def _batch_project_counts(p_ids: List[str], db: Optional[Session] = None):
     if not p_ids:
         return {}, {}, {}, {}, {}
 
-    def fetch_m():
-        session = SessionLocal()
-        try:
-            return dict(
+    session = db or SessionLocal()
+    close_session = db is None
+    try:
+        if not IS_SQLITE:
+            sql = text("""
+                SELECT 'member' as type, project_id, count(id) FROM project_members WHERE project_id = ANY(:p_ids) GROUP BY project_id
+                UNION ALL
+                SELECT 'decision' as type, project_id, count(id) FROM decisions WHERE project_id = ANY(:p_ids) GROUP BY project_id
+                UNION ALL
+                SELECT 'task' as type, project_id, count(id) FROM task_items WHERE project_id = ANY(:p_ids) GROUP BY project_id
+                UNION ALL
+                SELECT 'risk' as type, project_id, count(id) FROM risk_items WHERE project_id = ANY(:p_ids) GROUP BY project_id
+                UNION ALL
+                SELECT 'evidence' as type, project_id, count(id) FROM evidences WHERE project_id = ANY(:p_ids) GROUP BY project_id
+            """)
+            rows = session.execute(sql, {"p_ids": p_ids}).fetchall()
+            m_counts, d_counts, t_counts, r_counts, e_counts = {}, {}, {}, {}, {}
+            for r_type, pid, cnt in rows:
+                if r_type == 'member':
+                    m_counts[pid] = cnt
+                elif r_type == 'decision':
+                    d_counts[pid] = cnt
+                elif r_type == 'task':
+                    t_counts[pid] = cnt
+                elif r_type == 'risk':
+                    r_counts[pid] = cnt
+                elif r_type == 'evidence':
+                    e_counts[pid] = cnt
+            return m_counts, d_counts, t_counts, r_counts, e_counts
+        else:
+            m_counts = dict(
                 session.query(ProjectMember.project_id, func.count(ProjectMember.id))
                 .filter(ProjectMember.project_id.in_(p_ids))
                 .group_by(ProjectMember.project_id)
                 .all()
             )
-        finally:
-            session.close()
-
-    def fetch_d():
-        session = SessionLocal()
-        try:
-            return dict(
+            d_counts = dict(
                 session.query(Decision.project_id, func.count(Decision.id))
                 .filter(Decision.project_id.in_(p_ids))
                 .group_by(Decision.project_id)
                 .all()
             )
-        finally:
-            session.close()
-
-    def fetch_t():
-        session = SessionLocal()
-        try:
-            return dict(
+            t_counts = dict(
                 session.query(TaskItem.project_id, func.count(TaskItem.id))
                 .filter(TaskItem.project_id.in_(p_ids))
                 .group_by(TaskItem.project_id)
                 .all()
             )
-        finally:
-            session.close()
-
-    def fetch_r():
-        session = SessionLocal()
-        try:
-            return dict(
+            r_counts = dict(
                 session.query(RiskItem.project_id, func.count(RiskItem.id))
                 .filter(RiskItem.project_id.in_(p_ids))
                 .group_by(RiskItem.project_id)
                 .all()
             )
-        finally:
-            session.close()
-
-    def fetch_e():
-        session = SessionLocal()
-        try:
-            return dict(
+            e_counts = dict(
                 session.query(Evidence.project_id, func.count(Evidence.id))
                 .filter(Evidence.project_id.in_(p_ids))
                 .group_by(Evidence.project_id)
                 .all()
             )
-        finally:
+            return m_counts, d_counts, t_counts, r_counts, e_counts
+    finally:
+        if close_session:
             session.close()
-
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        f_m = executor.submit(fetch_m)
-        f_d = executor.submit(fetch_d)
-        f_t = executor.submit(fetch_t)
-        f_r = executor.submit(fetch_r)
-        f_e = executor.submit(fetch_e)
-        return f_m.result(), f_d.result(), f_t.result(), f_r.result(), f_e.result()
 
 
 def _build_project_response(p: Project, db: Session) -> ProjectResponse:
-    m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts([p.id])
+    m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts([p.id], db)
 
     return ProjectResponse(
         id=p.id,
@@ -147,7 +143,7 @@ def list_projects(
         return []
 
     p_ids = [p.id for p in projects]
-    m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts(p_ids)
+    m_counts, d_counts, t_counts, r_counts, e_counts = _batch_project_counts(p_ids, db)
 
     return [
         ProjectResponse(

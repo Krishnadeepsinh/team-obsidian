@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel
 from sqlalchemy import or_, and_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
 from app.core.database import SessionLocal, get_db
@@ -734,7 +734,11 @@ def list_integrations(
             )
         )
 
-    all_integs = query.order_by(Integration.created_at.desc()).all()
+    all_integs = (
+        query.options(selectinload(Integration.project_access))
+        .order_by(Integration.created_at.desc())
+        .all()
+    )
 
     results: List[IntegrationResponse] = []
     seen_ids = set()

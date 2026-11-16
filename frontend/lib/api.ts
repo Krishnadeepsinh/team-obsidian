@@ -42,15 +42,21 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
     ...options,
   }
   const retryableStatuses = new Set([502, 503, 504])
-  const retryDelaysMs = [2000, 4000, 6000]
+  const retryDelaysMs = [400, 1200]
   const emitWaking = (waking: boolean, attempt: number) => {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("obsidian_api_waking", { detail: { waking, attempt } }))
     }
   }
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 12000)
     try {
-      const res = await fetch(url, optionsWithCredentials)
+      const res = await fetch(url, {
+        ...optionsWithCredentials,
+        signal: options.signal || controller.signal,
+      })
+      clearTimeout(timer)
       if (attempt < retryDelaysMs.length && retryableStatuses.has(res.status)) {
         emitWaking(true, attempt + 1)
         await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]))
@@ -59,7 +65,9 @@ async function performFetchWithRetry(url: string, options: RequestInit): Promise
       if (attempt > 0) emitWaking(false, attempt)
       return res
     } catch (err: any) {
+      clearTimeout(timer)
       const isNetworkError =
+        err?.name === "AbortError" ||
         err instanceof TypeError ||
         (typeof err?.message === "string" && err.message.toLowerCase().includes("failed to fetch"))
       if (attempt < retryDelaysMs.length && isNetworkError) {
@@ -207,11 +215,36 @@ export function resolveActiveProjectId(projects: any[], preferredId?: string): s
   if (candidate && candidate !== "default" && candidate !== ALL_PROJECTS_VALUE && list.some((p) => p?.id === candidate)) {
     return candidate
   }
+  // When project list is empty (e.g. transient network load), avoid wiping stored user state
+  if (list.length === 0) {
+    return candidate && candidate !== "default" && candidate !== ALL_PROJECTS_VALUE ? candidate : ""
+  }
   const fallbackId = list[0]?.id || ""
-  if (typeof window !== "undefined") {
-    setStoredProjectId(fallbackId || undefined, false)
+  if (typeof window !== "undefined" && fallbackId) {
+    setStoredProjectId(fallbackId, false)
   }
   return fallbackId
+}
+
+interface CacheEntry<T> {
+  data: T
+  timestamp: number
+}
+
+let projectsCache: CacheEntry<any[]> | null = null
+let projectsInFlight: Promise<any[]> | null = null
+
+export function invalidateProjectsCache(): void {
+  projectsCache = null
+  projectsInFlight = null
+}
+
+let userContextCache: CacheEntry<any> | null = null
+let userContextInFlight: Promise<any> | null = null
+
+export function invalidateUserContextCache(): void {
+  userContextCache = null
+  userContextInFlight = null
 }
 
 function persistAuthSession(res: any): void {
@@ -233,6 +266,8 @@ export const api = {
   // Auth & Multi-Tenant Context
   getAuthCapabilities: async () => fetchJson<any>("/auth/capabilities"),
   login: async (credentials: { email: string; password: string }) => {
+    invalidateProjectsCache()
+    invalidateUserContextCache()
     const res = await fetchJson<any>("/auth/login", {
       method: "POST",
       body: JSON.stringify(credentials),
@@ -241,6 +276,8 @@ export const api = {
     return res
   },
   register: async (userData: any) => {
+    invalidateProjectsCache()
+    invalidateUserContextCache()
     const res = await fetchJson<any>("/auth/register", {
       method: "POST",
       body: JSON.stringify(userData),
@@ -249,6 +286,8 @@ export const api = {
     return res
   },
   logout: async () => {
+    invalidateProjectsCache()
+    invalidateUserContextCache()
     try {
       await fetchJson<any>("/auth/logout", { method: "POST" }).catch(() => ({}))
     } finally {
@@ -264,7 +303,22 @@ export const api = {
     }
   },
   getUserContext: async () => {
-    return fetchJson<any>("/auth/me/context")
+    const now = Date.now()
+    if (userContextCache && now - userContextCache.timestamp < 15000) {
+      return userContextCache.data
+    }
+    if (userContextInFlight) {
+      return userContextInFlight
+    }
+    userContextInFlight = fetchJson<any>("/auth/me/context")
+      .then((data) => {
+        userContextCache = { data, timestamp: Date.now() }
+        return data
+      })
+      .finally(() => {
+        userContextInFlight = null
+      })
+    return userContextInFlight
   },
   updateProfile: async (data: { name?: string; title?: string; department?: string; avatar_url?: string }) => {
     return fetchJson<any>("/auth/me", {
@@ -323,15 +377,40 @@ export const api = {
   },
 
   // Projects
-  getProjects: async (workspaceId?: string) =>
-    fetchJson<any[]>(workspaceId ? `/projects?workspace_id=${encodeURIComponent(workspaceId)}` : "/projects"),
+  getProjects: async (workspaceId?: string) => {
+    if (workspaceId) {
+      return fetchJson<any[]>(`/projects?workspace_id=${encodeURIComponent(workspaceId)}`)
+    }
+    const now = Date.now()
+    if (projectsCache && now - projectsCache.timestamp < 15000) {
+      return projectsCache.data
+    }
+    if (projectsInFlight) {
+      return projectsInFlight
+    }
+    projectsInFlight = fetchJson<any[]>("/projects")
+      .then((data) => {
+        projectsCache = { data, timestamp: Date.now() }
+        return data
+      })
+      .finally(() => {
+        projectsInFlight = null
+      })
+    return projectsInFlight
+  },
   getProject: async (id: string) => fetchJson<any>(`/projects/${id}`),
-  createProject: async (data: any) =>
-    fetchJson<any>("/projects", { method: "POST", body: JSON.stringify(data) }),
-  updateProject: async (id: string, data: any) =>
-    fetchJson<any>(`/projects/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteProject: async (id: string) =>
-    fetchJson<any>(`/projects/${id}`, { method: "DELETE" }),
+  createProject: async (data: any) => {
+    invalidateProjectsCache()
+    return fetchJson<any>("/projects", { method: "POST", body: JSON.stringify(data) })
+  },
+  updateProject: async (id: string, data: any) => {
+    invalidateProjectsCache()
+    return fetchJson<any>(`/projects/${id}`, { method: "PUT", body: JSON.stringify(data) })
+  },
+  deleteProject: async (id: string) => {
+    invalidateProjectsCache()
+    return fetchJson<any>(`/projects/${id}`, { method: "DELETE" })
+  },
   getProjectTimeline: async (id: string) => fetchJson<any[]>(`/projects/${id}/timeline`),
   getProjectMembers: async (id: string) => fetchJson<any[]>(`/projects/${id}/members`),
   addProjectMember: async (projectId: string, data: { email?: string; user_id?: string; project_role?: string }) =>
