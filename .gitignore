@@ -4,6 +4,15 @@
 !.env.example
 *.pem
 *.key
+update_all_live_demo_tokens.py
+extract_*.py
+create_*.py
+submit_*.py
+inspect_*.py
+grab_*.py
+open_*.py
+generate_*.py
+automate_*.py
 
 # Local Databases & Generated Runtime Artifacts
 *.db

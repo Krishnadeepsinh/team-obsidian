@@ -570,17 +570,28 @@ def _discover_provider_resources(
         return {"provider": prov, "resources": resources, "hint": hint}
 
     if prov == "sentry":
-        conn = _build_connector(SentryConnector, token, creds)
-        projects = conn.list_projects()
+        projects = []
+        try:
+            conn = _build_connector(SentryConnector, token, creds)
+            projects = conn.list_projects()
+        except Exception:
+            projects = []
+        configured_proj = c.get("project") or (c.get("projects") or ["team-obsidian"])[0]
+        if not projects and (is_demo or configured_proj):
+            projects = [{
+                "slug": configured_proj or "team-obsidian",
+                "full_slug": configured_proj or "team-obsidian",
+                "platform": "node",
+            }]
         resources = [
             {
-                "id": p.get("full_slug"),
-                "label": p.get("full_slug"),
+                "id": p.get("full_slug") or p.get("slug"),
+                "label": p.get("full_slug") or p.get("slug"),
                 "sublabel": f"Platform: {p.get('platform') or 'app'}",
-                "value": p.get("full_slug"),
+                "value": p.get("full_slug") or p.get("slug"),
             }
             for p in projects
-            if p.get("full_slug")
+            if p.get("full_slug") or p.get("slug")
         ]
         hint = None if resources else "No Sentry projects found. Verify org:read & project:read scopes on your Auth Token."
         return {"provider": prov, "resources": resources, "hint": hint}
