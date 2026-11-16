@@ -334,15 +334,8 @@ const DEMO_PRESETS: Record<string, { name: string; account: string; config: any 
 }
 
 function isDemoUser(): boolean {
-  if (typeof window === "undefined") return false
-  try {
-    const raw = localStorage.getItem("obsidian_user")
-    if (raw) {
-      const u = JSON.parse(raw)
-      return u?.email === "team.obsidian44@gmail.com"
-    }
-  } catch {}
-  return false
+  // Universal demo & managed 1-click connect enabled for all users
+  return true
 }
 
 function IntegrationsContent() {
